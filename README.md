@@ -1,46 +1,12 @@
 # Allegro
 
-Allegro aims to reproduce a **single-CTA Blackwell Tensor Core asynchronous subsystem** in SystemVerilog. The project targets the SM100a execution model with `cta_group::1`, bringing together matrix computation, tensor memory, asynchronous data movement, and completion synchronization.
+Allegro 面向 SM100a 的单 CTA 异步子系统，覆盖 Tensor Core、TMEM、共享 SMEM、TMA 和 mbarrier。外围提供 warp 调度、RF、GMEM 和可见性服务。
 
-The goal is to build an executable RTL subsystem around the PTX-visible behavior of these operations, with an explicitly designed microarchitecture for operand delivery, computation, writeback, and completion.
+- 支持的指令、操作数、完成语义及三个目标 kernel 见 [PTX 支持范围](doc/proposals/supported_ptx.md)。
+- [Microarch Brief](doc/proposals/microarch_brief.md) 定义后端组成、[Tensor Core Buffer](doc/proposals/microarch_brief.md#tc-buffer) 的容量和复用条件，以及各类异步指令的调度规则。[四核数据通路图](doc/images/tensor_core_tmem/tensor_core_tmem_pipeline.svg)
+- 35 份 [RTL 模块规格](doc/rtl_specs/top/blackwell_async_subsystem_top.md#module-index) 分别定义接口、状态、时序与验收边界。跨模块的 [握手与复位](doc/rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol)、[身份](doc/rtl_specs/top/blackwell_async_subsystem_top.md#identity) 和 [ordering](doc/rtl_specs/top/blackwell_async_subsystem_top.md#ordering) 由顶层定义。
+- [跨 MMA 流水设计记录](doc/proposals/mma_inter_instruction_pipeline.md) 保存两个 FA4 kernel 的实际 descriptor、指令顺序、地址公式和逐拍推导。
 
-## Scope
+Brief 的组织参照 [NVDLA v1 Convolution Pipeline](https://nvdla.org/hw/v1/ias/unit_description.html#convolution-pipeline)，模块规格的章节参照 [CVA6 v5.3.0 ISSUE_STAGE](https://github.com/openhwgroup/cva6/blob/v5.3.0/docs/design/design-manual/source/cva6_issue_stage.adoc)。
 
-| Component | Role |
-| --- | --- |
-| **Tensor Core** | Execute dense and sparse MMA operations using dot-product arrays, operand buffers, and hardware scheduling. |
-| **Tensor Memory (TMEM)** | Provide 256 KiB of storage for matrix operands and results, with allocation, ownership, and access control. |
-| **Tensor Memory Accelerator (TMA)** | Handle asynchronous tensor data movement, address generation, and tensor-map processing. |
-| **mbarrier** | Track arrivals and transaction completion to synchronize asynchronous work. |
-| **Completion and data interfaces** | Connect MMA commit/wait, TMEM transfers, and register-file handshakes into a complete execution flow. |
-
-The initial scope is one cooperative thread array (CTA). Warp scheduling, the register file, and the global-memory system connect through external interfaces. Multi-CTA and `cta_group::2` execution are outside this scope.
-
-## Microarchitecture
-
-The latest [Tensor Core/TMEM brief](doc/proposals/tensor_core_tmem_mma_brief.md) proposes four Tensor Cores, each producing an 8×8 output microtile with 64 complete dot products. Resident A data, double-buffered B/C/D storage, and bank-aware memory service support continuous issue under the stated layout and bandwidth conditions.
-
-The design covers operand preparation, sparse metadata and scale delivery, SRAM response buffering, backpressure, and write acknowledgements. Instruction completion waits for all required writes and side effects to finish.
-
-See the [pipeline diagram](doc/images/tensor_core_tmem/tensor_core_tmem_pipeline.svg) for the register boundaries and data paths. Capacities and cycle counts in the proposal are analytical design targets.
-
-## Repository Layout
-
-| Path | Contents |
-| --- | --- |
-| [rtl/](rtl/) | SystemVerilog arithmetic units, execution engines, memory/control modules, and subsystem tops. |
-| [doc/specs/](doc/specs/) | Version v1.0 module specifications, shared interfaces, and the specification manifest. |
-| [doc/proposals/](doc/proposals/) | Microarchitecture proposals and research designs. |
-| [doc/dot/](doc/dot/) | Detailed designs for FP16/TF32, F4/F6/F8, FP4, and INT8 dot products. |
-| [doc/images/](doc/images/) | Architecture diagrams, drawing scripts, and supporting figures. |
-| [test/](test/) | Reserved for future tests. |
-
-The main RTL integration point is [`blackwell_async_subsystem_top.sv`](rtl/top/blackwell_async_subsystem_top.sv).
-
-## Development Status
-
-Allegro is under development. Existing RTL, the v1.0 specifications, and newer proposals represent distinct stages of the design; the RTL does not yet implement the complete proposed microarchitecture. FP16 result encoding remains an outstanding numerical implementation dependency.
-
-The repository currently contains RTL and design documentation. Build infrastructure and verification will be established in subsequent work; there are no runnable repository build, test, or cycle-model targets at present.
-
-RTL lint and simulation should run on the configured remote host in an isolated workspace. Local work is limited to editing and static checks.
+现有实现从 [RTL 顶层](rtl/top/blackwell_async_subsystem_top.sv) 进入。当前规格以三个目标 kernel 的结果、同步顺序和指定服务条件下的关键边沿为验收基线，整 kernel 总周期作为观测值。该基线的 RTL lint、仿真及 kernel 重放待执行。

@@ -5,7 +5,7 @@ import math
 from PIL import Image, ImageDraw, ImageFont
 
 OUT = Path(__file__).resolve().parent
-W, H, S = 3200, 2820, 2
+W, H, S = 2240, 2330, 1
 FONT = '/Library/Fonts/Arial Unicode.ttf'
 im = Image.new('RGB', (W*S, H*S), '#ffffff')
 dr = ImageDraw.Draw(im)
@@ -90,102 +90,79 @@ def comb(x, y, title, body, kind='blue', w=270, h=140):
 
 
 
-# Colored boxes are registers; white boxes are combinational logic.
-txt(70,55,'Tensor Core + TMEM：全 MMA 类型 / 布局与发射期限',43)
-txt(70,110,'方案解析推导 | cta_group::1 | 四核 8×8 完整 dot | 参考描述符 + 逐帧服务证书',27,C['muted'])
-node(70,160,'R_CMD / R_COLLECTOR',['唯一命令 / owner / epoch / allocation pin','A / WS b0..b3 fill / use / lastuse / discard 身份'],w=950,h=135)
-node(1060,160,'R_SCHED / R_FILL',['行列分区，j / r / P / U；fire 推进','B/C/D generation、分片 filled / consumed / sent'],kind='purple',w=950,h=135)
-node(2050,160,'R_RTAG / R_BTAG / R_ARB',['每 bank 三项读身份：在途 + Q + 外部返回','写 ACK 已占 + R_W 在途 ≤ 2；期限 / 轮询状态'],w=1080,h=135)
+def chain(y, stages, kind):
+    xs = [90, 510, 930, 1350, 1770]
+    for index, ((title, body), x) in enumerate(zip(stages, xs)):
+        node(x, y, title, body, kind, 355, 142)
+        if index:
+            line([(xs[index-1]+355, y+71), (x-4, y+71)], C[kind], 3, arrow=True)
 
-lane(60,340,1820,490,'TMEM：128 bank × 128 word × 128 bit = 256 KiB；bank=lane / word=column//4','#f4f8fe',C['blue'])
-lane(60,870,1820,490,'SMEM：32 bank × 456 word × 128 bit = 228 KiB；全部客户端共用 XOR bank 映射','#f1f9f7',C['teal'])
-lane(60,1750,1820,560,'TMEM 写：每分区 512 B/cycle；grant → 实际写入 +1 → ACK 退休 +2','#fff8ef',C['orange'])
-rect(1930,340,1200,1970,'#f7f4fc',radius=18)
-txt(1955,375,'Tensor Core i ×4；容量按每核计算',28,C['purple'])
+txt(64, 68, 'Allegro  |  跨 MMA 连续发射与分块预取', 44)
+txt(64, 122, '单 CTA · 三个有序命令记录 · 两个输入上下文 · 四核各 64 路完整 dot', 26, C['muted'])
 
-comb(85,440,'组合地址 / 仲裁',['按 bank 合并 / 保证期限','同 word 写优先于新读','空闲 bank 服务其他客户端'],w=290,h=160)
-memory(425,440,'TMEM M0 读端',['128 bank，1R1W','每32-bank分区读512 B/cycle'],w=305,h=160)
-memory(785,440,'SRAM_Q @ g+1',['宏内读输出，512 B/分区','支持按 bank read-enable 保持','仅已预留读可以发出'],w=285,h=160)
-node(1120,425,'R_RESP @ g+2',['512 B / 分区；逐 bank valid'],w=350,h=110)
-node(1120,580,'R_BACKUP',['512 B；接住不可撤销返回'],w=350,h=110)
-comb(1530,480,'组合分片路由',['g+3 写 TC buffer','g+4 最早载入 R_OP'],w=300,h=150)
-for a,b in [(375,412),(730,772),(1070,1107)]:
-    line([(a,520),(b,520)],C['blue'],arrow=True)
-line([(1090,520),(1090,635),(1107,635)],C['blue'],arrow=True)
-line([(1470,480),(1517,480)],C['blue'],arrow=True)
-line([(1470,635),(1500,635),(1500,575),(1517,575)],C['blue'],arrow=True)
-node(85,705,'R_RTAG[bank][0..2] / delivered mask',['总读预留 ≤ 3 / bank = SRAM_Q + main + backup；同拍交付可归还 credit','ready 突降先停止新 grant，已发 SRAM 返回仍必须捕获'],w=1745,h=100)
+lane(52, 175, 2136, 280, '命令与 B 源读取', C['tealfill'], C['teal'])
+chain(249, [('engine', ['cmd 与 tracker 同沿登记', '按 id 预检、pin、选择分区']),
+            ('SMEM 物理阵列', ['32 bank × 1,824 × 32 bit', '8 组 · 每方向共 128 B/拍']),
+            ('R_BREQ → grant', ['16 B atom 选四个相邻 bank', 'g 同沿采样，g+2 最早交付']),
+            ('共享 B loader', ['2 × 256 B，每行 4 × 32 bit', '半精度整 atom / 其他 masked']),
+            ('四目的分发', ['K 直通 / N 转置后共享列序', '四核独立握手，末目的释放槽'])], 'teal')
+txt(90, 421, 'FP16/BF16 八列块读 16 笔 16 B atom。两个槽可分属相邻命令，分发时检查每核的分区选择和覆盖保护。', 23, C['muted'])
 
-node(1970,425,'A 驻留：1 KiB',['原始/压缩 A，最多32行×32 B','跨 N 复用；ashift 保留原位模式'],kind='purple',w=530,h=135)
-node(2540,425,'E / S_A / S_B 快照',['256 / 128 / 折合1024 B','S_B 四物理partition共4 KiB','组合读，先完成必要覆盖保护'],kind='purple',w=550,h=135)
-node(1970,650,'C0：1 KiB',['32×8；非WS M64有效512 B','FP16低16bit精确提升'],kind='purple',w=530,h=120)
-node(2540,650,'C1：1 KiB',['分片预取 / consumed mask','最后一次 op_fire 后释放'],kind='purple',w=550,h=120)
-line([(1830,555),(1900,555),(1900,405),(2815,405)],C['blue'])
-for x in (2235,2815):line([(x,405),(x,422)],C['blue'],arrow=True)
-line([(1900,555),(1900,625),(2815,625)],C['blue'])
-for x in (2235,2815):line([(x,625),(x,647)],C['blue'],arrow=True)
+lane(52, 480, 2136, 280, '每核输入  /  三种操作数以各自最后读取沿回收', C['bluefill'], C['blue'])
+for x, title, body in [
+        (90, 'A  /  行组', ['2 × 1 KiB，按 256 B 组就绪', 'r=0…3 在各列块重用']),
+        (510, 'B  /  列块', ['8 KiB，四个 WS 分区', '末次 op_load 后可逐块覆盖']),
+        (930, 'C  /  列块', ['2 × 1 KiB，跨指令换主', '同址 C[j] 等老 D[j] 成功 ACK']),
+        (1350, 'scale A / B', ['本核 2 × 128 B scale A', '共享 4 KiB 内取两份快照']),
+        (1770, 'R_OP  /  832 B', ['取本次 r、j 与对应 scale', '首片四核同沿，之后独立推进'])]:
+    node(x, 554, title, body, 'blue', 355, 142)
+txt(90, 726, 'B0 已装好就可供本条首片使用。四核整份安装成功才发布 WS collector。核间共享的 B 源数据只读一份。', 23, C['muted'])
 
-node(85,970,'R_BREQ',['源路由寄存 1 拍','atom / dst / block tag'],kind='teal',w=275,h=140)
-memory(410,970,'SMEM M1 读端',['共享512 B/cycle','相同源一次读取并广播'],kind='teal',w=310,h=140)
-memory(770,970,'B_SRAM_Q',['共享512 B宏内输出','bank grant +1；可保持'],kind='teal',w=300,h=140)
-node(1120,930,'R_BRESP',['共享512 B，grant +2'],kind='teal',w=350,h=110)
-node(1120,1095,'R_BBACK',['共享512 B；逐目的保持'],kind='teal',w=350,h=110)
-comb(1530,995,'分片 gather / 广播',['grant +3 写B槽','每核目的容器 ≤256 B/cycle','快目的交付一次，慢目的保持'],kind='teal',w=300,h=165)
-for a,b in [(360,397),(720,757),(1070,1107)]:line([(a,1040),(b,1040)],C['teal'],arrow=True)
-line([(1090,1040),(1090,1150),(1107,1150)],C['teal'],arrow=True)
-line([(1470,985),(1500,985),(1500,1030),(1517,1030)],C['teal'],arrow=True)
-line([(1470,1150),(1517,1150)],C['teal'],arrow=True)
-node(85,1240,'R_BTAG[bank][0..2] / delivered mask',['每bank在途与未交付 ≤3；槽在返回时按generation分配','source byte与目的容器分别计费；不隐含第三个B tile槽'],kind='teal',w=1745,h=100)
+lane(52, 785, 2136, 280, '发射与 D 写回', C['purplefill'], C['purple'])
+chain(859, [('R_OP 送旧装新', ['首片按 id 准入', '8 行 × 8 列 / 核 / 拍']),
+            ('原生 dot 流水', ['P = 5 / 6 / 5 / 3', '不同族可相邻发射']),
+            ('R_DOT → D 双槽', ['每槽 1 KiB；由结果 tag 选槽', '最后写接受后归还数据槽']),
+            ('TMEM R_W', ['128 bank × 128 bit', 'w 接受，w+1 实际写入']),
+            ('w+2 真实 ACK', ['只结算原 id / j', '全部必要写成功才开放依赖'])], 'purple')
+txt(90, 1031, '各族独立接收，队首族按发射序交付；旧指令的写尾与 pin 继续按原 id 结算。', 23, C['muted'])
 
-node(1970,895,'B0：512 B + scale 32 B',['八列完整B；按U=4/2复用','dense256 / sparse512 B上界'],kind='teal',w=530,h=130)
-node(2540,895,'B1：512 B + scale 32 B',['预取下一块，逐分片写入','最后一次 op_fire 后释放'],kind='teal',w=550,h=130)
-line([(1830,1075),(1900,1075),(1900,865),(2815,865)],C['teal'])
-for x in (2235,2815):line([(x,865),(x,892)],C['teal'],arrow=True)
-line([(2815,560),(3105,560),(3105,840),(2815,840),(2815,892)],C['purple'],2,True)
-txt(2600,810,'S_B 快照 → 每槽最多8列×4 B',21,C['purple'],'center')
+lane(52, 1090, 2136, 280, '完成与同步', C['orangefill'], C['orange'])
+chain(1164, [('末 op_load / dot', ['最后操作数已复制进 R_OP', '已发微块仍保留身份']),
+            ('local_done', ['本核本 id 的读、算术、写', '及真实 ACK 责任已结清']),
+            ('engine 收尾', ['汇合四核及 loader / 快照', '归还 handle，发布 done']),
+            ('TC tracker', ['按 id 接受一次最终完成', '结算本 issuer 的 commit']),
+            ('mbarrier', ['arrival → phase', 'wait 按实际 acquire 唤醒'])], 'orange')
+txt(90, 1336, '首片交接在数据通路，最终完成在 tracker。stop 后继续排空三个命令记录、部分分发、已展示请求及写 ACK。', 23, C['muted'])
 
-comb(2010,1125,'读取 / 解包 / C提升 / 控制适配',['A256 + B512 + C256 + E64 + S_A32 + S_B32','保留原始驻留；命令字段引用 R_CMD'],kind='purple',w=1040,h=115)
-for x,y in ((2235,560),(2815,560),(2235,770),(2815,770)):
-    line([(x,y),(3120,y),(3120,1182),(3063,1182)],C['purple'],arrow=True)
-for x in (2235,2815):line([(x,1025),(x,1080),(2530,1080),(2530,1122)],C['teal'],arrow=True)
-node(2010,1280,'R_OP：1152 B / valid / 微块tag',['操作数准备寄存级：op_fire → 下一拍 dot_fire','弹性保持；最后op_fire后可释放旧B/C'],kind='purple',w=1040,h=115)
-line([(2530,1240),(2530,1277)],C['purple'],arrow=True)
-comb(2020,1420,'组合：逐行稀疏选择 / scale / 8×8广播',['TF32 1:2；普通2:4；FP4成对4:8；scale沿原逻辑K'],kind='purple',w=1020,h=100)
-line([(2530,1395),(2530,1417)],C['purple'],arrow=True)
-node(2010,1560,'64 路完整 dot / 选择一种算术阵列',['F16/BF16/TF32 L=5；低精度/MX L=6；FP4 L=5；INT8 L=4','各阵列 II=1；内部寄存器省略，未增加TC部分和','原生末级 R_DOT 保持最终 FP32/S32 与76bit状态'],kind='purple',w=1040,h=155,dark=True)
-line([(2530,1520),(2530,1557)],C['purple'],arrow=True)
-node(2010,1760,'R_FMT0：≤608 B',['76bit最终状态 / valid / tag','FP16规范化与舍入准备'],kind='purple',w=480,h=125)
-node(2570,1760,'R_FMT1：≤256 B',['最终FP16编码 / valid / tag','64路编码，Lfmt=2、II=1'],kind='purple',w=480,h=125)
-line([(2530,1715),(2530,1735),(2250,1735),(2250,1757)],C['purple'],arrow=True)
-line([(2490,1820),(2557,1820)],C['purple'],arrow=True)
-line([(3050,1638),(3110,1638),(3110,1925),(2530,1925)],C['purple'],2,True)
-txt(3090,1740,'旁路',19,C['purple'],'right')
-node(1970,1980,'D0：1 KiB',['4个结果；非WS M64为2个','FP16低两byte写mask'],kind='purple',w=530,h=125)
-node(2540,1980,'D1：1 KiB',['收下一块 / 排上一块','owner / received / sent'],kind='purple',w=550,h=125)
-line([(2810,1885),(2810,1925),(2235,1925),(2235,1977)],C['purple'],arrow=True)
-line([(2530,1925),(2815,1925),(2815,1977)],C['purple'],arrow=True)
-txt(2530,2155,'R_DOT / R_FMT1 → 再1拍写D；目标generation忙则反压全部弹性级',22,C['purple'],'center',1100)
-txt(2530,2230,'TC 6208 B；旁路快照1408 B；R_OP与算术/接口分别计容',23,C['purple'],'center',1100)
-
-comb(1530,1870,'写仲裁 / ACK credit',['最后payload接受后释放D','C/D每块V=2或3个word','ACK阻塞限制新写'],kind='orange',w=300,h=170)
-node(1100,1870,'R_W：512 B / 分区',['唯一写payload / byte mask','bank-word / block / generation'],kind='orange',w=370,h=170)
-memory(620,1870,'TMEM M0 写端',['与上方M0为同一SRAM','接受后+1实际写入并生成ACK','bank每拍最多1R+1W'],kind='orange',w=410,h=170)
-node(85,1870,'R_ACK[0] / R_ACK[1]',['每分区两项身份帧','只记录已实际写入','再1拍退休；可保持'],kind='orange',w=465,h=170)
-line([(2235,2105),(2235,2180),(1900,2180),(1900,1955),(1843,1955)],C['orange'],arrow=True)
-line([(2815,2105),(2815,2180),(2235,2180)],C['orange'])
-for a,b in [(1530,1483),(1100,1043),(620,563)]:line([(a,1955),(b,1955)],C['orange'],arrow=True)
-node(85,2130,'R_ACK_OWNER / R_WR_ARB / R_SENT',['接受、实际写入、ACK入队、ACK退休分别记账；旧ACK不访问复用槽','同word读写冲突先完成已获准写；SRAM写mask保持未写byte'],kind='orange',w=1745,h=130)
-
-node(85,2375,'R_DONE / R_COLLECTOR / R_SIDE_EFFECT',['按实际分片与ACK退休计数；读、算术、provider、ashift与错误排空共同收敛','全部写确认后才发complete并解除allocation pin；collector身份按实际lastuse释放'],kind='orange',w=1745,h=140)
-line([(315,2040),(315,2320),(570,2320),(570,2372)],C['orange'],arrow=True)
-node(1970,2375,'软件完成 / 结果读回',['MMA → commit → mbarrier wait → TMEM ld','线程调度 / 软件同步另计；数值与宏时序待验收'],w=1120,h=140)
-line([(1830,2445),(1957,2445)],C['orange'],arrow=True)
-txt(70,2585,'参考保证布局：Bbase 4 KiB对齐；K-major、无swizzle、LBO128；dense SBO256 / sparse SBO512；A/E/scale先驻留。',24,C['muted'])
-txt(70,2640,'逐帧证书：P=U连续；P>U每块间等待P−U拍；g→Q +1→RESP +2→TC +3→R_OP +4→最早dot +5。',24,C['muted'])
-txt(70,2695,'图例：彩色框为寄存器/存储；白框为组合逻辑；宏内Q已单列。外部接口1.75 KiB/核，宏内读输出折合640 B/核。',24,C['muted'])
-txt(70,2750,'F=T_snap+P+5；W=(J−1)P+U；T_done=F+W+Ldot+Lfmt+V+2；D列对齐V=2，其他V=3。方案推导。',24,C['muted'])
+lane(52, 1395, 2136, 530, '稳态 N128 FP16 同址累加  /  对齐 K-major、已预热、无竞争，以下为握手沿', C['bluefill'], C['blue'])
+txt(92, 1486, '前条 dot   0 … 63', 30, C['purple'])
+txt(850, 1486, '后条 dot   64 … 127', 30, C['teal'])
+rect(92, 1520, 754, 16, C['purple'], radius=0)
+rect(846, 1520, 754, 16, C['teal'], radius=0)
+txt(1650, 1528, '首发间隔 64 拍', 25)
+txt(92, 1594, '后条 C0    58 / 59 grant → 61 / 62 返回 → 63 装 R_OP → 64 首 dot', 28)
+txt(92, 1654, '后条 C1    62 / 63 grant → 65 / 66 返回 → 67 装 R_OP → 68 块 1 首 dot', 28)
+txt(92, 1724, '前条写尾    68 末片入 D → 69 / 70 接受写 → 71 末写提交 → 72 末 ACK', 28)
+txt(92, 1784, '前条完成    73 接受 local_done → 74 资源交还并发布 done → 75 tracker 最早接受', 28)
+txt(92, 1870, '两条指令的数据共用 128 B/拍 SMEM；一般布局、其他客户端、迟到 ACK 与输出反压按真实边沿计时。', 23, C['muted'])
+lane(52, 1950, 2136, 340, 'TMA  /  单 walker，各 copy 共用后端峰值 128 B/拍', C['tealfill'], C['teal'])
+xs = [90, 510, 930, 1350, 1770]
+for i, (title, body) in enumerate([
+        ('GMEM / L2', ['128 B 行 · 9-bit ID', '返回受阻时保持 ID 与数据']),
+        ('16 × 128 B 数据 RAM', ['load 收到返回时分槽', 'store 读 SMEM 前预留槽']),
+        ('共享 SMEM / client 8', ['八组各 16 B · 独立握手', '每组四个 32-bit bank']),
+        ('tracker / 64 个事务 tag', ['在途命令按 ticket 结算', '真实写 ACK 按原 tag 结算']),
+        ('copy 完成', ['load → mbarrier 确认', 'store → bulk group full'])]):
+    node(xs[i], 2020, title, body, 'teal', 355, 142)
+    if i in (1, 2):
+        left, right = xs[i-1]+355, xs[i]-4
+        line([(left,2082),(right,2082)], C['teal'], 3, arrow=True)
+        line([(right,2100),(left,2100)], C['teal'], 3, arrow=True)
+for i in (3, 4):
+    line([(xs[i-1]+355,2091),(xs[i]-4,2091)], C['orange'], 3, arrow=True)
+line([(267,2163),(267,2192),(1527,2192),(1527,2164)], C['orange'], 3, arrow=True)
+txt(90, 2224, '数据向右 load、向左 store。最后一组 SMEM 写或整行 GMEM 写被接受即释放数据槽。', 23, C['muted'])
+txt(90, 2258, '橙线为完成通路：load 收各组 SMEM 写 ACK，store 收 GMEM 写 ACK。store 的 .read 在全部源读完成后即可放行。', 23, C['muted'])
 svg.append('</svg>')
 (OUT/'tensor_core_tmem_pipeline.svg').write_text('\n'.join(svg))
 im.save(OUT/'tensor_core_tmem_pipeline.png')
-print(OUT/'tensor_core_tmem_pipeline.png')
-print(OUT/'tensor_core_tmem_pipeline.svg')
