@@ -2,70 +2,70 @@
 
 ## Description
 
-共享 SMEM fabric 为 TC、TMA、barrier backing 与外围 LSU 提供八组独立的 16 B atom 端口。模块拥有 32 个 1R1W bank（每个 1,824×32 bit，共 228 KiB）、读返回队列和写确认槽，每方向峰值为 128 B/拍。
+The shared SMEM fabric provides eight independent 16 B atom group ports to TC, TMA, barrier backing, and the external LSU. It owns 32 1R1W banks (1,824×32 bits each, 228 KiB total), read return queues, and write ACK slots. Peak bandwidth is 128 B/cycle in each direction.
 
-| 信号 / 通道 | 方向、类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| rd_req[16][8] / rd_rsp[16][8] | 入 [smem_rd_req_t](#transactions) / 出 [smem_rd_rsp_t](#transactions) | TC、TMA、backing、LSU | 每 client 每组一个候选，各组独立 valid/ready。 |
-| wr_req[16][8] / wr_ack[16][8] | 入 [smem_wr_req_t](#transactions) / 出 [smem_wr_ack_t](#transactions) | TMA、backing、LSU | 相同组索引，一笔原事务一次 ACK。 |
-| live[3] | 入，按接受序的 {valid1,rec2,id58} | MMA engine | 顶层接 engine 的 live，用于 MMA 候选年龄；外部服务不依赖 MMA 是否活跃。 |
-| clk、rst_n、epoch_i / drained_o、fault_o | epoch_i 入 u16，时钟、复位为输入 bit，状态为输出 bit | 顶层 | drained 遍历 R_BREQ、宏 Q、主备返回、ACK 及 held。 |
+| rd_req[16][8] / rd_rsp[16][8] | Input [smem_rd_req_t](#transactions) / output [smem_rd_rsp_t](#transactions) | TC, TMA, backing, LSU | One candidate per client per group. Each group has independent valid/ready. |
+| wr_req[16][8] / wr_ack[16][8] | Input [smem_wr_req_t](#transactions) / output [smem_wr_ack_t](#transactions) | TMA, backing, LSU | Same group index. One ACK per original transaction. |
+| live[3] | Input, {valid1,rec2,id58} in acceptance order | MMA engine | The top connects the engine's live list for MMA candidate age. External service is independent of MMA activity. |
+| clk, rst_n, epoch_i / drained_o, fault_o | epoch_i input u16, clock and reset bit inputs, status bit outputs | Top level | drained covers R_BREQ, macro Q, primary/backup returns, ACKs, and held selections. |
 
-时钟、复位及通道的采样约定见[顶层公共协议](../top/blackwell_async_subsystem_top.md#common-protocol)。
+The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
 ```mermaid
 flowchart LR
- CL[各 client / 八个 atom 组] --> ARB[按组仲裁 R_BREQ / 写确认容量]
- ARB --> BANK[每组四个 32-bit bank / byte enable]
- BANK --> Q[宏 Q] --> RET[主 / 备返回]
- RET --> DST[原 tag / 各目的 delivered]
- BANK --> ACK[写 ACK 身份帧]
- TMA[client8 八组] <--> CL
+ CL["Clients / eight atom groups"] --> ARB["Per-group R_BREQ arbitration / write ACK capacity"]
+ ARB --> BANK["Four 32-bit banks per group / byte enables"]
+ BANK --> Q["Macro Q"] --> RET["Primary / backup returns"]
+ RET --> DST["Original tag / delivered per destination"]
+ BANK --> ACK["Write ACK identity frames"]
+ TMA["Eight groups for client8"] <--> CL
 ```
 
 ## Functionality
 
 <a id="transactions"></a>
 
-### 存储事务类型
+### Memory transaction types
 
-| 类型 | 字段（从高到低） | 位数 |
+| Type | Fields (high to low) | Bits |
 |---|---|---:|
 | `smem_rd_req_t` | tag78, addr32, byte_mask16 | 126 |
 | `smem_wr_req_t` | tag78, addr32, byte_mask16, data128 | 254 |
 | `smem_rd_rsp_t` | tag78, data128, status4 | 210 |
 | `smem_wr_ack_t` | tag78, status4 | 82 |
 
-mask bit b 对应 data[8b+:8]；16 B 原子，写未选 byte 保持，读未选 byte 返回0。tag78 见顶层 memory-routing；成功写 ACK 证明实际写入。对 TMA load（client8），选中字节此时已提交到本 CTA 与 generic 访问共享的 SMEM；消费线程成功等待对应 mbarrier 后即可读取。
+Mask bit b selects data[8b+:8] in a 16 B atom. Unselected bytes are preserved on writes and returned as zero on reads. See top-level memory-routing for tag78. A successful write ACK proves actual commit. For TMA loads (client8), selected bytes have committed to this CTA's SMEM shared with generic accesses. A consuming thread can read them after successfully waiting on the corresponding mbarrier.
 
-`smem_atom_req_t={write:1,tag:78,addr:32,byte_mask:16,data:128}`，255bit；`smem_atom_rsp_t={write:1,tag:78,data:128,status:4}`，211bit，写返回data=0。addr 为16 B对齐逻辑 byte 地址，不能提前进行物理 bank 映射。barrier 8 B 写按原对象地址 bit3 选择 mask=0x00ff/0xff00 和半行。
+`smem_atom_req_t={write:1,tag:78,addr:32,byte_mask:16,data:128}` is 255 bits and `smem_atom_rsp_t={write:1,tag:78,data:128,status:4}` is 211 bits. Write responses return data=0. addr is a 16 B aligned logical byte address. Physical bank mapping occurs in the fabric. For an 8 B barrier write use original object address bit3 to select mask=0x00ff/0xff00 and the corresponding half-line.
 
-### 地址映射与组内状态
+### Address mapping and group state
 
-逻辑 atom 为 16 B 对齐。对任意字节地址 a，物理 bank=(a>>2)&31，word=a>>7；组号=(a>>4)&7，同一 atom 的四个 4 B 子字位于 bank=4×组号+s，s=0…3。矩阵/Tensor Map 的 swizzle 在产生逻辑地址时已完成。fabric 验证组索引并执行物理映射。
+A logical atom is 16 B aligned. For byte address a, physical bank=(a>>2)&31, word=a>>7, and group=(a>>4)&7. The atom's four 4 B subwords occupy bank=4×group+s, s=0…3. Matrix or Tensor Map address generation has already swizzled the logical address. The fabric validates the group index and maps physical banks.
 
-数据 SRAM 233,472 B。宏 Q、主返回、备返回各 8×16 B=128 B。每组保留一项未 grant 的 R_BREQ、读写仲裁选择及 RR 指针、三项读身份/有效子字/目的掩码、逐目的 delivered。组内子字同步移动，按整 atom 预留一个返回位置（每组最多三笔），故任何被使能的物理 bank 至多三个在途读。两项写 ACK 身份帧按组独立管理，各组两项 FIFO 保留自己的 tag/status/valid 和先后。该组本沿退休的 credit 可同沿用于新写，慢组占用自己的两项后只挡该组，其他组继续接受。返回类型见[本模块事务字段](#transactions)。
+Data SRAM occupies 233,472 B. Macro Q, primary return, and backup return each occupy 8×16 B=128 B. Each group holds one ungranted R_BREQ, read/write selections and RR cursors, three sets of read identity/valid subwords/destination mask, and per-destination delivered bits. Subwords move together. Reserve one return position per whole atom (up to three per group), limiting any enabled physical bank to three outstanding reads. Each group independently manages its two write ACK frames as a two-entry FIFO with tag/status/valid and order. A credit retiring on this edge can accept a new write on the same edge. A slow group blocks only itself once its two entries fill. See the [transaction fields](#transactions) for return types.
 
-### 请求选择、grant 与返回
+### Request selection, grant, and return
 
-- 子字使能由其四位 byte_mask 的 OR 产生。每组每方向每拍最多一个原 atom，需全部启用子字的端口/credit 同时可用才 grant。禁用子字关闭 SRAM 使能，读端拼回零。8 B mbarrier 更新用同组两个子字在一次写沿提交。TMA/LSU 按原 atom 收一笔响应，不接收四个分片 ACK。
-- 在组内 R_BREQ 能接新项的沿选择读候选，锁定到 grant。无外围竞争时，连续四个时隙优先 A、A、B、B，缺席类别让给另一类。实现用自由运行 mod-4 相位，在 g−1 选择针对下一 grant 沿 g 的类别，基准 F 对齐相位 0。同类 A 比较 live 年龄、token 中的行组、core 号，再按 half/片；B 由 loader 在组内排好序。已选定但被挡的请求保持，窗口错过后按实际 grant 推演。外围与 MMA 同组竞争时两类按组轮转，类内外围 client 轮询，只有实际接受更新轮询指针。写端按组独立公平选择。
-- `rd_req.fire` 把请求收入 R_BREQ。最早下一沿，沿前已锁存的地址、子字使能及身份参与 grant；旧项 grant 时可同沿接替者。在 grant 沿 g 同时扣一个组 credit、采样全部启用的 SRAM 子字，并把 tag、mask 和目的集合记到 Q。g 沿后 Q 有效，g+1 最早转入主/备返回，g+2 最早在客户端 ret_fire。上述两拍从实际 grant 起算。
-- 主/备构成深度二的有序返回队列，只有队首对外握手。沿前先算队首是否在本沿完成全部目的，再算队列能否接走旧 Q。只有 Q 为空或本沿能移出旧 Q，且有可用 credit，才允许新 grant。Q 搬出和重新采样可同沿；被阻塞的 Q 关闭宏读使能，保持数据与身份。每组 `granted − fully_delivered = Q.valid + 返回队列占用 ≤ 3`，同沿释放的 credit 可复用，部分交付不释放。返回停顿只沿本组向前传播。
-- TMA load 每沿最多提交八个写 atom，store 每沿最多送八个读入 R_BREQ，并接收此前 grant 的八个返回。组间按 token 独立匹配。store 与 MMA A/B 争同组读 grant；load 与 LSU、barrier backing 争写 grant，同组不同 word 可与 MMA 读并行。持续 128 B/拍需八组全获服务且返回 credit 能循环。
-- 仅同一 id、同 atom、兼容顺序的 core A 可合并为一个源，至多四个目的，保存各自原 token/mask。每个目的只收自己的 byte 一次；慢目的保持采样值，所有目的收齐才归还源 credit。client6 的 B 每组独立返回一个 16 B atom。FP16/BF16 整 atom 请求的四个 32-bit 子字均使能；该组 loader.ret_fire 即归还其 credit。[出槽重排与四核分发](../tensor_core/blackwell_tc_b_loader.md#delivery)占 loader 槽。
-- 写在 wr_req.fire 沿提交并登记 ACK，最早下一沿退休。同沿检查可获准的 R_BREQ 与有 ACK 空间的写候选。若 word 相同且启用的物理 bank 相交，只允许一方访问，另一方保持整笔 atom。每组一位记录冲突优先方向，复位读优先，每次实际解决冲突后让给另一方向。不同 word 或启用 bank 不相交可并行。同 word 同 bank 即使 byte mask 不相交也要串行。返回和 ACK 各按组内顺序交付。
+- OR the four byte_mask bits of each subword to generate its enable. Each group can grant one original atom per direction per cycle, only when ports and credits are available for every enabled subword. Disable SRAM access for unselected subwords and assemble zeros on read. An 8 B mbarrier update commits two subwords in the same group on one write edge. TMA/LSU receive one response for the original atom, rather than four subword ACKs.
+- When the group's R_BREQ can take a new entry, select a read and lock it until grant. Without external contention, four consecutive slots prefer A, A, B, B. An absent class yields to the other. Use a free-running mod-4 phase at g−1 to select the class for grant g, with baseline F aligned to phase 0. Among A candidates compare live age, row group in token, core number, then half/piece. The loader orders B within each group. Hold a blocked selection and derive timing from actual grants if a window is missed. When external and MMA reads compete, alternate between these classes per group, and round-robin among external clients. Advance cursors only on actual acceptance. Arbitrate writes fairly and independently per group.
+- `rd_req.fire` captures the request in R_BREQ. Starting on the next edge, the registered address, subword enables, and identity participate in grant. A granting old entry can accept its replacement on the same edge. At grant g, consume a group credit, sample every enabled SRAM subword, and record tag, mask, and destinations in Q. Q is valid after g. It can move to the primary/backup return at g+1 and reach client ret_fire at g+2. Count these two cycles from actual grant.
+- Primary and backup form a depth-two ordered return queue. Only the head handshakes externally. First determine whether the head completes delivery to all destinations on this edge, then whether the queue can take old Q. Permit a new grant only with available credit and either empty Q or guaranteed movement of old Q on this edge. Q can move out and sample again on the same edge. With Q blocked, disable macro read and hold data and identity. Per group, `granted − fully_delivered = Q.valid + return_queue_occupancy ≤ 3`. Reuse credit released on the same edge. Partial delivery does not release credit. A return stall propagates only within its group.
+- Per edge a TMA load can commit eight write atoms. A store can submit eight reads into R_BREQ and receive eight returns from prior grants. Match by token independently across groups. Stores compete with MMA A/B for group read grants. Loads compete with LSU and barrier backing for write grants and can run alongside MMA reads to a different word in the same group. Sustained 128 B/cycle requires service in all eight groups and circulating return credits.
+- Coalesce only core A reads with the same ID, atom, and compatible ordering. One source can serve up to four destinations. Retain each original token/mask. Each receives its selected bytes once. Preserve the sampled value for slow destinations and return the source credit only after all receive it. For client6, B returns one 16 B atom independently per group. Full-atom FP16/BF16 requests enable all four 32-bit subwords. The group's loader.ret_fire releases its credit. [Slot output reorder and four-core distribution](../tensor_core/blackwell_tc_b_loader.md#delivery) uses a loader slot.
+- A write commits and registers its ACK at wr_req.fire. The ACK can retire on the next edge. Compare a grantable R_BREQ and a write candidate with ACK space on the same edge. If their words match and enabled physical banks intersect, allow only one access and hold the other entire atom. One priority bit per group starts with read priority and switches direction after each actual conflict resolution. Different words or disjoint enabled banks may proceed concurrently. Serialize the same bank and word even with disjoint byte masks. Deliver returns and ACKs in order within their respective group streams.
 
-同沿启动同步读、返回侧保留备用寄存器，参考 [Virgo 的 SMEM 读端口](https://github.com/ucb-bar/virgo/blob/dd03a7c87895a937ecbde30daf8aeddb583ec144/src/main/scala/radiance/tile/RadianceSharedMem.scala#L216-L268)。Allegro 用三项 credit 和逐目的交付控制广播。
+For same-edge synchronous read launch and a backup register on the return side see the [Virgo SMEM read port](https://github.com/ucb-bar/virgo/blob/dd03a7c87895a937ecbde30daf8aeddb583ec144/src/main/scala/radiance/tile/RadianceSharedMem.scala#L216-L268). Allegro uses three credits and per-destination delivery tracking for broadcast.
 
-### 复位与验收
+### Reset and acceptance
 
-连续在 0、1、2 grant 三笔时，读端常 ready 应在 2、3、4 分别交付。若第 2 沿起队首无法交付，第三笔仍可占 Q，组满后第四笔留在 R_BREQ；恢复沿可同时交付队首、旧 Q 入队、新 grant 采样。暂停一个广播目的时检查已收目的不会重收。对同字连续读写，分别检查读先胜时取得旧值、写先胜后读到新值，以及等待方继续推进。
+With grants at 0, 1, and 2 and a continuously ready reader, deliver at 2, 3, and 4 respectively. If the head stalls from edge 2, the third read can still occupy Q. Once full, the fourth stays in R_BREQ. Upon resumption, head delivery, enqueue of old Q, and sampling of a new grant can coincide. Stall one broadcast destination and check that served destinations see no duplicate. For successive accesses to one word, verify that a winning read gets the old value, a read after a winning write gets the new value, and the waiting party advances.
 
-复位清控制有效位；正常换 epoch 前排空。标签/组索引不匹配、重复返回置 sticky fault。已匹配源 MEMORY 随原事务 status 交付，禁止伪造写成功。对未选 byte、半行 barrier 写、TMA 单组停顿时另七组的请求与 ACK、TMA store 与 MMA 同组争读、LSU 竞争、广播部分交付和 3-credit 耗尽逐项验证。理想 K-major 两个 128 B 半块各在一沿使用八组共 32 个物理 bank；给一组插入八笔外围读，该组服务原来的 64 笔至少需 72 拍。分别计逻辑 atom 数、启用子字数和目的交付数。
+Reset clears control valid bits. Drain before a normal epoch change. Tag/group mismatches and duplicate returns set sticky fault. Deliver matched source MEMORY status with its original transaction and never report a successful write in its place. Verify unselected bytes, half-line barrier writes, requests and ACKs in seven groups while one TMA group stalls, TMA store/MMA read contention, LSU contention, partial broadcast delivery, and exhaustion of three credits. In ideal K-major layout, each 128 B half-block uses all eight groups and 32 physical banks on one edge. Inserting eight external reads in one group extends service of its original 64 requests to at least 72 cycles. Count logical atoms, enabled subwords, and destination deliveries separately.
 
 ## Submodules
 
-| 子模块 | 实例数 | 连接与父模块控制 |
+| Submodule | Instances | Connections and parent control |
 | --- | --- | --- |
-| [banked_sram](../base/blackwell_banked_sram.md) | 1 | 八个 atom 组驱动 32 个物理 bank。fabric 控制读使能、仲裁、返回和 ACK。 |
+| [banked_sram](../base/blackwell_banked_sram.md) | 1 | Eight atom groups drive 32 physical banks. The fabric controls read enable, arbitration, returns, and ACKs. |

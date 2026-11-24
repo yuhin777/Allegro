@@ -1,164 +1,164 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2240" height="2330" viewBox="0 0 2240 2330">
 <rect width="100%" height="100%" fill="white"/>
-<text x="64" y="68" font-size="44" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Allegro  |  跨 MMA 连续发射与分块预取</text>
-<text x="64" y="122" font-size="26" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">单 CTA · 三个有序命令记录 · 两个输入上下文 · 四核各 64 路完整 dot</text>
+<text x="64" y="68" font-size="44" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Allegro  |  Consecutive MMA issue and block prefetch</text>
+<text x="64" y="122" font-size="26" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Single CTA · Three ordered command records · Two input contexts · Four cores with 64 complete dot lanes each</text>
 <rect x="52" y="175" width="2136" height="280" rx="18" fill="#e8f6f4"/>
-<text x="76" y="207" font-size="26" fill="#087c80" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">命令与 B 源读取</text>
+<text x="76" y="207" font-size="26" fill="#087c80" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Command admission and B source reads</text>
 <rect x="90" y="249" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
 <text x="267.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">engine</text>
-<text x="267.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">cmd 与 tracker 同沿登记</text>
-<text x="267.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">按 id 预检、pin、选择分区</text>
+<text x="267.5" y="311" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Register command and tracker together</text>
+<text x="267.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Precheck, pin, select partition by ID</text>
 <rect x="510" y="249" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="687.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">SMEM 物理阵列</text>
-<text x="687.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">32 bank × 1,824 × 32 bit</text>
-<text x="687.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">8 组 · 每方向共 128 B/拍</text>
+<text x="687.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">SMEM physical array</text>
+<text x="687.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">32 banks × 1,824 words × 32 bits</text>
+<text x="687.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">8 groups · 128 B/cycle per direction</text>
 <polyline points="445,320 506,320" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="506,320 493.0,314.0 493.0,326.0" fill="#087c80"/>
 <rect x="930" y="249" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
 <text x="1107.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">R_BREQ → grant</text>
-<text x="1107.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">16 B atom 选四个相邻 bank</text>
-<text x="1107.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">g 同沿采样，g+2 最早交付</text>
+<text x="1107.5" y="311" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">16 B atom across four adjacent banks</text>
+<text x="1107.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Sample at g, deliver from g+2</text>
 <polyline points="865,320 926,320" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="926,320 913.0,314.0 913.0,326.0" fill="#087c80"/>
 <rect x="1350" y="249" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="1527.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">共享 B loader</text>
-<text x="1527.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 256 B，每行 4 × 32 bit</text>
-<text x="1527.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">半精度整 atom / 其他 masked</text>
+<text x="1527.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Shared B loader</text>
+<text x="1527.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 256 B, four 32-bit words per row</text>
+<text x="1527.5" y="336" font-size="17" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Full atoms for FP16/BF16, masks otherwise</text>
 <polyline points="1285,320 1346,320" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="1346,320 1333.0,314.0 1333.0,326.0" fill="#087c80"/>
 <rect x="1770" y="249" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="1947.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">四目的分发</text>
-<text x="1947.5" y="311" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">K 直通 / N 转置后共享列序</text>
-<text x="1947.5" y="336" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">四核独立握手，末目的释放槽</text>
+<text x="1947.5" y="279" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Four-way distribution</text>
+<text x="1947.5" y="311" font-size="15" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">K passes through, N transposes to column order</text>
+<text x="1947.5" y="336" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Cores accept separately, last frees slot</text>
 <polyline points="1705,320 1766,320" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="1766,320 1753.0,314.0 1753.0,326.0" fill="#087c80"/>
-<text x="90" y="421" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">FP16/BF16 八列块读 16 笔 16 B atom。两个槽可分属相邻命令，分发时检查每核的分区选择和覆盖保护。</text>
+<text x="90" y="421" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">An eight-column FP16/BF16 block takes sixteen 16 B reads. Adjacent commands may own the two slots. Each core checks its partition and overwrite permission.</text>
 <rect x="52" y="480" width="2136" height="280" rx="18" fill="#eaf2ff"/>
-<text x="76" y="512" font-size="26" fill="#2464b5" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">每核输入  /  三种操作数以各自最后读取沿回收</text>
+<text x="76" y="512" font-size="26" fill="#2464b5" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Per-core inputs  /  Reuse each operand after its own last read</text>
 <rect x="90" y="554" width="355" height="142" rx="10" fill="#eaf2ff" stroke="#2464b5" stroke-width="2"/>
-<text x="267.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">A  /  行组</text>
-<text x="267.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 1 KiB，按 256 B 组就绪</text>
-<text x="267.5" y="641" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">r=0…3 在各列块重用</text>
+<text x="267.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">A  /  row groups</text>
+<text x="267.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 1 KiB, ready by 256 B group</text>
+<text x="267.5" y="641" font-size="20" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Reuse r=0…3 across column blocks</text>
 <rect x="510" y="554" width="355" height="142" rx="10" fill="#eaf2ff" stroke="#2464b5" stroke-width="2"/>
-<text x="687.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">B  /  列块</text>
-<text x="687.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">8 KiB，四个 WS 分区</text>
-<text x="687.5" y="641" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">末次 op_load 后可逐块覆盖</text>
+<text x="687.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">B  /  column blocks</text>
+<text x="687.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">8 KiB in four WS partitions</text>
+<text x="687.5" y="641" font-size="17" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Overwrite each block after its final op_load</text>
 <rect x="930" y="554" width="355" height="142" rx="10" fill="#eaf2ff" stroke="#2464b5" stroke-width="2"/>
-<text x="1107.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">C  /  列块</text>
-<text x="1107.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 1 KiB，跨指令换主</text>
-<text x="1107.5" y="641" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">同址 C[j] 等老 D[j] 成功 ACK</text>
+<text x="1107.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">C  /  column blocks</text>
+<text x="1107.5" y="616" font-size="15" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 1 KiB, transfer ownership across commands</text>
+<text x="1107.5" y="641" font-size="15" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Same-address C[j] waits for old D[j] ACK success</text>
 <rect x="1350" y="554" width="355" height="142" rx="10" fill="#eaf2ff" stroke="#2464b5" stroke-width="2"/>
 <text x="1527.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">scale A / B</text>
-<text x="1527.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">本核 2 × 128 B scale A</text>
-<text x="1527.5" y="641" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">共享 4 KiB 内取两份快照</text>
+<text x="1527.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">2 × 128 B of scale A per core</text>
+<text x="1527.5" y="641" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Two snapshots in 4 KiB shared scale B</text>
 <rect x="1770" y="554" width="355" height="142" rx="10" fill="#eaf2ff" stroke="#2464b5" stroke-width="2"/>
 <text x="1947.5" y="584" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">R_OP  /  832 B</text>
-<text x="1947.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">取本次 r、j 与对应 scale</text>
-<text x="1947.5" y="641" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">首片四核同沿，之后独立推进</text>
-<text x="90" y="726" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">B0 已装好就可供本条首片使用。四核整份安装成功才发布 WS collector。核间共享的 B 源数据只读一份。</text>
+<text x="1947.5" y="616" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Select r, j, and their scales</text>
+<text x="1947.5" y="641" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">First load in lockstep, then independent</text>
+<text x="90" y="726" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">The first microtile can use installed B0. Publish a WS collector only after full installation on all four cores. Read shared B source data once.</text>
 <rect x="52" y="785" width="2136" height="280" rx="18" fill="#f3effb"/>
-<text x="76" y="817" font-size="26" fill="#6843aa" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">发射与 D 写回</text>
+<text x="76" y="817" font-size="26" fill="#6843aa" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Dot issue and D writeback</text>
 <rect x="90" y="859" width="355" height="142" rx="10" fill="#f3effb" stroke="#6843aa" stroke-width="2"/>
-<text x="267.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">R_OP 送旧装新</text>
-<text x="267.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">首片按 id 准入</text>
-<text x="267.5" y="946" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">8 行 × 8 列 / 核 / 拍</text>
+<text x="267.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">R_OP issue and refill</text>
+<text x="267.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Admit first microtile by ID</text>
+<text x="267.5" y="946" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">8 rows × 8 columns per core per cycle</text>
 <rect x="510" y="859" width="355" height="142" rx="10" fill="#f3effb" stroke="#6843aa" stroke-width="2"/>
-<text x="687.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">原生 dot 流水</text>
+<text x="687.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Native dot pipelines</text>
 <text x="687.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">P = 5 / 6 / 5 / 3</text>
-<text x="687.5" y="946" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">不同族可相邻发射</text>
+<text x="687.5" y="946" font-size="18" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Different families can issue back to back</text>
 <polyline points="445,930 506,930" fill="none" stroke="#6843aa" stroke-width="3"/>
 <polygon points="506,930 493.0,924.0 493.0,936.0" fill="#6843aa"/>
 <rect x="930" y="859" width="355" height="142" rx="10" fill="#f3effb" stroke="#6843aa" stroke-width="2"/>
-<text x="1107.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">R_DOT → D 双槽</text>
-<text x="1107.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">每槽 1 KiB；由结果 tag 选槽</text>
-<text x="1107.5" y="946" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">最后写接受后归还数据槽</text>
+<text x="1107.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">R_DOT → two D slots</text>
+<text x="1107.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">1 KiB per slot, selected by result tag</text>
+<text x="1107.5" y="946" font-size="17" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Release data slot on last write acceptance</text>
 <polyline points="865,930 926,930" fill="none" stroke="#6843aa" stroke-width="3"/>
 <polygon points="926,930 913.0,924.0 913.0,936.0" fill="#6843aa"/>
 <rect x="1350" y="859" width="355" height="142" rx="10" fill="#f3effb" stroke="#6843aa" stroke-width="2"/>
 <text x="1527.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">TMEM R_W</text>
-<text x="1527.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">128 bank × 128 bit</text>
-<text x="1527.5" y="946" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">w 接受，w+1 实际写入</text>
+<text x="1527.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">128 banks × 128 bits</text>
+<text x="1527.5" y="946" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Accept at w, write at w+1</text>
 <polyline points="1285,930 1346,930" fill="none" stroke="#6843aa" stroke-width="3"/>
 <polygon points="1346,930 1333.0,924.0 1333.0,936.0" fill="#6843aa"/>
 <rect x="1770" y="859" width="355" height="142" rx="10" fill="#f3effb" stroke="#6843aa" stroke-width="2"/>
-<text x="1947.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">w+2 真实 ACK</text>
-<text x="1947.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">只结算原 id / j</text>
-<text x="1947.5" y="946" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">全部必要写成功才开放依赖</text>
+<text x="1947.5" y="889" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Write ACK at w+2</text>
+<text x="1947.5" y="921" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Settle the original ID and block j</text>
+<text x="1947.5" y="946" font-size="14" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Release dependency after all required writes succeed</text>
 <polyline points="1705,930 1766,930" fill="none" stroke="#6843aa" stroke-width="3"/>
 <polygon points="1766,930 1753.0,924.0 1753.0,936.0" fill="#6843aa"/>
-<text x="90" y="1031" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">各族独立接收，队首族按发射序交付；旧指令的写尾与 pin 继续按原 id 结算。</text>
+<text x="90" y="1031" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Families accept independently and deliver in issue order through the head family. Settle trailing writes and the pin against the original instruction ID.</text>
 <rect x="52" y="1090" width="2136" height="280" rx="18" fill="#fff2e6"/>
-<text x="76" y="1122" font-size="26" fill="#b7671e" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">完成与同步</text>
+<text x="76" y="1122" font-size="26" fill="#b7671e" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Completion and synchronization</text>
 <rect x="90" y="1164" width="355" height="142" rx="10" fill="#fff2e6" stroke="#b7671e" stroke-width="2"/>
-<text x="267.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">末 op_load / dot</text>
-<text x="267.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">最后操作数已复制进 R_OP</text>
-<text x="267.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">已发微块仍保留身份</text>
+<text x="267.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Final op_load / dot</text>
+<text x="267.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Last operands copied into R_OP</text>
+<text x="267.5" y="1251" font-size="20" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Issued microtiles retain their identities</text>
 <rect x="510" y="1164" width="355" height="142" rx="10" fill="#fff2e6" stroke="#b7671e" stroke-width="2"/>
 <text x="687.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">local_done</text>
-<text x="687.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">本核本 id 的读、算术、写</text>
-<text x="687.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">及真实 ACK 责任已结清</text>
+<text x="687.5" y="1226" font-size="18" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">All reads, computation, writes, and ACKs</text>
+<text x="687.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">for this core and ID have settled</text>
 <polyline points="445,1235 506,1235" fill="none" stroke="#b7671e" stroke-width="3"/>
 <polygon points="506,1235 493.0,1229.0 493.0,1241.0" fill="#b7671e"/>
 <rect x="930" y="1164" width="355" height="142" rx="10" fill="#fff2e6" stroke="#b7671e" stroke-width="2"/>
-<text x="1107.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">engine 收尾</text>
-<text x="1107.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">汇合四核及 loader / 快照</text>
-<text x="1107.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">归还 handle，发布 done</text>
+<text x="1107.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Engine completion</text>
+<text x="1107.5" y="1226" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Join four cores, loader, and snapshots</text>
+<text x="1107.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Return handle and publish done</text>
 <polyline points="865,1235 926,1235" fill="none" stroke="#b7671e" stroke-width="3"/>
 <polygon points="926,1235 913.0,1229.0 913.0,1241.0" fill="#b7671e"/>
 <rect x="1350" y="1164" width="355" height="142" rx="10" fill="#fff2e6" stroke="#b7671e" stroke-width="2"/>
 <text x="1527.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">TC tracker</text>
-<text x="1527.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">按 id 接受一次最终完成</text>
-<text x="1527.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">结算本 issuer 的 commit</text>
+<text x="1527.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Accept one final completion per ID</text>
+<text x="1527.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Settle this issuer&#x27;s commit</text>
 <polyline points="1285,1235 1346,1235" fill="none" stroke="#b7671e" stroke-width="3"/>
 <polygon points="1346,1235 1333.0,1229.0 1333.0,1241.0" fill="#b7671e"/>
 <rect x="1770" y="1164" width="355" height="142" rx="10" fill="#fff2e6" stroke="#b7671e" stroke-width="2"/>
 <text x="1947.5" y="1194" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">mbarrier</text>
 <text x="1947.5" y="1226" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">arrival → phase</text>
-<text x="1947.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">wait 按实际 acquire 唤醒</text>
+<text x="1947.5" y="1251" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Wait succeeds after acquire ACK</text>
 <polyline points="1705,1235 1766,1235" fill="none" stroke="#b7671e" stroke-width="3"/>
 <polygon points="1766,1235 1753.0,1229.0 1753.0,1241.0" fill="#b7671e"/>
-<text x="90" y="1336" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">首片交接在数据通路，最终完成在 tracker。stop 后继续排空三个命令记录、部分分发、已展示请求及写 ACK。</text>
+<text x="90" y="1336" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">The data path hands off first issue. The tracker receives final completion. After stop, drain all three records, partial deliveries, presented requests, and write ACKs.</text>
 <rect x="52" y="1395" width="2136" height="530" rx="18" fill="#eaf2ff"/>
-<text x="76" y="1427" font-size="26" fill="#2464b5" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">稳态 N128 FP16 同址累加  /  对齐 K-major、已预热、无竞争，以下为握手沿</text>
-<text x="92" y="1486" font-size="30" fill="#6843aa" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">前条 dot   0 … 63</text>
-<text x="850" y="1486" font-size="30" fill="#087c80" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">后条 dot   64 … 127</text>
+<text x="76" y="1427" font-size="26" fill="#2464b5" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Steady-state N128 FP16 in-place accumulation  /  Aligned K-major, warm, uncontended. Numbers denote handshake edges.</text>
+<text x="92" y="1486" font-size="30" fill="#6843aa" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Previous dots   0 … 63</text>
+<text x="850" y="1486" font-size="30" fill="#087c80" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Next dots   64 … 127</text>
 <rect x="92" y="1520" width="754" height="16" rx="0" fill="#6843aa"/>
 <rect x="846" y="1520" width="754" height="16" rx="0" fill="#087c80"/>
-<text x="1650" y="1528" font-size="25" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">首发间隔 64 拍</text>
-<text x="92" y="1594" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">后条 C0    58 / 59 grant → 61 / 62 返回 → 63 装 R_OP → 64 首 dot</text>
-<text x="92" y="1654" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">后条 C1    62 / 63 grant → 65 / 66 返回 → 67 装 R_OP → 68 块 1 首 dot</text>
-<text x="92" y="1724" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">前条写尾    68 末片入 D → 69 / 70 接受写 → 71 末写提交 → 72 末 ACK</text>
-<text x="92" y="1784" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">前条完成    73 接受 local_done → 74 资源交还并发布 done → 75 tracker 最早接受</text>
-<text x="92" y="1870" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">两条指令的数据共用 128 B/拍 SMEM；一般布局、其他客户端、迟到 ACK 与输出反压按真实边沿计时。</text>
+<text x="1650" y="1528" font-size="25" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">64 cycles between first dots</text>
+<text x="92" y="1594" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Next C0    Grant 58/59 → return 61/62 → load R_OP at 63 → first dot at 64</text>
+<text x="92" y="1654" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Next C1    Grant 62/63 → return 65/66 → load R_OP at 67 → first dot of block 1 at 68</text>
+<text x="92" y="1724" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Previous writes    Last result enters D at 68 → writes accepted at 69/70 → final write commits at 71 → final ACK at 72</text>
+<text x="92" y="1784" font-size="28" fill="#162b41" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Previous completion    Accept local_done at 73 → return resources and publish done at 74 → earliest tracker acceptance at 75</text>
+<text x="92" y="1870" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Both commands share 128 B/cycle of SMEM. For other layouts, competing clients, late ACKs, or output stalls, use actual handshake edges.</text>
 <rect x="52" y="1950" width="2136" height="340" rx="18" fill="#e8f6f4"/>
-<text x="76" y="1982" font-size="26" fill="#087c80" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">TMA  /  单 walker，各 copy 共用后端峰值 128 B/拍</text>
+<text x="76" y="1982" font-size="26" fill="#087c80" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">TMA  /  One walker, with all copies sharing a peak of 128 B/cycle</text>
 <rect x="90" y="2020" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
 <text x="267.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">GMEM / L2</text>
-<text x="267.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">128 B 行 · 9-bit ID</text>
-<text x="267.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">返回受阻时保持 ID 与数据</text>
+<text x="267.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">128 B line · 9-bit ID</text>
+<text x="267.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Hold ID and data on a stalled return</text>
 <rect x="510" y="2020" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="687.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">16 × 128 B 数据 RAM</text>
-<text x="687.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">load 收到返回时分槽</text>
-<text x="687.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">store 读 SMEM 前预留槽</text>
+<text x="687.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">16 × 128 B data RAM</text>
+<text x="687.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Load takes a slot on return</text>
+<text x="687.5" y="2107" font-size="17" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Store reserves a slot before reading SMEM</text>
 <polyline points="445,2082 506,2082" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="506,2082 493.0,2076.0 493.0,2088.0" fill="#087c80"/>
 <polyline points="506,2100 445,2100" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="445,2100 458.0,2106.0 458.0,2094.0" fill="#087c80"/>
 <rect x="930" y="2020" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="1107.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">共享 SMEM / client 8</text>
-<text x="1107.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">八组各 16 B · 独立握手</text>
-<text x="1107.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">每组四个 32-bit bank</text>
+<text x="1107.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Shared SMEM / client 8</text>
+<text x="1107.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Eight independent 16 B group ports</text>
+<text x="1107.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Four 32-bit banks per group</text>
 <polyline points="865,2082 926,2082" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="926,2082 913.0,2076.0 913.0,2088.0" fill="#087c80"/>
 <polyline points="926,2100 865,2100" fill="none" stroke="#087c80" stroke-width="3"/>
 <polygon points="865,2100 878.0,2106.0 878.0,2094.0" fill="#087c80"/>
 <rect x="1350" y="2020" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="1527.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">tracker / 64 个事务 tag</text>
-<text x="1527.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">在途命令按 ticket 结算</text>
-<text x="1527.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">真实写 ACK 按原 tag 结算</text>
+<text x="1527.5" y="2050" font-size="26" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Tracker / 64 transaction tags</text>
+<text x="1527.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Track in-flight commands by ticket</text>
+<text x="1527.5" y="2107" font-size="19" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Match actual write ACKs by original tag</text>
 <rect x="1770" y="2020" width="355" height="142" rx="10" fill="#e8f6f4" stroke="#087c80" stroke-width="2"/>
-<text x="1947.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">copy 完成</text>
-<text x="1947.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">load → mbarrier 确认</text>
+<text x="1947.5" y="2050" font-size="28" fill="#162b41" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Copy completion</text>
+<text x="1947.5" y="2082" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Load → mbarrier acknowledgment</text>
 <text x="1947.5" y="2107" font-size="21" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">store → bulk group full</text>
 <polyline points="1285,2091 1346,2091" fill="none" stroke="#b7671e" stroke-width="3"/>
 <polygon points="1346,2091 1333.0,2085.0 1333.0,2097.0" fill="#b7671e"/>
@@ -166,6 +166,6 @@
 <polygon points="1766,2091 1753.0,2085.0 1753.0,2097.0" fill="#b7671e"/>
 <polyline points="267,2163 267,2192 1527,2192 1527,2164" fill="none" stroke="#b7671e" stroke-width="3"/>
 <polygon points="1527,2164 1521.0,2177.0 1533.0,2177.0" fill="#b7671e"/>
-<text x="90" y="2224" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">数据向右 load、向左 store。最后一组 SMEM 写或整行 GMEM 写被接受即释放数据槽。</text>
-<text x="90" y="2258" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">橙线为完成通路：load 收各组 SMEM 写 ACK，store 收 GMEM 写 ACK。store 的 .read 在全部源读完成后即可放行。</text>
+<text x="90" y="2224" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Loads move right and stores move left. Release the data slot on acceptance of the final SMEM group write or the GMEM line write.</text>
+<text x="90" y="2258" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Orange arrows show completion. Loads collect per-group SMEM write ACKs and stores collect GMEM write ACKs. Store .read may complete once all source reads finish.</text>
 </svg>

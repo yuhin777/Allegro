@@ -2,92 +2,92 @@
 
 ## Description
 
-在一条 128 B GMEM 行和八组 16 B SMEM atom 之间搬运，16 行 RAM、RD/Q/R_OUT 及各外部端口由所有在途 ticket 共用。访问方向和缓存策略由段所属 ticket 决定。
+Moves data between a 128 B GMEM line and eight 16 B SMEM atom groups. All active tickets share 16 RAM rows, RD/Q/R_OUT, and external ports. Each segment's owner ticket determines direction and cache policy.
 
-| 通道及方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Channel and direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| start / tag_view[64] / owner_view[18] 入 | [tma_start_t](blackwell_tma_completion_tracker.md#transfer-types) / [tma_tag_t](blackwell_tma_completion_tracker.md#transfer-types)[64] / [tma_owner_view_t](blackwell_tma_unit.md#owner-view)[18] | tracker、TMA unit | start.segment.ticket 指派新段；其后以 live key → tag.ticket 取得命令 id、方向和策略，原 setup 槽可被复用。 |
-| event[20] / data_ref[64] 出 | [tma_xfer_event_t](blackwell_tma_completion_tracker.md#transfer-types) / 每项 1 bit | tracker | 正常 memory fire 同沿按 key 报告事件。data_ref 表示行或 held/流水引用。 |
-| gmem_req 出 / gmem_rsp 入 | [gmem_req_t / gmem_rsp_t](blackwell_tma_unit.md#gmem-types) | GMEM（经 unit） | class0，读返回和写 ACK 路由到事务 key。可各自每拍一笔。 |
-| smem_req[8] 出 / smem_rsp[8] 入 | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) / [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | client8 的 lane g 固定接物理组 g，按原 key 和组独立应答。 |
-| drained / fault 出 | 各 1 bit | TMA unit | 行、held、流水已空 / 运行故障。 |
+| start / tag_view[64] / owner_view[18] inputs | [tma_start_t](blackwell_tma_completion_tracker.md#transfer-types) / [tma_tag_t](blackwell_tma_completion_tracker.md#transfer-types)[64] / [tma_owner_view_t](blackwell_tma_unit.md#owner-view)[18] | tracker, TMA unit | start.segment.ticket assigns the new segment. Subsequent accesses follow live key → tag.ticket for command ID, direction, and policy, so the original setup slot can be reused. |
+| event[20] / data_ref[64] outputs | [tma_xfer_event_t](blackwell_tma_completion_tracker.md#transfer-types) / 1 bit per entry | tracker | Report normal memory fire by key on its handshake edge. data_ref covers row, held, and pipeline references. |
+| gmem_req output / gmem_rsp input | [gmem_req_t / gmem_rsp_t](blackwell_tma_unit.md#gmem-types) | GMEM (via unit) | Class0. Route reads and write ACKs to the transaction key. Each direction supports one transfer per cycle. |
+| smem_req[8] outputs / smem_rsp[8] inputs | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) / [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | Client8 lane g connects to physical group g, which responds independently by original key and group. |
+| drained / fault outputs | 1 bit each | TMA unit | Rows, held selections, and pipeline empty / runtime fault. |
 
 ```mermaid
 flowchart LR
-  T[tracker / 64 个事务 tag] -->|start 与 tag_view| D[段派发]
-  D -->|load GMEM 读| G[GMEM]
-  G -->|load 成功返回时分槽| B[16 行 RAM / 每行八组]
-  D -->|store 先分槽再读| S[SMEM 八组]
-  S -->|store 分组返回| B
-  B --> RD[RD → 宏 Q → R_OUT]
-  RD -->|load 逐组写| S
-  RD -->|store masked 写| G
-  S -->|load 写 ACK / key 加组号| T
-  G -->|store 写 ACK / key| T
+  T["Tracker / 64 transaction tags"] -->|start and tag_view| D["Segment dispatch"]
+  D -->|Load GMEM read| G[GMEM]
+  G -->|Allocate load slot on successful return| B["16 RAM rows / eight groups per row"]
+  D -->|Store reserves before reading| S["Eight SMEM groups"]
+  S -->|Store source returns by group| B
+  B --> RD["RD → macro Q → R_OUT"]
+  RD -->|Load writes by group| S
+  RD -->|Store masked write| G
+  S -->|Load write ACK / key and group| T
+  G -->|Store write ACK / key| T
 ```
 
 ## Functionality
 
-### 行目录与数据槽
+### Row directory and data slots
 
-| 存储 | 组织 | payload |
+| Storage | Organization | payload |
 |---|---|---:|
-| 数据 RAM | [8 个 1R1W bank](../base/blackwell_banked_sram.md)，每 bank 为 16×16 B，每 word 16 位 byte enable；4-bit 数据槽号选 word | 2,048 B |
-| 宏 Q / R_OUT | 各保持一行和独立 valid | 128 B / 128 B |
-| **合计** | 两个方向共用 | **2,304 B** |
+| Data RAM | [Eight 1R1W banks](../base/blackwell_banked_sram.md), each bank is 16×16 B with 16 byte enables per word. A 4-bit slot index selects the word | 2,048 B |
+| Macro Q / R_OUT | Each holds one row with its own valid bit | 128 B / 128 B |
+| **Total** | Shared between both directions | **2,304 B** |
 
-控制单列。每个行目录项保存 valid、owner key、claimed、zero；store 另保留本行目标 gmem_line[63:7] 和 ordinal，直至写请求被接受。SMEM 的 sector、两端 offset、长度和 xor_group 由 owner 的 tag_view 取得。每个实际发出的 store 源读都先占有该行，行及各组真实返回的事件位置已预留。store 源返回在 16 项目录中匹配唯一 owner 以选中本地 word；load 写 ACK 和 store 写 ACK 直接索引 tag 表。其余控制为 load 读请求保持寄存器（key、行地址，mask 由 live 字段生成）、各组 store 源读的 held 选择、轮询指针及 RD/Q/R_OUT 的 key、槽号、组 pending。store 的 1,024-bit 写数据直接来自 R_OUT。槽号始终留在本模块内。
+Account for control separately. Each row directory entry holds valid, owner key, claimed, and zero. A store also retains destination gmem_line[63:7] and ordinal until write request acceptance. Read SMEM sector, source/destination offsets, length, and xor_group from the owner's tag_view. Each issued store source read has already reserved its row and event positions for actual group returns. Match a store source return against the unique owner in the 16-entry directory to select its local word. Load and store write ACKs index the tag table directly. Other control comprises a held load read request (key and line address, with mask derived from live fields), held store source read selections per group, round-robin pointers, and key, slot, and group pending in RD/Q/R_OUT. The 1,024-bit store write payload comes directly from R_OUT. The slot index stays local.
 
-### Load 的 GMEM 返回与 SMEM 写入
+### Load GMEM returns and SMEM writes
 
-1. **读源。** 对 in-bounds 段，start.fire 把行地址和 key 锁入一项可同拍送旧收新的读请求寄存器。发出的请求可连续使用不同 tag，表项在 L2 等待期间记录如何散射返回字节。收到回应先核对 class、live key、方向、sent 且未 done。
-2. **接收并分槽。** 匹配的正常读返回只在有沿前空槽、RAM 能写、对应事件可登记时 ready。fire 沿取最低空槽，写 owner 与有效字节，同沿送 GMEM_RSP，源完成。依据 [segment 公式](blackwell_tma_request_generator.md#segment) 将 GMEM lane `goff+j` 写入换位后的组和 byte lane。全 OOB load 用 start.fire 同沿申请一行、置 zero 并发 LOCAL_ZERO；不读 GMEM，目标仍按 mask 写零。零行与正常返回竞争同一分配口时，在可服务的候选间轮询，每沿最多建一行。
-3. **向 SMEM 交付。** RD 在已有数据、source_done、未 claimed 的行间轮询，选中时置 claimed。即使最老的读仍被 GMEM 持有，已就绪的年轻行也可排出。单命令内由 walker 切出的 load 段只写各自的有效 byte，落在同一 word 的段各带自己的 mask。R_OUT 的 pending 初值为 mask 非空的组；每组 write.fire 后清该位，未接受组继续保持原数据。**最后一组 write.fire 沿归还数据槽，下一沿可分配给另一 key。**
-4. **接受确认。** 早到、晚到的写 ACK 均按其原 ticket 的命令 id、key、组和 tag_view 的 sent/done 判定。第二条 load 发读时，第一条的返回仍可分槽、写 SMEM 和结算。成功 ACK 的接受只需其预留事件 lane。即使旧槽已改写，仍能完成旧 tag。
+1. **Source read.** For an in-bounds segment, start.fire latches line address and key in a one-entry read request register that can send old and accept new on the same edge. Consecutive requests may use different tags. Each entry retains how to scatter returned bytes while waiting for L2. On reply verify class, live key, direction, sent, and unfinished status first.
+2. **Receive and allocate.** Assert ready for a matched normal read return only with a pre-edge free slot, RAM write capacity, and room to record the event. On fire take the lowest free slot, write owner and valid bytes, report GMEM_RSP on the same edge, and finish the source. Use the [segment formula](blackwell_tma_request_generator.md#segment) to write GMEM lane `goff+j` to its swizzled group and byte lane. An all-OOB load requests a row on start.fire, sets zero, and emits LOCAL_ZERO. It skips GMEM reads but still writes masked zeros to the destination. Round-robin among serviceable zero rows and normal returns competing for the allocator. Create at most one row per edge.
+3. **Deliver to SMEM.** RD round-robins among unclaimed rows with data and source_done, setting claimed on selection. A ready younger row may drain even while GMEM holds the oldest read. Each walker-generated load segment writes only its valid bytes. Segments sharing a word retain independent masks. Initialize R_OUT.pending with groups having nonempty masks. Clear a group on write.fire and hold original data for groups still pending. **Release the slot on the final group write.fire. Another key can allocate it on the next edge.**
+4. **Accept acknowledgments.** Check early and late write ACKs against original ticket ID, key, group, and tag_view sent/done. While the second load issues reads, the first load's returns can still allocate slots, write SMEM, and settle. Accepting a successful ACK needs only its reserved event lane. The old tag can complete even after its old slot is overwritten.
 
-### Store 的分组源读与 GMEM 写入
+### Store group source reads and GMEM writes
 
-start.fire 为正常段绑定一个沿前空槽，保存目的行地址。最早下一沿，八组可各自向 SMEM 发一次有效读请求；每组在有候选的 ticket 间轮询，同 ticket 选最小 ordinal，锁住被选请求到 fire。各组返回可同沿投向不同 owner 的槽。匹配读返回时写本组有效字节并登记 SMEM_RSP；最后必需组被捕获后 source_done 成立。generated 且所有段到达源边界后可满足 group.read，后续写背压仍由本模块承受。
+For a normal segment start.fire binds a pre-edge free slot and saves the destination line address. Starting on the next edge each active group may send a source read to SMEM. Within each group round-robin across eligible tickets and choose the lowest ordinal within one ticket. Lock each selection to fire. Different groups can return to different owners' slots on one edge. On a matched read return write the group's valid bytes and record SMEM_RSP. source_done follows capture of the last required group. Once generated and all segments reach the source boundary, group.read can succeed. The data path still absorbs destination write backpressure.
 
-目标 RD 在**源已齐**且未 claimed 的 ticket 间轮询，同 ticket 选最小 ordinal。R_OUT 依据 goff 和 SMEM 布局逆向拼成一笔 masked GMEM 写。**GMEM WRITE.fire 沿归还数据槽**；GMEM 未接受时保持 key、地址、data、mask 和槽引用。此处 fire 指实际 GMEM 请求端口选中该数据请求并握手。之后的写 ACK 只查原 tag，返回成功才置本段目标完成。全 OOB store 在 start.fire 发 NO_ACCESS，两侧直接终结，免分配数据槽。
+Destination RD selects fairly among tickets with **all source data ready** and an unclaimed row. Within a ticket select the lowest ordinal. R_OUT reverses the SMEM mapping using goff and builds one masked GMEM write. **Release the slot on GMEM WRITE.fire**. Until GMEM accepts, hold key, address, data, mask, and slot reference. Fire means the actual GMEM request port selected and handshook the data request. The later write ACK looks up only the original tag. Only a successful return marks destination completion. An all-OOB store emits NO_ACCESS on start.fire, finishes both sides, and allocates no data slot.
 
-### 共用流水、反压与排空
+### Shared pipeline, backpressure, and drain
 
-行分配口在有资格的 store.start、零填和成功 GMEM 读返回之间轮询。每个 payload bank 单写口：load 返回需一次获准全部有效 bank；store 源响应逐组写既有行。两类同时争写时在可接受的类间轮转，给等待的整行返回一次完整写机会。RD 从已备齐、未 claimed 的行中公平选取，store 的 ordinal 比较仅在同一个 ticket 内有效。SMEM 每组在 load 目标写与 store 源读间公平轮询，锁到 fire；GMEM 数据口在 load 读与 store 的 R_OUT 写之间同样仲裁，再与 descriptor 仲裁。保留既有一个请求/组/沿、一条 GMEM 请求/沿。ACK 不申请数据槽或 RAM 写口。GMEM 按 unit 的可反压返回合同接入；SMEM store 源读必须先占行。
+The row allocator round-robins among eligible store.start, zero fills, and successful GMEM read returns. Each payload bank has one write port. A load return requires all selected banks together. Store source responses write existing rows by group. When both compete, alternate between serviceable classes and give a waiting full-line return a complete write opportunity. RD fairly selects ready unclaimed rows. Compare store ordinals only within a ticket. Each SMEM group fairly arbitrates a load destination write against a store source read and locks until fire. The GMEM data port similarly arbitrates load reads and R_OUT store writes before competing with descriptors. Retain one request/group/edge and one GMEM request/edge. ACKs need no data slot or RAM write port. Use the unit's backpressurable GMEM return contract. Reserve a row before every store SMEM source read.
 
-混向交接须避免 GMEM 队首 load 返回等数据槽、已占槽的 store 又等 GMEM 写请求的环。以 U 计已展示 GMEM READ 至返回的正常 load 数，含 held 请求。第一笔 store 分槽前要求空行数至少为 U+1。存在 store 行期间，每笔新增 load 在首次展示请求时预留一行返回容量；store 或零填仅可用扣除 U 后的空行。请求或行同沿新增按合计检查。成功返回将一个预留换成一条实占行；RAM 写口公平接入。纯 load 允许 64 个未返回段共用 16 行，待驻留 load 写入 SMEM 释放真实空间后再接入首笔 store。公平服务已承诺的回复和驻留行；不以新的 GMEM 握手作为接受 SMEM 写 ACK 的条件。
+Prevent a mixed-direction cycle in which the head GMEM load return waits for a slot while a resident store waits to issue a GMEM write. Let U count normal loads from first presentation of GMEM READ to return, including held requests. Before allocating the first store require at least U+1 free rows. While a store row exists, each new load reserves return capacity when first presenting its read. Stores and zero fills may use only free rows remaining after subtracting U. Check the aggregate of requests and rows newly added on the same edge. A successful return converts one reservation to an occupied row and gets fair access to RAM writes. Pure loads can have 64 outstanding segments sharing 16 rows. Admit the first store once resident loads write SMEM and release sufficient space. Fairly service promised replies and resident rows. Accept SMEM write ACKs independently of new GMEM handshakes.
 
-- RD 锁定行后下一沿最早采样同步宏，Q 保持到 R_OUT 接收。零行关闭宏读并随相同级数传递零标志。Q 与 R_OUT 各可送旧收新；同 bank 同 word 的读写若冲突保留已预约读，反压冲突源。held/Q/R_OUT 的 owner 始终随数据移动。
-- 数据槽满可拉低 gmem_rsp.ready；外围需保持该拍的 valid、ID、data、status 到 fire。**释放已驻留的 load 行只依赖该行的 SMEM 写接受**，SMEM 写 ACK 有独立的完成事件入口。共用 GMEM 返回口上，队首被阻可推迟后面的 descriptor，驻留行的排出不等待 descriptor 或新的 GMEM 回应。不可暂停的返回链路需按 [顶层外存合同](../top/blackwell_async_subsystem_top.md#common-protocol) 提供接入侧 credit。
-- 非 OK 内存返回可在无空数据槽时接收并报 fault，不写 RAM、不产生正常完成事件。未知、重复或错代回应同样终止运行。正常 stop 排空已接受 ticket。同步复位遵循顶层隔离条件。
+- After RD locks a row, the earliest synchronous macro sample is the next edge. Q holds until R_OUT accepts. A zero row disables macro read and passes its zero flag through the same stages. Q and R_OUT can each send old and take new simultaneously. A write conflicting with a reserved read to the same bank and word stalls at its source. Owner moves with data through held/Q/R_OUT.
+- When slots fill, deassert gmem_rsp.ready. The external producer must hold valid, ID, data, and status until fire. **Releasing a resident load row depends only on acceptance of that row's SMEM writes**. SMEM write ACKs have independent completion event inputs. A stalled head on the shared GMEM return can delay a later descriptor. Draining resident rows is independent of descriptors and new GMEM responses. A nonstallable return link must provide ingress credits per the [top-level external memory contract](../top/blackwell_async_subsystem_top.md#common-protocol).
+- A non-OK memory response can be consumed without a free slot and raises fault without writing RAM or generating normal completion. Unknown, duplicate, or wrong-generation replies also terminate the run. Normal stop drains accepted tickets. Synchronous reset follows top-level isolation conditions.
 
 <a id="peak"></a>
 
-### 逐拍合同与验收
+### Cycle timing and acceptance
 
-令 a 为 tracker.allocate.fire；以下为全行、无争用，GMEM 在请求后下一沿响应的测试夹具。tag、槽均从沿前空项选择，归还项最早下一沿重新分配。
+Let a denote tracker.allocate.fire. The fixture below assumes full lines, no contention, and GMEM responding one edge after request. Choose tags and slots from pre-edge free entries. A returned entry can be reallocated on the next edge.
 
-| 边沿事件 | load | store |
+| Edge event | load | store |
 |---|---|---|
-| 预留 tag / start | a / a+1，准备读请求 | a / a+1，预留数据槽 |
-| 源请求与捕获 | a+2 GMEM READ；a+3 返回、分槽并写 RAM | a+2 进 R_BREQ，a+3 grant 并采样 SMEM，a+5 八组返回写入已预留槽 |
-| RD 选行 / 宏采样 / Q→R_OUT | a+4 / a+5 / a+6 | a+6 / a+7 / a+8 |
-| 目标接受并释放数据槽 | a+7 最后一组 SMEM 写 fire | a+9 GMEM WRITE.fire |
-| 最后成功 ACK / 最早 tag 退休 | a+8 / a+9 | a+10 / a+11 |
+| Reserve tag / start | a / a+1, prepare read request | a / a+1, reserve data slot |
+| Source request and capture | a+2 GMEM READ, a+3 return, allocate slot, and write RAM | a+2 enter R_BREQ, a+3 grant and sample SMEM, a+5 eight group returns write the reserved slot |
+| RD select / macro sample / Q→R_OUT | a+4 / a+5 / a+6 | a+6 / a+7 / a+8 |
+| Destination acceptance and slot release | a+7 last SMEM group write fire | a+9 GMEM WRITE.fire |
+| Final successful ACK / earliest tag retirement | a+8 / a+9 | a+10 / a+11 |
 
-64 个满段在 a=0…63 分配 tag 时，load 在 7…70、store 在 9…72 各可连续交付 64 行，末 ACK 分别在 71、73，最早末 tag 退休在 72、74。命令的进度和完成通知另行握手，已绑定 load 还要等待 producer_rsp。每方向峰值为 128 B/拍，实际完成时间由有效 mask、仲裁、外围返回和确认决定。
+With 64 full segments allocated tags at a=0…63, loads can deliver 64 consecutive lines at 7…70 and stores at 9…72. The last ACKs are at 71 and 73 respectively and the earliest final tag retirements at 72 and 74. Command progress and completion have separate handshakes. A bound load additionally waits for producer_rsp. Peak bandwidth is 128 B/cycle per direction. Actual completion depends on effective masks, arbitration, external returns, and acknowledgments.
 
-| 边界用例 | 应观察到的行为 |
+| Boundary case | Expected behavior |
 |---|---|
-| 连发 64 个读后才开始返回，暂停 SMEM 目标 | 前 16 个成功返回各占一槽，第 17 个 held 不变；让最老读最后返回，已就绪行仍能排出，恢复后逐字节、逐目标各一次。 |
-| load 的七组已写且早 ACK，第八组延迟 | 第八组接受前保留旧数据，接受后可复用其槽；扣住第八个 ACK，旧 tag 以及本命令 barrier 继续等待。 |
-| store 的 GMEM 写或 ACK 停顿 | 写未接受时整行稳定，接受后可用原槽接下一段；旧 ACK 延后仅挡旧事务退休与 full，全部源已齐的 .read 可放行。 |
-| 数据槽满时到达 MEMORY | 该返回无需空行即可报告 fault，不能触发 producer 成功或新写。 |
+| Issue 64 reads before any return, then stall the SMEM destination | The first 16 successful returns occupy one slot each and the 17th stays held. Return the oldest read last. Ready rows can still drain. After resumption verify each byte and destination exactly once. |
+| Seven load groups have written and ACKed early, eighth group delayed | Retain the old data until the eighth group accepts, then allow slot reuse. While its eighth ACK is held, the old tag and command barrier remain pending. |
+| Store GMEM write or ACK stalls | Before write acceptance hold the full row stable. After acceptance reuse the slot for another segment. A late old ACK delays old transaction retirement and full only. A .read whose sources have all completed can proceed. |
+| MEMORY status arrives with all slots occupied | Report fault without a free row. The response cannot trigger producer success or a new write. |
 
-验收另覆盖八组乱序返回、同沿多 tag 的 ACK、短段和 OOB 填零、错误/重复 tag、descriptor 共用返回口。正式 RTL 需重放这些边沿。
+Also cover out-of-order returns across the eight groups, same-edge ACKs for several tags, short segments, OOB zero fill, wrong/duplicate tags, and descriptor sharing of the return port. The RTL must replay these edges.
 
 ## Submodules
 
-| 子模块 | 实例数 | 连接与父模块控制 |
+| Submodule | Instances | Connections and parent control |
 | --- | --- | --- |
-| [banked_sram](../base/blackwell_banked_sram.md) | 1 | 八个 16 B 组构成一行，16 行共用。data path 管理 slot、宏读使能和输出停顿。 |
+| [banked_sram](../base/blackwell_banked_sram.md) | 1 | Eight 16 B groups form a row, with 16 shared rows. The data path controls slot allocation, macro read enable, and output stalls. |

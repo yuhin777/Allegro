@@ -2,116 +2,116 @@
 
 ## Description
 
-本模块唯一持有4项对象cache并完成对象原子更新。软件命令、wait探测、TC arrival与TMA complete-tx共用此更新器；等待线程不占住更新流水。对象公式见[mbarrier_object](blackwell_mbarrier_unit.md#object)，接口类型见[mbarrier_command](blackwell_mbarrier_frontend.md#command)，握手见[common](../top/blackwell_async_subsystem_top.md#common-protocol)。
+This module owns the sole four-entry object cache and updates objects atomically. Software commands, wait probes, TC arrival, and TMA complete-tx share the updater. A waiting thread does not occupy the update pipeline. See [mbarrier_object](blackwell_mbarrier_unit.md#object) for object formulas, [mbarrier_command](blackwell_mbarrier_frontend.md#command) for interface types, and [common](../top/blackwell_async_subsystem_top.md#common-protocol) for handshakes.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| `service_req` | 入 | [bar_service_req_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | 调用者已预留route/slot返回位置 |
-| `service_rsp` | 出 | [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | 原子提交结果，保持到接受 |
-| `change` | 出 | [bar_change_t](#change-type) + pulse | wait | 同提交边沿广播新 phase/initialized；不反压 |
-| `back_req` | 出 | [bar_back_req_t](blackwell_mbarrier_backing.md#backing-types) | backing | 请求8B装入或写回 |
-| `back_rsp` | 入 | [bar_back_rsp_t](blackwell_mbarrier_backing.md#backing-types) | backing | 必须与唯一在途backing操作对应 |
-| `flush_req` | 入 | 无payload事件 | 顶层 | 上层已阻止新外部命令 |
-| `flush_rsp` | 出 | status_t | 顶层 | 所有dirty写ACK成功后OK |
-| `epoch` | 入 | 16bit | 顶层 | 当前CTA生命周期 |
-| `stop` | 入 | 1 | 顶层 | 排空指示；不阻止已接受命令派生的service或flush |
-| `drained` / `fault` | 出 | 各1 | 顶层 | 事务排空/必须隔离复位的协议故障 |
+| `service_req` | Input | [bar_service_req_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | Caller has reserved the route/slot result position |
+| `service_rsp` | Output | [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | Atomic commit result, held until accepted |
+| `change` | Output | [bar_change_t](#change-type) + pulse | wait | Broadcast new phase/initialized on the commit edge without backpressure |
+| `back_req` | Output | [bar_back_req_t](blackwell_mbarrier_backing.md#backing-types) | backing | Request an 8 B fill or writeback |
+| `back_rsp` | Input | [bar_back_rsp_t](blackwell_mbarrier_backing.md#backing-types) | backing | Must match the sole outstanding backing operation |
+| `flush_req` | Input | Event without payload | Top level | Upstream has stopped new external commands |
+| `flush_rsp` | Output | status_t | Top level | OK after successful ACKs for every dirty write |
+| `epoch` | Input | 16bit | Top level | Current CTA lifetime |
+| `stop` | Input | 1 | Top level | Drain indication. Does not block services derived from accepted commands or flush |
+| `drained` / `fault` | Output | 1 bit each | Top level | Transactions drained / protocol fault requiring isolated reset |
 
 ```mermaid
 flowchart LR
-  I[service请求] --> Q[R_REQ]
-  Q --> L[4项全相联lookup]
-  L --> U[候选更新与范围检查]
-  U --> C[原子commit]
-  C --> R[已预留源响应槽]
-  C --> W[wait change广播]
-  L <--> B[backing读写桥]
+  I["Service request"] --> Q[R_REQ]
+  Q --> L["Four-entry fully associative lookup"]
+  L --> U["Candidate update and range check"]
+  U --> C["Atomic commit"]
+  C --> R["Reserved source response slot"]
+  C --> W["Change broadcast to waiters"]
+  L <--> B["Backing read/write bridge"]
 ```
 
 ## Functionality
 
 <a id="object"></a>
 
-### 对象编码及原子状态转换
+### Object encoding and atomic state transitions
 
-本 CTA SMEM 的 8 B 对齐对象有唯一权威值，驻留时由 unit.cache 拥有，dirty eviction、INVAL、flush 经 backing 完成。有效地址满足 `addr+8≤228 KiB`，软件不得绕开对象服务读写其底层 byte。下列 encoding 为项目选择，供[软件及 producer 接口](blackwell_mbarrier_frontend.md#command)共用。
+An 8 B aligned object in this CTA's SMEM has one authoritative value. While resident it belongs to unit.cache. Dirty eviction, INVAL, and flush use backing. Valid addresses satisfy `addr+8≤228 KiB`. Software must not bypass object service to access the underlying bytes. The [software and producer interfaces](blackwell_mbarrier_frontend.md#command) share the project encoding below.
 
-| bits | 字段 | 范围 |
+| bits | Fields | Range |
 |---|---|---|
-| 19:0、39:20 | pending(P)、expected(E) | 0…1048575、1…1048575 |
-| 60:40 | tx(T) | 二补码 −1048575…1048575 |
-| 61、62、63 | phase(F)、initialized、保留零位 | 初始化 F=0，invalid 编码全零。 |
+| 19:0, 39:20 | pending(P), expected(E) | 0…1048575, 1…1048575 |
+| 60:40 | tx(T) | Two's complement −1048575…1048575 |
+| 61, 62, 63 | Phase (F), initialized, and reserved zero bits | Initialize F=0. Invalid encodes as all zeros. |
 
-用至少 22bit signed 中间值校验 count/byte 增减后才提交。INIT 从显式 operand 建立 P=E=count,T=0,F=0；INVAL 在所有同址引用排空后结束生命周期，等待实际写回 ACK。合法 count 为 1…1048575，bytes 为 0…1048575。读未初始化对象或使用越界地址不能返回成功。
+Use at least 22-bit signed intermediates to validate count and byte changes before commit. INIT sets P=E=count, T=0, F=0 from its explicit operand. INVAL ends the lifetime after all same-address references drain and waits for the actual writeback ACK. Legal count is 1…1048575 and bytes is 0…1048575. An uninitialized read or an out-of-range address cannot succeed.
 
-| 提交 | 候选状态 | 完成判定 |
+| Commit | Candidate state | Completion test |
 |---|---|---|
-| ARRIVE(count) | P'=P−count | 检查候选 P'/T'。 |
-| ARRIVE_EXPECT_TX(bytes) | 原子 P'=P−1、T'=T+bytes | 检查候选 P'/T'。 |
-| COMPLETE_TX(bytes) | T'=T−bytes | 检查候选 P'/T'。 |
+| ARRIVE(count) | P'=P−count | Check candidate P'/T'. |
+| ARRIVE_EXPECT_TX(bytes) | Atomically set P'=P−1 and T'=T+bytes | Check candidate P'/T'. |
+| COMPLETE_TX(bytes) | T'=T−bytes | Check candidate P'/T'. |
 
-成功且 P'=0、T'=0 时在本次提交沿执行 F'=!F、P'=E，否则保留 F。T 可为负，表示提前完成。计数越界、对象编码或 phase guard 违约触发 fault，对应更新不提交。guard 与更新使用同一旧对象值。
+On success with P'=0 and T'=0, set F'=!F and P'=E on the commit edge. Otherwise retain F. Negative T represents early completion. A count overflow, illegal object encoding, or phase guard violation raises fault and suppresses the update. The guard and update use the same old object value.
 
-TRY_WAIT 的 expected parity 与当前 F 不同即观察到完成。软件每次进入下一 phase 的 arrival 前须已有该 phase 的一次成功 wait，只使用当前或上一 phase 的 parity。acquire、响应保持及超时见 [wait](blackwell_mbarrier_wait.md#wait-budget)。驱逐对象不取消等待者。
+TRY_WAIT observes completion when expected parity differs from the current F. Software must successfully wait for that phase before arriving in the next phase and may use only the current or previous phase's parity. See [wait](blackwell_mbarrier_wait.md#wait-budget) for acquire, response retention, and timeout. Eviction does not cancel waiters.
 
-测试 4096 B×4 两轮各翻一次、负 T、COMPLETE_TX 与 arrival 同址连续、计数边界、终止失败不伪造成功、8 B 半行写不改邻对象、dirty eviction 期间 busy 保持，以及 phase 完成与 timeout 同拍。数值依据为[PTX 8.7 mbarrier](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier)。
+Test four 4096 B transactions per round over two rounds with one flip each, negative T, consecutive same-address COMPLETE_TX and arrival, count limits, failure without false success, 8 B writes preserving the adjacent object, busy throughout dirty eviction, and phase completion coinciding with timeout. Numerical reference: [PTX 8.7 mbarrier](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier).
 
 <a id="change-type"></a>
 
-### 修改广播类型
+### Change broadcast type
 
-`bar_change_t={addr:32,phase:1,initialized:1}` 为 34bit，每个有效修改提交沿无反压广播。
+`bar_change_t={addr:32,phase:1,initialized:1}` is 34 bits. Broadcast without backpressure on every successful modifying commit edge.
 
-### 预留 cache 行与结果位置
+### Cache-line and result reservations
 
-每项cache含tag(addr[31:3]，29bit)、object64bit、valid、dirty和busy，共96bit；四项共384bit。busy仅表示当前unit事务拥有该项。
+Each cache entry contains tag (addr[31:3], 29 bits), object64, valid, dirty, and busy, for 96 bits/entry and 384 bits total. busy denotes ownership by the unit's current transaction.
 
-单个R_REQ保存完整199bit service请求；R_OLD/R_NEXT各64bit；R_RESULT保存72bit service响应；2bit替换游标。backing pending记录包含目标cache索引、victim地址和MISS/FLUSH/INVAL原因，不复制对象payload。wait表、producer登记、软件返回槽均不属于本模块。
+One R_REQ stores the complete 199-bit service request. R_OLD/R_NEXT are 64 bits each, R_RESULT holds the 72-bit service response, and the replacement cursor is 2 bits. The pending backing record stores cache index, victim address, and MISS/FLUSH/INVAL reason without duplicating object payload. The wait table, producer registrations, and software return slots belong to their respective modules.
 
-baseline采用一个事务穿越LOOKUP、UPDATE、COMMIT的串行控制，命中时3拍完成，不承诺每拍一个更新。这样同对象无RAW转发或多提交竞争；后续优化须保持本文可见时序及原子点。FENCE_INIT 由 frontend 在更早 INIT 提交后发外部 ordering，本模块只负责原子对象值。
+The baseline serializes one transaction through LOOKUP, UPDATE, and COMMIT. A hit commits in three cycles. It does not promise one update per cycle. Serialization avoids same-object RAW forwarding and competing commits. Optimizations must preserve visible timing and the atomic point. The front end sends external ordering for FENCE_INIT after earlier INITs commit. This unit owns the atomic object value.
 
-### 命中与原子更新
+### Hits and atomic updates
 
-边沿g接受请求至R_REQ。g+1锁定命中项并采样R_OLD；g+2形成R_NEXT及status；g+3原子写cache、产生change并将结果交付R_RESULT。响应最早g+4被下游消费。
+Accept a request into R_REQ at g. At g+1 lock the hit entry and sample R_OLD. At g+2 form R_NEXT and status. At g+3 atomically write the cache, generate change, and place the result in R_RESULT. The downstream can consume the response at g+4 at the earliest.
 
-提交前以扩展位宽检查所有字段。非法候选触发 fault，计数与 phase 保持。INIT直接构造新对象。
+Check every field at extended width before commit. An illegal candidate raises fault and leaves counts and phase unchanged. INIT constructs a new object directly.
 
-route=3的最终更新在UPDATE内原子检查命令携带的绑定phase，具体guard规则见命令对象。检查和计数修改共享同一个旧对象样本与提交点，其他source不能在二者之间翻phase。
+For a route=3 final update, UPDATE atomically checks the command's bound phase according to the command object guard rules. The check and count change share one old object sample and commit point. No other source can flip the phase between them.
 
-QUERY只读取状态，不置dirty；TRY_WAIT归一为QUERY由wait模块解释。修改操作置dirty。每次成功修改广播 change；QUERY不广播。
+QUERY only reads state and does not set dirty. TRY_WAIT normalizes to QUERY for the wait unit to interpret. Modifying operations set dirty and broadcast change on each successful commit. QUERY does not broadcast.
 
-R_RESULT已预留，source返回背压不得让已提交操作再次执行。记录committed位；只有响应握手后才释放busy和R_REQ。
+Reserve R_RESULT so source response backpressure cannot reexecute a committed operation. Record a committed bit. Release busy and R_REQ only after the response handshake.
 
-### 缺失、驱逐与 INIT
+### Miss, eviction, and INIT
 
-lookup miss先选无效项，否则从替换游标开始找非busy项；waiter不pin cache。dirty victim先写回，成功ACK后才能改tag；clean victim直接释放。随后读取目标8B并验证编码，再重入UPDATE。匹配的读MEMORY不安装raw、不生成change，触发 fault。
+On a lookup miss choose an invalid entry first, otherwise scan from the replacement cursor for a nonbusy entry. Waiters do not pin cache entries. Write back a dirty victim and await a successful ACK before changing its tag. Release a clean victim directly. Then read and validate the target 8 B before reentering UPDATE. A matching read with MEMORY status raises fault without installing raw data or generating change.
 
-一个miss在unit内占用唯一事务，其他服务等待；backing返回仍可接受。此停顿只依赖内存返回，不依赖软件wait或软件响应消费。
+A miss occupies the unit's sole transaction and other services wait. Backing responses remain acceptable. This stall depends only on memory return, independently of software wait or consumption of software responses.
 
-INIT miss无需读取旧SMEM内容，但仍先保存dirty victim。上层保证本地址无活动引用；新对象直接安装为dirty。对当前cache中仍live的对象再次 INIT 违反生命周期并触发 fault；对不驻留对象，软件承担先INVAL的PTX前提，硬件不建立无限历史表。
+An INIT miss skips reading old SMEM contents but must first save a dirty victim. Upstream guarantees no active reference to the address. Install the new object directly as dirty. Reinitializing a still-live cached object violates lifetime and raises fault. For a nonresident object, software must satisfy the PTX requirement for prior INVAL. Hardware keeps no unbounded history.
 
-从 backing 装入后必须验证 initialized、计数和保留位。访问非法对象或损坏的编码时置 fault，不能据此翻 phase。
+After a backing fill, validate initialized, counts, and reserved bits. Access to an illegal object or corrupted encoding raises fault and cannot flip the phase.
 
-### INVAL与flush
+### INVAL and flush
 
-frontend只有在该地址无producer、wait、TC事务和held软件结果时才提交INVAL。unit序列化原子清对象，向backing写0并等ACK，然后释放cache项、广播initialized=0并返回OK。
+The front end submits INVAL only when the address has no producer, wait, TC transaction, or held software result. The unit serializes the atomic clear, writes zero to backing, waits for the ACK, then releases the entry, broadcasts initialized=0, and returns OK.
 
-INVAL 写回非 OK 时置 fault；成功应答与地址复用均须实际写回成功。
+Non-OK INVAL writeback raises fault. Successful response and address reuse both require successful writeback.
 
-flush不使对象失效：顺序保存4项dirty数据并等待每笔ACK；成功项清dirty。非 OK 写回应触发 fault，禁止成功 flush。flush响应与service响应各有独立valid；接收flush时unit必须无active service，flush期间不接新service。
+Flush keeps objects valid. Save the dirty entries among the four in order and wait for each ACK. Clear dirty on each success. A non-OK writeback raises fault and precludes a successful flush. Flush and service responses have independent valid bits. Accept flush only with no active service, and accept no new service during flush.
 
-drained忽略静态valid/dirty cache，但包含R_REQ/R_RESULT、backing在途及flush响应；正常epoch切换额外要求成功flush。fault 独立于正常 drained。
+drained excludes static valid/dirty cache entries but includes R_REQ/R_RESULT, outstanding backing, and flush response. A normal epoch transition additionally requires successful flush. fault is independent of normal drained.
 
-### 关闭与恢复
+### Shutdown and recovery
 
-驱逐和 flush 仅在写 ACK 成功时清 dirty 或更换 tag。backing 或 ordering 故障由顶层终止本次运行；恢复遵循[隔离复位合同](../top/blackwell_async_subsystem_top.md#common-protocol)。
+Eviction and flush clear dirty or replace a tag only after a successful write ACK. A backing or ordering fault terminates the run at the top level. See the [isolated reset contract](../top/blackwell_async_subsystem_top.md#common-protocol) for recovery.
 
-stop不gate service_req、back_req或flush：这些都可能属于上层已接受的操作。外部新命令由frontend阻止；排空后仍允许必要flush，否则dirty对象永远无法满足epoch切换条件。
+stop does not gate service_req, back_req, or flush. These can belong to operations already accepted upstream. The front end blocks new external commands. Required flush remains available after drain so dirty objects can meet epoch-transition requirements.
 
-同epoch未知back_rsp属于PROTOCOL。同步复位清cache有效位及控制，不清SMEM；仅允许在外部响应已隔离时执行。
+An unknown back_rsp in the same epoch is PROTOCOL. Synchronous reset clears cache valid bits and control and preserves SMEM. It requires isolation of external responses.
 
-正常epoch变更要求drained、全部dirty已成功flush、无 fault；此时清cache valid/dirty/busy及替换游标，保留payload和SMEM内容。不能在存在dirty或在途事务时借epoch变化丢弃权威状态；协议fault必须走隔离复位。
+A normal epoch transition requires drained, successful flush of all dirty entries, and no fault. Clear cache valid/dirty/busy and the replacement cursor, preserving payload and SMEM. An epoch change cannot discard authoritative dirty data or outstanding transactions. A protocol fault requires isolated reset.
 
-### 断言与验收
+### Assertions and acceptance
 
-同址最多一项有效，busy 项不可替换，每个请求至多一次原子提交和响应。用 5 个对象轮流触发 wait、更新和 dirty miss，核对 4 项 cache 的进展、提交 change 与新对象的一致性、邻半行保持，以及 实际写回成功前禁止复用 victim。
+At most one valid entry per address. A busy entry cannot be replaced. Each request commits and responds at most once. Cycle through five objects with waits, updates, and dirty misses. Check progress with a four-entry cache, agreement of commit change with the new object, preservation of the adjacent half-line, and retention of the victim until writeback succeeds.

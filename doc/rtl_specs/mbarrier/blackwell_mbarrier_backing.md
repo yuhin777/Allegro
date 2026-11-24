@@ -2,25 +2,25 @@
 
 ## Description
 
-将对象cache的8B装入/写回转换为共享SMEM fabric上的16B masked事务。模块不保存另一套对象cache，不自行修改计数。接口规则见[common](../top/blackwell_async_subsystem_top.md#common-protocol)，对象见[mbarrier_object](blackwell_mbarrier_unit.md#object)，事务见[memory_transaction](../top/blackwell_async_subsystem_top.md#memory-routing)。
+Converts 8 B object cache fills and writebacks into masked 16 B transactions on the shared SMEM fabric. It has no additional object cache and does not modify counts. See [common](../top/blackwell_async_subsystem_top.md#common-protocol) for interfaces, [mbarrier_object](blackwell_mbarrier_unit.md#object) for objects, and [memory_transaction](../top/blackwell_async_subsystem_top.md#memory-routing) for transactions.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| `back_req` | 入 | [bar_back_req_t](#backing-types)，97 | 对象 unit | 单个对象读或写 |
-| `back_rsp` | 出 | [bar_back_rsp_t](#backing-types)，68 | 对象 unit | 成功读返回8B，写返回value=0 |
-| `smem_req` | 出 | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions)，255 | SMEM fabric | client=11，16B对齐 |
-| `smem_rsp` | 入 | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions)，211 | SMEM fabric | 只接受当前live tag |
-| `epoch` | 入 | 16bit静态配置 | 顶层 | 仅排空后改变 |
-| `stop` | 入 | 1 | 顶层 | 排空指示，不gate内部back_req |
-| `drained` | 出 | 1 | 顶层 | 无请求、外部在途或held返回 |
-| `fault` | 出 | 1 sticky | 顶层 | 外部协议错误，复位清除 |
+| `back_req` | Input | [bar_back_req_t](#backing-types), 97 | Object unit | One object read or write |
+| `back_rsp` | Output | [bar_back_rsp_t](#backing-types), 68 | Object unit | Successful reads return 8 B. Writes return value=0 |
+| `smem_req` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions), 255 | SMEM fabric | client=11, 16 B aligned |
+| `smem_rsp` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions), 211 | SMEM fabric | Accept only the current live tag as a match |
+| `epoch` | Input | 16-bit static configuration | Top level | Change only after drain |
+| `stop` | Input | 1 | Top level | Drain indication. Does not gate internal back_req |
+| `drained` | Output | 1 | Top level | No pending request, external transaction, or held response |
+| `fault` | Output | 1 sticky | Top level | External protocol error, cleared by reset |
 
 ```mermaid
 flowchart LR
-  C[对象cache] --> R[R_REQ: addr/value/write]
-  R --> A[16B地址与8B mask生成]
-  A --> S[共享SMEM fabric]
-  S --> V[tag与status检查]
+  C["Object cache"] --> R[R_REQ: addr/value/write]
+  R --> A["Generate 16 B address and 8 B mask"]
+  A --> S["Shared SMEM fabric"]
+  S --> V["Tag and status check"]
   V --> O[R_RSP: 8B/status]
   O --> C
 ```
@@ -29,25 +29,25 @@ flowchart LR
 
 <a id="backing-types"></a>
 
-### Backing 内部类型
+### Internal backing types
 
-`bar_back_req_t={write:1,addr:32,value:64}`，97bit；`bar_back_rsp_t={status:4,value:64}`，68bit。仅一笔在途，SMEM 请求仍带完整 token。
+`bar_back_req_t={write:1,addr:32,value:64}` is 97 bits and `bar_back_rsp_t={status:4,value:64}` is 68 bits. Only one transaction can be outstanding. Each SMEM request still carries its full token.
 
-### 保留请求与结果位置
+### Request and result storage
 
-| 项目 | 容量 | 唯一用途 |
+| Item | Capacity | Purpose |
 |---|---:|---|
-| R_REQ | 97bit | 接受的对象操作，保持至外部完成 |
-| R_RSP | 68bit | 回给unit的结果 |
-| live tag | 78bit | 关联唯一外部事务 |
-| token counter | 16bit | 当前client内递增token |
-| 状态/valid/fault | 少量控制 | 不保存第二份128bit数据返回 |
+| R_REQ | 97bit | Accepted object operation, held until external completion |
+| R_RSP | 68bit | Result returned to the unit |
+| live tag | 78bit | Identifies the single external transaction |
+| token counter | 16bit | Token incremented within this client |
+| State/valid/fault | Control bits | No second 128-bit return buffer |
 
-只有一笔外部事务在途。读返回在握手边沿直接抽取需要的64bit进入R_RSP；不增加整行backup。接口支持输出背压，因此收到外部读返回前必须已预留R_RSP。
+Only one external transaction may be outstanding. At read return handshake, extract the required 64 bits directly into R_RSP. No full-line backup is required. Reserve R_RSP before receiving the external return so that the output can tolerate backpressure.
 
-状态为 EMPTY、ISSUE、WAIT_MEM、RESP。EMPTY且无fault时可接back_req，包括stop期间为已接受操作和flush服务的请求。新请求检查范围/对齐后进入ISSUE；内部非法地址触发 fault。外部fire后WAIT_MEM；匹配返回后RESP；back_rsp消费后EMPTY。
+States are EMPTY, ISSUE, WAIT_MEM, and RESP. In EMPTY without fault, accept back_req, including requests servicing earlier operations or flush during stop. After range and alignment checks, enter ISSUE. An illegal internal address raises fault. External fire enters WAIT_MEM, a matching return enters RESP, and consumption of back_rsp returns to EMPTY.
 
-### 地址、掩码与返回匹配
+### Addresses, masks, and return matching
 
 ```text
 line_addr = back_req.addr & ~0xf
@@ -57,36 +57,36 @@ write_data = zero_extend(value) << (half * 64)
 read_value = smem_rsp.data[half*64 +: 64]
 ```
 
-必须保留逻辑字节地址，SMEM fabric 以 4 B 字映射 bank，两个有效子字同沿提交。不能对邻接8B对象做read-modify-write。写ACK保证选中的8B实际提交；back_req接受本身不表示对象已保存。
+Preserve the logical byte address. The SMEM fabric maps 4 B words to banks and commits both selected subwords on one edge. Do not read-modify-write the neighboring 8 B object. A write ACK confirms the selected 8 B actually committed. Acceptance of back_req alone does not save the object.
 
-`tag.client=11`，`tag.id={epoch,issuer=0,seq=0}`为此内部client的固定上下文；不代表已接受的外部命令，也不向op_done发布。token在back_rsp退休后模2^16递增，只有唯一live事务的tag不得复用。旧请求已收到最终ACK并退休后允许复用token，不能因计数器到界阻止必要flush；外部协议保证每笔请求只有一次返回。
+`tag.client=11` and `tag.id={epoch,issuer=0,seq=0}` are fixed context for this internal client. They do not denote an accepted external command or publish op_done. Increment the token modulo 2^16 after back_rsp retires. Do not reuse the tag of the one live transaction. Once the old request receives its final ACK and retires, its token may be reused. Counter wrap must not prevent a required flush. The external protocol guarantees exactly one return per request.
 
-读和写返回的write位必须与R_REQ一致，tag必须完全相等。其他client返回不能路由到本模块；若仍出现未知tag/write不符，消费并置fault，不将其误用为当前事务结果。错误恢复须按顶层合同隔离复位。
+The write bit on read or write responses must match R_REQ and the full tag must match. Never route another client's response here. If an unknown tag or wrong direction arrives, consume it and raise fault without assigning it to the current transaction. Recovery requires isolation and reset under the top-level contract.
 
-### 从请求到响应
+### Request-to-response timing
 
-设对象请求在边沿g接受，SMEM请求最早g+1被接受。SMEM服务延迟由fabric定义；匹配返回在边沿r接受，back_rsp最早r+1被消费。每笔最多一个外部请求和一个内部返回。
+For an object request accepted at g, the earliest SMEM request acceptance is g+1. The fabric defines SMEM service latency. If the matching return is accepted at r, back_rsp can be consumed at r+1 at the earliest. Each operation produces at most one external request and one internal response.
 
-非 OK 读返回或写 ACK 直接触发 fault，禁止产生成功 back_rsp。只有实际成功的写 ACK 才可使 unit 清 dirty 或释放 victim。
+A non-OK read return or write ACK raises fault immediately and suppresses successful back_rsp. Only a successful actual write ACK permits the unit to clear dirty or release the victim.
 
-INVAL和flush必须等此处成功写响应，不只等smem_req fire。普通dirty对象的本地计数更新不必等待此模块空闲，直到需要驱逐或显式flush时才保存。
+INVAL and flush wait for a successful write response here. smem_req fire alone is insufficient. Local updates of dirty object counts can proceed while backing is busy until eviction or explicit flush requires a save.
 
-### 仲裁与停顿
+### Arbitration and stalls
 
-back_req及其收尾均不受stop影响；新的外部操作在frontend被阻止。WAIT_MEM始终给正确返回保留承接位置；back_rsp阻塞只阻止下一笔对象请求。
+stop does not block back_req or its completion. The front end blocks new external operations. WAIT_MEM always reserves room for the matching return. A stalled back_rsp blocks only the next object request.
 
-fabric的其他客户端可以同时使用无冲突bank。mbarrier无全SMEM独占权。其最终进展以fabric公平仲裁、外部返回最终到达及unit最终消费back_rsp为条件。
+Other fabric clients can use nonconflicting banks concurrently. mbarrier has no exclusive claim on SMEM. Progress requires fair fabric arbitration, eventual external return, and eventual consumption of back_rsp by the unit.
 
-在unit flush期间，依次处理至多4个dirty项；各项写ACK分别确认。失败项及尚未保存项继续dirty，flush不得返回OK。
+During unit flush, process up to four dirty entries in sequence and confirm each write ACK separately. Failed and unsaved entries remain dirty. Flush must not return OK.
 
-### 复位与异常
+### Reset and exceptions
 
-同步复位清状态、valid、fault和计数器，不修改SMEM。复位前保证外部事务取消或隔离，复位后旧tag不得重新进入。
+Synchronous reset clears state, valid, fault, and counters and leaves SMEM intact. Cancel or isolate external transactions before reset so old tags cannot reappear afterward.
 
-内部请求地址不对齐或越界报 fault，不发外部事务。后端epoch变化而非EMPTY属于PROTOCOL；集成必须先观察drained。
+A misaligned or out-of-range internal address raises fault without issuing an external transaction. An epoch change outside EMPTY is PROTOCOL. Integration must observe drained first.
 
-正常epoch变更只在EMPTY、无held返回且无fault时清token counter并建立新上下文；不清SMEM。前一epoch的合法返回必须已退休，不能靠新epoch比较将其丢弃。
+On a normal epoch change, reset the token counter and establish the new context only in EMPTY with no held return or fault. Preserve SMEM. All legal returns from the previous epoch must already have retired. Do not discard them by comparing against the new epoch.
 
-### 断言与验收
+### Assertions and acceptance
 
-保持同一 16 B 行的两个 8 B 对象交错读写，暂停请求及返回，核对每个 back_req 只结算一次，未选半行保持。向返回注入错误 tag、方向或 MEMORY，检查 dirty victim 在成功写 ACK 前仍由 unit 持有。
+Interleave reads and writes to both 8 B objects in one 16 B line while stalling requests and returns. Check that each back_req settles exactly once and the unselected half stays intact. Inject a wrong tag, wrong direction, or MEMORY return and verify that the unit retains the dirty victim until a successful write ACK.

@@ -2,40 +2,40 @@
 
 ## Description
 
-组合编码器将末级归约结果 `sum×2^base_exp` 或特殊值编码为 FP32。参数为 `SUM_W≥24, EXP_W≥2, CANONICAL_ZERO=1`。
+This combinational encoder converts the final reduction `sum×2^base_exp` or a special result to FP32. Parameters are `SUM_W≥24, EXP_W≥2, CANONICAL_ZERO=1`.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| sum | 入 | signed[SUM_W] | 父级归约 | 组合，有限和 |
-| base_exp | 入 | signed[EXP_W] | 父级对齐控制 | 组合，与 sum 同组 |
-| special_valid | 入 | 1 bit | 父级特殊值逻辑 | 组合选择 special_result |
-| special_result | 入 | bits[32] | 父级特殊值逻辑 | special_valid 为 1 时采用 |
-| result | 出 | bits[32] | 父级结果级 | 组合输出，无时钟或握手 |
+| sum | Input | signed[SUM_W] | Parent reduction | Combinational finite sum |
+| base_exp | Input | signed[EXP_W] | Parent alignment control | Combinational, paired with sum |
+| special_valid | Input | 1 bit | Parent special-value logic | Combinational special_result select |
+| special_result | Input | bits[32] | Parent special-value logic | Used when special_valid is 1 |
+| result | Output | bits[32] | Parent result stage | Combinational output without clock or handshake |
 
 ## Functionality
 
-sum=0输出+0。其他有限数令s为符号、a为精确绝对值（临时SUM_W+1bit避免最负值溢出），h=floor(log2 a)，e=base_exp+h。当 h≥23 时 sig24=a>>(h−23)，当 h<23 时 sig24=a<<(23−h)。两种情况的最高有效位均在 bit 23。舍去的低位不进位。
+sum=0 produces +0. For other finite values let s be the sign, a the exact absolute value (use a SUM_W+1-bit temporary for the most negative input), h=floor(log2 a), and e=base_exp+h. If h≥23, sig24=a>>(h−23). If h<23, sig24=a<<(23−h). In both cases the highest set bit is bit 23. Discard low bits without incrementing.
 
-- e>127：带符号Inf。
-- −126≤e≤127：exp=e+127，fraction=sig24低23bit。
-- −149≤e<−126：exp=0，fraction=(sig24>>(−126−e))低23bit。
-- e<−149：带符号0；CANONICAL_ZERO=1时改为+0。
-- special_valid=1：返回special_result，覆盖以上计算。
+- e>127 gives signed Inf.
+- For −126≤e≤127, exp=e+127 and fraction is the low 23 bits of sig24.
+- For −149≤e<−126, exp=0 and fraction is the low 23 bits of (sig24>>(−126−e)).
+- e<−149 gives signed zero, or +0 when CANONICAL_ZERO=1.
+- When special_valid=1, return special_result in preference to the finite result.
 
-F16/低精度取 CANONICAL_ZERO=1，FP4 取 0；精确抵消均输出 +0。
+F16 and the low-precision path set CANONICAL_ZERO=1. FP4 sets it to 0. Exact cancellation always produces +0.
 
-无新增流水，结果由父模块末级捕获。验证 sum=3、base_exp=0 必须输出 0x40400000，及负2的幂、最负sum、normal/subnormal边界、e=−149/−150、e=127/128及special覆盖。
+The parent captures the result at its final stage without an extra pipeline stage. Verify that sum=3 and base_exp=0 give 0x40400000. Also check negative powers of two, the most negative sum, normal/subnormal boundaries, e=−149/−150, e=127/128, and special-result priority.
 
-取 sum=2^24+3、base_exp=−24，保留的 24 位有效数应为 0x800001，FP32 输出 0x3f800001。被移出的 1 不进位。
+For sum=2^24+3 and base_exp=−24 the retained 24-bit significand is 0x800001 and the FP32 result is 0x3f800001. The discarded 1 does not increment the result.
 
 <a id="numeric-contract"></a>
 
-### 公共浮点最终结果规则
+### Common floating-point result rules
 
-FP32 的 exponent/fraction 分别为 8/23 bit，bias=127。exp 全 1 时，frac=0 为 Inf，frac 非零为 NaN。有限值解码见各叶模块。
+FP32 exponent and fraction widths are 8 and 23 bits respectively, with bias=127. When the exponent is all ones, frac=0 encodes Inf and a nonzero fraction encodes NaN. Each leaf specification defines finite decoding.
 
-有限数按上文截断，上溢到 Inf 是项目规定的结果。
+Truncate finite values as above. The project specifies overflow to Inf.
 
-任一NaN、0×Inf、相反符号Inf参与求和产生canonical FP32 NaN `0x7fffffff`；仅单一符号Inf产生该Inf。先判所有特殊值，再选有限求和结果。scale NaN和scale为零与Inf的组合遵循同样规则。
+Any NaN, 0×Inf, or sum containing infinities of opposite signs produces canonical FP32 NaN `0x7fffffff`. Infinities of only one sign yield that infinity. Resolve all special values before selecting the finite sum. The same rules apply to a NaN scale and to zero scale combined with Inf.
 
-完整整数归约后再编码。以 −5 的幅值右移一位并恢复符号为例，应得 −2。
+Encode only after the complete integer reduction. Right-shifting the magnitude of −5 by one and restoring its sign must give −2.

@@ -2,28 +2,28 @@
 
 ## Description
 
-用 32 条操作记录接收 MMA 的逐 id 完成，8 条 commit 记录保存同 issuer 的未完成前驱快照。[身份与截止](../top/blackwell_async_subsystem_top.md#identity)定义 issuer 和截止沿。
+The 32 operation records accept MMA completion by ID. Eight commit records snapshot unfinished predecessors of the same issuer. See [Identity and cutoffs](../top/blackwell_async_subsystem_top.md#identity) for the issuer definition and cutoff edges.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| `register_op` | 入 | [async_id_t](../top/blackwell_async_subsystem_top.md#identity)，58 | 顶层 MMA 入口 | 与实际TC执行命令原子接受 |
-| `engine_done` | 入 | [op_done_t](../top/blackwell_async_subsystem_top.md#identity)，62 | MMA engine | 本 id 的读、算术、实际写 ACK 及资源归还均已结清 |
-| `op_done` | 出 | op_done_t，62 | 软件前端 | 单条执行命令的软件完成 |
-| `commit_cmd` | 入 | [tc_commit_t](#commit-contract)，90 | 软件前端 | 独立接受与快照资源 |
-| `ready_commit` | 出 | [tc_ready_commit_t](#commit-contract)，93 | TC completion bridge | `{commit:90,slot:3}` |
-| `commit_retire` | 入 | [tc_commit_retire_t](#commit-contract)，61 | TC completion bridge | `{slot:3,id:58}`；bridge完成返回已消费 |
-| `busy_addr/addr_busy` | 入/出 | 32bit/1bit | barrier frontend | 任一valid commit指向该barrier地址即busy |
-| `epoch/stop` | 入 | 16/1 | 顶层 | 当前CTA/停止新登记与commit |
-| `drained/fault` | 出 | 各1 | 顶层 | 全部操作、commit 和 held 输出退休 / 运行故障 |
+| `register_op` | Input | [async_id_t](../top/blackwell_async_subsystem_top.md#identity), 58 | Top-level MMA ingress | Atomic acceptance with the actual TC execution command |
+| `engine_done` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity), 62 | MMA engine | Reads, arithmetic, actual write ACKs, and resource returns for this ID have all settled |
+| `op_done` | Output | op_done_t, 62 | Software front end | Software completion for one execution command |
+| `commit_cmd` | Input | [tc_commit_t](#commit-contract), 90 | Software front end | Independent acceptance and snapshot resources |
+| `ready_commit` | Output | [tc_ready_commit_t](#commit-contract), 93 | TC completion bridge | `{commit:90,slot:3}` |
+| `commit_retire` | Input | [tc_commit_retire_t](#commit-contract), 61 | TC completion bridge | `{slot:3,id:58}`, bridge completion result consumed |
+| `busy_addr/addr_busy` | Input/output | 32bit/1bit | barrier frontend | Any valid commit targeting this barrier address asserts busy |
+| `epoch/stop` | Input | 16/1 | Top level | Current CTA / stop new registrations and commits |
+| `drained/fault` | Output | 1 bit each | Top level | All operations, commits, and held outputs retired / runtime fault |
 
 ```mermaid
 flowchart LR
-  E[执行命令] --> O[32项操作记录]
+  E["Execution command"] --> O["32 operation records"]
   D[engine_done] --> O
-  O --> SW[独立op_done输出]
-  C[commit_cmd] --> S[截止快照]
+  O --> SW["Independent op_done output"]
+  C[commit_cmd] --> S["Cutoff snapshot"]
   O --> S
-  S --> Q[8项commit / 32bit pending]
+  S --> Q["Eight commits / 32-bit pending set"]
   D --> Q
   Q --> B[async completion bridge]
   B --> R[commit_retire]
@@ -32,30 +32,30 @@ flowchart LR
 
 ## Functionality
 
-register_op fire必须等于该条MMA命令fire。顶层联合执行器ready与本模块ready，不允许在两处分别握手。LD/ST属于独立RF等待域，不登记到本表。
+register_op fire must equal the MMA command fire. The top combines executor ready and tracker ready for a single handshake. LD/ST belongs to the independent RF wait domain and does not register here.
 
 <a id="commit-contract"></a>
 
-### Commit 通道类型
+### Commit channel types
 
-| 类型/字段 | 位宽 | 定义 |
+| Type/field | Width | Definition |
 |---|---:|---|
-| `tc_commit_t` | 90 | `{id:async_id_t,barrier_addr:32}`；地址为本 CTA SMEM byte 地址 |
+| `tc_commit_t` | 90 | `{id:async_id_t,barrier_addr:32}`, address is a byte address in this CTA's SMEM |
 | `tc_ready_commit_t` | 93 | `{commit:tc_commit_t,slot:3}` |
-| `tc_commit_retire_t` | 61 | `{slot:3,id:async_id_t}`；最终commit返回消费后回收tracker槽 |
+| `tc_commit_retire_t` | 61 | `{slot:3,id:async_id_t}`, reclaim the tracker slot after the final commit result is consumed |
 
-### 登记与完成
+### Registration and completion
 
-操作行含 valid、id58、finished，共 60bit。register_op 与 engine 命令同沿 fire，占一条空行。engine_done 按完整 id 匹配唯一未完成行；成功 fire 设置 finished，并清除各 commit 对该行的 pending 位。该输入已预留记录，独立于更老操作、软件 ready 和 engine 记录的按序回收。异常身份或非 OK 完成按[运行故障](../top/blackwell_async_subsystem_top.md#common-protocol)处理。
+Each operation entry contains valid, id58, and finished (60 bits). register_op fires on the same edge as the engine command and allocates a free entry. engine_done matches one unfinished entry by full ID. Successful fire sets finished and clears that entry's pending bit in every commit. Its record is already reserved, independently of older operations, software ready, or engine record reclamation in order. Invalid identity or non-OK completion follows [runtime fault handling](../top/blackwell_async_subsystem_top.md#common-protocol).
 
-在 finished 行间轮询发布 `op_done={id,OK}`，背压锁定 5bit 索引和 valid。普通 done 消费即回收操作行，下一沿可重新登记。已经完成的操作无需后继事件，无论软件何时发 commit 都不再占用依赖存储。
+Round-robin among finished entries to publish `op_done={id,OK}`. Lock a 5-bit index and valid under backpressure. Ordinary done consumption reclaims the operation entry, which can register a new operation on the next edge. Completed operations require no later event or dependency storage regardless of when software issues commit.
 
-### commit 截止和发出
+### Commit cutoff and issue
 
-8 行各含 commit90、pending32、valid 和已发往 bridge 位。保留 8×8 接受先后矩阵、3bit 轮询游标及 held 输出选择。commit 的接受只需独立空槽、当前 epoch 开放和目标地址的生命周期 gate 允许。插入时将所有旧行标为更早，释放时清对应行列。任一有效行的地址命中均置 addr_busy。
+Each of eight entries holds commit90, pending32, valid, and a sent-to-bridge bit. Retain an 8×8 acceptance-order matrix, a 3-bit round-robin cursor, and a held output selection. Commit acceptance requires only an independently free slot, an open current epoch, and permission from the target address lifecycle gate. At insertion mark all existing entries older. On release clear the corresponding row and column. Assert addr_busy on any valid address match.
 
-commit 在 c 沿捕获沿前 valid、同 epoch、同完整 issuer 且未 finished 的操作。同沿匹配的成功 engine_done 从集合扣除；同沿新 register_op 不加入。旧槽回收后，新身份不继承旧 pending 位。空集合也产生一次 ARRIVE(1)。同 issuer 更早有效 commit 全部 retire 且 pending=0 后才可发出，不同 issuer 间轮询；ready_commit 受阻时保持 id、地址及 slot。
+At edge c, commit captures pre-edge valid unfinished operations of the same epoch and full issuer. Subtract successful matching engine_done on that edge and exclude a simultaneous new register_op. A new identity reusing an old slot does not inherit its pending bit. An empty set still produces one ARRIVE(1). Issue only when all older valid commits from the same issuer have retired and pending=0. Round-robin across issuers. Hold ID, address, and slot while ready_commit is stalled.
 
-ready_commit.fire 标志已交接。bridge 在软件 commit_done 消费后发 commit_retire；仅匹配原 slot/id 才释放该行。engine_done 在 r 握手后，软件 done 和由此就绪的 commit 最早 r+1 交付。空快照最早 c+1 交付。32 条操作行全满时仍可登记 commit，8 条 commit 行全满时仍可接收之前登记的 engine_done。
+ready_commit.fire records handoff. After software consumes commit_done the bridge issues commit_retire. Release the row only on matching original slot/ID. Following engine_done handshake at r, software done and a newly eligible commit can deliver at r+1. An empty snapshot can deliver at c+1. All 32 occupied operation entries still permit commit registration. All eight occupied commit entries still permit engine_done for registered operations.
 
-正常 stop 阻止新登记，已有结果与 commit 继续退休；drained 条件为两表和 held 输出均空。同步复位清 valid、矩阵、游标与选择。登记时检查 epoch 和 live 操作/commit 的完整 id，重复或错 epoch 的请求不得 joint fire，并置 fault。未知 engine_done 或错误 retire 触发顶层 fault。验收覆盖同沿登记/完成/commit、连续消费超过 32 个 done 后的空快照，以及[不同 issuer 的非空 commit](../top/blackwell_async_subsystem_top.md#mma-nonempty-commit)。
+Normal stop blocks new registrations while existing results and commits retire. drained requires both tables and held outputs empty. Synchronous reset clears valid bits, matrix, cursors, and selections. At registration check epoch and full ID against live operations/commits. A duplicate or wrong epoch must suppress joint fire and raise fault. Unknown engine_done or wrong retire raises top-level fault. Cover coincident registration/completion/commit, an empty snapshot after consuming more than 32 consecutive done results, and [nonempty commits from different issuers](../top/blackwell_async_subsystem_top.md#mma-nonempty-commit).

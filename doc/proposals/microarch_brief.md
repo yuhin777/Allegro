@@ -1,22 +1,22 @@
 # Microarch Brief
 
-Allegro 为一个活跃 CTA 执行异步指令。前端可以在一条指令的结果可见之前提交后续工作。后端依据操作数、存储端口和完成记录的实际占用决定哪些工作能并行。指令与操作数的合法组合见 [PTX 支持范围](supported_ptx.md)，端口、状态机与握手时序见 [RTL 模块索引](../rtl_specs/top/blackwell_async_subsystem_top.md#module-index)。
+Allegro executes asynchronous instructions for one active CTA. The front end can submit work before an earlier instruction's result becomes visible. Operand availability, memory port occupancy, and completion records determine which operations can proceed concurrently. See [Supported PTX](supported_ptx.md) for legal instruction and operand combinations and the [RTL module index](../rtl_specs/top/blackwell_async_subsystem_top.md#module-index) for ports, state machines, and handshake timing.
 
-## 1. 顶层组成与资源
+## 1. Top-level organization and resources
 
-外围选择 warp、解码指令，并保证程序序和收敛。沿数据流看，TMA 在 GMEM 与共享 SMEM 之间搬运数据；MMA 从 SMEM 取 B，从 SMEM 或 TMEM 取 A，累加时从 TMEM 读 C。四个核从本地 Tensor Core Buffer 向 dot 阵列供数，把结果 D 写回 TMEM。RF 经 LD/ST 访问 TMEM。图中实线为命令或数据，虚线为完成、可见性请求及确认。
+The surrounding system selects the warp, decodes instructions, and enforces program order and convergence. TMA moves data between GMEM and shared SMEM. MMA reads B from SMEM, A from SMEM or TMEM, and C from TMEM when accumulating. Four cores feed their dot arrays from local Tensor Core Buffers and write D to TMEM. RF accesses TMEM through LD/ST. Solid arrows carry commands or data. Dashed arrows carry completion events, visibility requests, and acknowledgments.
 
 ```mermaid
 flowchart LR
-    FE["warp 指令前端"]
+    FE["Warp instruction front end"]
     RF["RF"]
     LSU["LSU"]
     GM["GMEM"]
-    ORD["ordering 服务"]
-    subgraph CTA["单 CTA 异步后端"]
-        TC["Tensor Core · engine / buffer / 四核"]
+    ORD["Ordering service"]
+    subgraph CTA["Single-CTA asynchronous backend"]
+        TC["Tensor Core: engine, buffers, four cores"]
         TM["TMEM · manager / fabric / LDST"]
-        SM["共享 SMEM"]
+        SM["Shared SMEM"]
         TMA["TMA"]
         TK["TC completion tracker / bridge"]
         BAR["mbarrier"]
@@ -29,85 +29,85 @@ flowchart LR
     LSU <--> SM
     SM <--> TMA <--> GM
     BAR <-->|backing| SM
-    TC -.->|完成 id| TK
+    TC -.->|Completion ID| TK
     TK -.->|arrival| BAR
     TMA -.->|complete-tx| BAR
-    TMA -.->|显式 proxy fence| ORD
+    TMA -.->|Explicit proxy fence| ORD
     BAR -.-> ORD
     ORD -.-> TMA & BAR
-    BAR -.->|wait 结果| FE
+    BAR -.->|Wait result| FE
 ```
 
-### 执行资源与共享端口
+### Execution resources and shared ports
 
-| 模块 | 规模与容量 | 对调度的约束 |
+| Module | Organization and capacity | Scheduling constraint |
 |---|---|---|
-| Tensor Core | 4 核，每核 1 个 8×8 dot 阵列。每核含 F16/TF32、低精度、FP4、INT8 四族，各 64 路，四核合计 4 × 4 × 64 = 1,024 路。每核每拍可向一族发 1 个微块，四核峰值 **256 个完整 dot/拍**。 | 一个 engine 共用 3 份有序命令记录、2 个输入上下文。每核负责 M128 的 32 行和全部 N 列。[dot array](../rtl_specs/tensor_core/blackwell_tc_dot_array.md) |
-| Tensor Core Buffer | 每核 A/B/C/D 共 14 KiB。四核连同共享 B loader 和各级 scale 槽共 **61.5 KiB/后端**。R_OP 另计 832 B/核。 | A 跨列块复用，B 按八列装填，C/D 双槽滚动。各槽的所有者和释放沿见[本章 Buffer 表](#tc-buffer)。 |
-| SMEM | **228 KiB**，32 bank × 1,824 word × 32 bit。八组各 16 B，后端每方向峰值 128 B/拍。 | TC、TMA、barrier backing 和 LSU 共享端口。每组分别仲裁读写，读在 grant 沿 g 采样，最早 g+2 交付。写在接受沿提交，ACK 最早下一沿退休。[SMEM fabric](../rtl_specs/smem/blackwell_smem_fabric.md) |
-| TMEM | **256 KiB**，128 bank（4 分区 × 32 bank） × 128 word × 128 bit。每分区每方向峰值 512 B/拍。 | TC 与 RF LD/ST 共用 bank。读在 grant 沿 g 的下一沿采样，最早 g+3 交付。写在接受沿 w 的下一沿提交，ACK 最早 w+2 退休，同址 C 据对应成功 ACK 放行。[TMEM partition](../rtl_specs/tmem/blackwell_tmem_partition.md) |
-| TMEM 管理与 RF LD/ST | 当前 CTA 独占 512 列，base=0。五个引用位分别属于三条 MMA 记录、一个 LD 和一个 ST。LD word 缓冲 512 B，ST beat 缓冲 128 B。wait tracker 有 32 条 live 行和一条 ST 快照。 | 引用归还后可释放整块。ST 的下一 beat 可与旧 ACK 重叠。[manager](../rtl_specs/tmem/blackwell_tmem_manager.md) · [LD/ST](../rtl_specs/tmem/blackwell_tmem_ldst_engine.md) |
-| TMA 命令与地址生成 | 命令 FIFO 深 **8**，20 个 ticket（18 个通用、2 个供 group 或控制），2 个 setup 槽，1 个三级 walker（S0…S2）。descriptor cache 含 4 条 128 B line。 | FIFO 保存待派发命令，setup 准备地址，walker 逐段枚举。末段进入 S0 即归还 setup 槽，ticket 继续跟踪旧命令。[TMA unit](../rtl_specs/tma/blackwell_tma_unit.md#copy-overlap) · [descriptor cache](../rtl_specs/tma/blackwell_tma_descriptor_cache.md) |
-| TMA 数据通路 | 全部 copy 共享 **64 个段 tag（满段共 8 KiB）、16 × 128 B 数据槽**。GMEM 数据与 descriptor 共用 128 B 通道，SMEM 接八组各 16 B 端口。 | tag 代表在途事务，数据槽容纳 payload，端口决定实际服务拍。三种资源分别施加背压。[TMA data path](../rtl_specs/tma/blackwell_tma_data_path.md#peak) |
-| TC 完成跟踪 | 32 条 MMA 操作记录，8 条 commit 记录。 | 按 id 接收最终完成，按同 issuer 的截止集合推进 commit。[TC tracker](../rtl_specs/tensor_core/blackwell_tc_completion_tracker.md) |
-| mbarrier | 4 项对象 cache，前端有 8 条软件命令记录和 16 条 TMA producer 绑定，wait 单元有 32 项等待记录。 | 多个 producer 可绑定同一 phase，独立记录各笔完成字节。等待线程保留 wait 项，对象 cache 可继续服务其他更新。[frontend](../rtl_specs/mbarrier/blackwell_mbarrier_frontend.md) · [unit](../rtl_specs/mbarrier/blackwell_mbarrier_unit.md) · [wait](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md) |
+| Tensor Core | Four cores each contain an 8×8 dot array. Each core has 64 lanes for each of four families (F16/TF32, low precision, FP4, and INT8), for 4 × 4 × 64 = 1,024 physical lanes. Each core can issue one microtile to one family per cycle. Peak aggregate issue is **256 complete dots per cycle**. | The engine shares three ordered command records and two input contexts. Each core covers 32 rows of M128 and all N columns. [dot array](../rtl_specs/tensor_core/blackwell_tc_dot_array.md) |
+| Tensor Core Buffer | A/B/C/D occupy 14 KiB per core. The four cores, shared B loader, and scale slots total **61.5 KiB per backend**. R_OP adds 832 B per core. | A is reused across column blocks, B is loaded eight columns at a time, and C and D each rotate between two slots. The [buffer table](#tc-buffer) gives slot ownership and release edges. |
+| SMEM | **228 KiB**, organized as 32 banks × 1,824 words × 32 bits. Eight 16 B groups provide a peak of 128 B/cycle in each direction. | TC, TMA, barrier backing, and LSU share the ports. Each group arbitrates reads and writes separately. A read samples at grant edge g and returns at g+2 at the earliest. A write commits at acceptance and its ACK can retire on the next edge. [SMEM fabric](../rtl_specs/smem/blackwell_smem_fabric.md) |
+| TMEM | **256 KiB**, organized as 128 banks (4 partitions × 32 banks) × 128 words × 128 bits. Peak bandwidth is 512 B/cycle per partition in each direction. | TC and RF LD/ST share the banks. A read samples one edge after grant g and returns at g+3 at the earliest. A write commits one edge after acceptance w. Its ACK can retire at w+2, and its successful ACK releases the corresponding same-address C read. [TMEM partition](../rtl_specs/tmem/blackwell_tmem_partition.md) |
+| TMEM management and RF LD/ST | The active CTA exclusively owns 512 columns at base 0. Five reference bits cover three MMA records, one LD, and one ST. LD buffers 512 B of words and ST buffers one 128 B beat. The wait tracker has 32 live entries and one ST snapshot. | The allocation can be released once all references return. The next ST beat can overlap an outstanding ACK. [manager](../rtl_specs/tmem/blackwell_tmem_manager.md) · [LD/ST](../rtl_specs/tmem/blackwell_tmem_ldst_engine.md) |
+| TMA commands and address generation | The command FIFO is **8 entries** deep. There are 20 tickets (18 general-purpose and two for group or control commands), two setup slots, and one three-stage walker (S0…S2). The descriptor cache has four 128 B lines. | The FIFO holds commands awaiting dispatch, setup prepares addresses, and the walker enumerates segments. A command releases its setup slot when its last segment enters S0. Its ticket continues to track completion. [TMA unit](../rtl_specs/tma/blackwell_tma_unit.md#copy-overlap) · [descriptor cache](../rtl_specs/tma/blackwell_tma_descriptor_cache.md) |
+| TMA data path | All copies share **64 segment tags (8 KiB of full segments) and 16 × 128 B data slots**. GMEM data and descriptors share a 128 B channel. SMEM has eight 16 B group ports. | Tags track outstanding transactions, slots hold payloads, and port grants determine the actual service cycles. Each resource applies backpressure independently. [TMA data path](../rtl_specs/tma/blackwell_tma_data_path.md#peak) |
+| TC completion tracking | 32 MMA operation records and eight commit records. | Accepts final completion by ID and advances each commit against the set of operations preceding its issuer's cutoff. [TC tracker](../rtl_specs/tensor_core/blackwell_tc_completion_tracker.md) |
+| mbarrier | A four-entry object cache, eight software command records, 16 TMA producer bindings, and 32 wait entries. | Multiple producers can bind the same phase. Each tracks its own completed bytes. A waiting thread occupies a wait entry while the object cache services other updates. [frontend](../rtl_specs/mbarrier/blackwell_mbarrier_frontend.md) · [unit](../rtl_specs/mbarrier/blackwell_mbarrier_unit.md) · [wait](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md) |
 
 <a id="tc-buffer"></a>
 ### Tensor Core Buffer
 
-核 `c` 计算行 `32c…32c+31`。把输出按八列分块 `j`，每块再按八行分四组 `r=0…3`。每片的 8 行 A 和 8 列 B 各解码一次，分别广播给同行和同列的 8 路 dot。每路独立计算本格的乘积、归约和 C 累加。每次 `op_load(j,r)` 在本核 R_OP 备好一个微块，随后在 `dot_fire` 沿送入算术流水。每核每拍最多发一片，执行 64 路完整 dot。每条指令有 J=N/8 个列块，每核发 Q=4J=N/2 片。每个 256 B 的 B 块只在 `r=0` 从本地 buffer 装入 R_OP，后三个行组直接使用寄存器里的 B。A 行组在每个列块重复使用。这个遍历顺序决定了各 buffer 的释放边沿。[四核数据通路图](../images/tensor_core_tmem/tensor_core_tmem_pipeline.svg) · [PNG](../images/tensor_core_tmem/tensor_core_tmem_pipeline.png) · [图源](../images/tensor_core_tmem/draw_pipeline.py)
+Core `c` computes rows `32c…32c+31`. Divide the output into eight-column blocks `j` and each block into four eight-row groups `r=0…3`. For each microtile, decode the eight A rows and eight B columns once and broadcast each to the eight dot lanes in the same row or column. Each lane computes its own products, reduction, and C accumulation. An `op_load(j,r)` prepares one microtile in the core's R_OP. The `dot_fire` edge issues it to the arithmetic pipeline. Each core can issue one microtile per cycle, performing 64 complete dots. An instruction has J=N/8 column blocks and issues Q=4J=N/2 microtiles per core. The core loads each 256 B B block into R_OP only at `r=0`. The next three row groups reuse the registered B. Each column block reuses the A row groups. This traversal determines the release edge for each buffer. [Four-core data path](../images/tensor_core_tmem/tensor_core_tmem_pipeline.svg) · [PNG](../images/tensor_core_tmem/tensor_core_tmem_pipeline.png) · [Diagram source](../images/tensor_core_tmem/draw_pipeline.py)
 
-| Buffer 与容量 | 装填与消费 | 可以何时复用 |
+| Buffer and capacity | Fill and consumption | Reuse condition |
 |---|---|---|
-| 每核 A，2 × 1 KiB | 每个输入上下文一份，从 SMEM 或 TMEM 装入。每八行 256 B 独立就绪，供该核遍历全部列块。 | 该 id 末次 `op_load` 且本核源读与控制结清后报告 input_free。四核均释放且所需快照静止后，engine 可把输入上下文交给后条。 |
-| 共享 B loader，2 × 256 B | 一个槽从 SMEM 装配一个八列块，分别交付四核。前条末块已占一个槽时，另一空槽可开始取后条的块。 | 四核分别握手。最后一个核接受旧块的同沿可为后继预留此槽。 |
-| 每核 B，4 × 2 KiB | 一列 32 B，每块 256 B。N64/128/256 的一份 B 分别占连续 1/2/4 区。同尺寸可驻留 4/2/1 份，混合尺寸按连续空区分配。 | 每核旧块末次 `op_load(j,3)` 后的下一沿起可覆盖该块。普通 MMA 按已安装块消费；WS 跨指令命中要求旧项已向四核完整安装。 |
-| 每核 C，2 × 1 KiB | 每槽持一个带 `(id,j)` 的八列块，供四次 `op_load`。需要累加时从 TMEM 读旧值，`input_d=0` 时注零。 | 旧块末次 `op_load(j,3)` 同沿可为相隔两块的后继预留该槽并发首读。前条尾部两槽依次交给后条的块 0、1。 |
-| 每核 D，2 × 1 KiB | 每块收四个行组的结果，再按有效 lane/word 写 TMEM。 | 旧块末笔写请求接受后，下一沿可接新一代结果。未返回的 ACK 仍归旧 id 和块，决定同址读何时可发。 |
-| scale A 每核 2 × 128 B；scale B 共享 4 × 1 KiB | scaled 指令按上下文取快照并向 R_OP 供数。共享 scale B 使用两个物理 bank 保存两条快照，TMEM 源 lane 独立选择。 | 四核结束输入使用且快照读结清后，按 id 释放。 |
-| 每核 R_OP，832 B | 持有当前微块的 A、B、C 各 256 B 与 scale A/B 各 32 B，随 id 和模式一起送 dot。 | 空槽可装片。已有微块在本沿 dot_fire 时可同时装下一片，包括后条 MMA 的首片。 |
+| A per core, 2 × 1 KiB | One slot per input context, filled from SMEM or TMEM. Each eight-row, 256 B group becomes ready independently and serves all column blocks on the core. | Report input_free after the ID's last `op_load` and after the core's source reads and control obligations settle. The engine can assign the input context to the next command once all four cores release it and the required snapshots are idle. |
+| Shared B loader, 2 × 256 B | Each slot assembles one eight-column block from SMEM and delivers it to all four cores. When one slot holds the earlier command's last block, the other can start fetching a block for the next command. | Each core handshakes independently. The slot can be reserved for a successor on the edge where the last core accepts the old block. |
+| B per core, 4 × 2 KiB | A column occupies 32 B and a block occupies 256 B. An N64/128/256 operand occupies 1/2/4 contiguous partitions respectively. The partitions hold 4/2/1 operands of the same size. Mixed sizes use contiguous free partitions. | A core can overwrite an old block starting on the edge after its last `op_load(j,3)`. Ordinary MMA consumes installed blocks individually. A cross-instruction WS hit requires the entire previous entry to have been installed on all four cores. |
+| C per core, 2 × 1 KiB | Each slot holds an eight-column block tagged with `(id,j)` for four `op_load` operations. Accumulation reads the old value from TMEM. `input_d=0` injects zero. | On the old block's last `op_load(j,3)`, the core can reserve the slot for the block two positions ahead and issue its first read. At an instruction boundary, the two tail slots pass in turn to blocks 0 and 1 of the next instruction. |
+| D per core, 2 × 1 KiB | Collect the results of four row groups per block, then write valid lanes and words to TMEM. | The next generation can deposit results on the edge after acceptance of the old block's final write request. Outstanding ACKs retain the old ID and block and determine when a same-address read may issue. |
+| Scale A per core, 2 × 128 B. Shared scale B, 4 × 1 KiB | Scaled instructions snapshot their operands by context and supply R_OP. Two physical banks in shared scale B hold the two snapshots. The TMEM source lane is selected independently. | Release by ID after all four cores finish using their inputs and snapshot reads have settled. |
+| R_OP per core, 832 B | Holds 256 B each of A, B, and C and 32 B each of scale A and scale B for the current microtile. Issues these operands to the dot array with the ID and mode. | An empty slot can load a microtile. When the current microtile asserts dot_fire, the slot can load the next microtile on the same edge, including the first microtile of the next MMA. |
 
-四核 B 加共享装配槽占 32.5 KiB。61.5 KiB 包含四核 A/B/C/D（56 KiB）、共享 B 装配槽（0.5 KiB）、四核 scale A（1 KiB）和共享 scale B（4 KiB）。R_OP、算术流水和控制位单独计容。块覆盖与部分分发的接口分别见 [MMA core](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)、[B loader](../rtl_specs/tensor_core/blackwell_tc_b_loader.md)、[B 驻留与替换](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md#b-residency) 和 [scale B 快照](../rtl_specs/tensor_core/blackwell_tc_scale_b_snapshot.md)。
+The four local B buffers and shared assembly slots occupy 32.5 KiB. The 61.5 KiB total includes the four cores' A/B/C/D (56 KiB), shared B assembly slots (0.5 KiB), scale A across four cores (1 KiB), and shared scale B (4 KiB). R_OP, arithmetic pipelines, and control bits are accounted for separately. See [MMA core](../rtl_specs/tensor_core/blackwell_tc_mma_core.md), [B loader](../rtl_specs/tensor_core/blackwell_tc_b_loader.md), [B residency and replacement](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md#b-residency), and [Scale B snapshots](../rtl_specs/tensor_core/blackwell_tc_scale_b_snapshot.md) for block overwrite and partial distribution.
 
-## 2. 指令调度
+## 2. Instruction scheduling
 
-前端决定从哪个 warp 提交指令。后端各引擎在自己的入口登记命令，依据数据依赖和端口容量推进。下文用 M0、M1 表示两条按序接受的 MMA。
+The front end selects the issuing warp. Each backend engine registers commands at its own input and advances them as dependencies and port capacity allow. M0 and M1 below denote two MMA commands in acceptance order.
 
-### 2.1 命令接受与等待集合
+### 2.1 Command acceptance and wait sets
 
-M0 的 `cmd.fire` 同沿占用 engine 命令记录并向 TC tracker 登记 id。M1 有空位即可同样登记。engine 逐 id 预检和 pin，按接受序给待准备命令分配输入上下文。即使两个输入上下文都在使用，第三份命令记录仍可用于预检与 pin。[MMA engine](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md)
+M0's `cmd.fire` allocates an engine command record and registers its ID with the TC tracker on the same edge. M1 can do the same as soon as a record is free. The engine prechecks and pins each ID and allocates input contexts to waiting commands in acceptance order. The third record supports precheck and pin even when both input contexts are occupied. [MMA engine](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md)
 
-commit 在接受沿只需记录同 epoch、同 issuer 且尚未收到完成通知的较早 MMA。同沿新登记的 MMA 留给后续 commit。TMEM LD/ST 在外部命令接受沿登记 live 行；`tcgen05.wait::st` 捕获本 warp 截止前的 ST。同沿新登记的 ST 同样留给后续 wait。TMA 在命令接受沿预留 ticket，copy 按 FIFO 顺序派发。load 在首段发出前绑定目标 barrier 的 phase，group commit 在接受沿推进组龄，wait 在接受沿捕获仍欠源读的旧组成员。[身份与截止](../rtl_specs/top/blackwell_async_subsystem_top.md#identity) · [TMEM wait tracker](../rtl_specs/tmem/blackwell_tmem_wait_tracker.md) · [TMA unit](../rtl_specs/tma/blackwell_tma_unit.md)
+At acceptance, a commit records earlier MMAs of the same epoch and issuer whose completion has yet to arrive. An MMA registered on that edge belongs to a later commit. TMEM LD/ST registers a live entry on external command acceptance. `tcgen05.wait::st` captures the warp's stores preceding the cutoff. A store registered on that edge belongs to a later wait. TMA reserves a ticket at command acceptance and dispatches copies in FIFO order. A load binds the target barrier phase before issuing its first segment. Group commit advances group age at acceptance. A wait captures older group members that still owe source reads at its acceptance edge. [Identity and cutoffs](../rtl_specs/top/blackwell_async_subsystem_top.md#identity) · [TMEM wait tracker](../rtl_specs/tmem/blackwell_tmem_wait_tracker.md) · [TMA unit](../rtl_specs/tma/blackwell_tma_unit.md)
 
-### 2.2 操作数依赖与首片发射
+### 2.2 Operand dependencies and first microtile issue
 
-M0、M1 按接受序装入各自首片。对 M1，engine 要求预检、pin、四核 prepare 和 B 选择完成，所需 scale 快照就绪。四核各自具备 A 行组 0、已安装的 B 块 0、C 块 0 及可接收的 R_OP 后，在同一沿装首片；首个 dot 最早在下一沿。之后四核按各自的 `(j,r)` 游标推进，行组 1…3 和其余 B/C 块各自在消费沿前就绪即可。[MMA engine](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md) · [MMA core](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
+M0 and M1 load their first microtiles in acceptance order. For M1, the engine requires precheck, pin, prepare on all four cores, B selection, and any required scale snapshots. Once all cores have A row group 0, installed B block 0, C block 0, and an R_OP slot able to accept, they load the first microtile on the same edge. The first dot can issue on the next edge. The cores then advance their own `(j,r)` cursors. Row groups 1…3 and later B/C blocks need only be ready by their consumption edges. [MMA engine](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md) · [MMA core](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
 
-M1 读同址 C[j] 前，本核所有较老重叠 D[j] 都须关闭写集合并收齐成功 ACK。块 0 的 ACK 可能挡住 M1 首发，其余块独立满足各自的消费门限。偏移重叠按域等老写结清。若 TMEM A/scale 与本条 D 相交，该源在本条首发前完整采样；与老 D 重叠也须满足老写门限。注零块免读 C，后续同址写仍遵守写序。[MMA core](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
+Before M1 reads same-address C[j], every older overlapping D[j] on the core must have closed its write set and received all successful ACKs. The ACK for block 0 can delay M1's first issue. Later blocks meet their own consumption deadlines independently. Offset overlaps wait for older writes to the overlapping domain to settle. A TMEM A or scale operand intersecting this command's D must be fully sampled before first issue. Overlaps with an older D also obey the older-write dependency. A zero-injected block skips the C read. Subsequent same-address writes still follow write order. [MMA core](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
 
-### 2.3 跨 MMA 交接与稳态吞吐
+### 2.3 Cross-MMA handoff and steady-state throughput
 
-M0 在 dot 流水中时，M1 可装 A 行组、预取 B 块并读满足依赖的 C。M0 末片进入 dot 的同一沿，四核可以把 M1 首片装入 R_OP。之后 M1 计算时，M0 的 D 仍可写回。换算术族时由目标流水入口空间和每核的发射顺序队列约束交接，结果按输入序交付。[dot array](../rtl_specs/tensor_core/blackwell_tc_dot_array.md)
+While M0 is in the dot pipeline, M1 can load A row groups, prefetch B blocks, and read C blocks whose dependencies have cleared. On the edge where M0's last microtile enters the dot pipeline, all four cores can load M1's first microtile into R_OP. M0 can continue writing D while M1 computes. At a family change, space at the target pipeline input and each core's issue-order queue govern handoff. Results are delivered in input order. [dot array](../rtl_specs/tensor_core/blackwell_tc_dot_array.md)
 
 <a id="mma-target"></a>
-**连续 MMA 的吞吐目标。** 稳态 N128 FP16 同址累加每核需发 16 × 4 个微块。A/B 均取自 SMEM 且每字只读一次时，每条读 4 KiB A 和 4 KiB B，按 128 B/拍也需要 64 拍。预热后，在命令与 pin 提前就绪、K-major 对齐布局用满八组读口、同址 D 的成功 ACK 赶上对应 C 读、算术结果和写端口均可接收且无其他争用时，相邻首 dot 的目标间隔为 **64 拍**，交界处持续每核每拍一片。[顶层验收条件与观察沿](../rtl_specs/top/blackwell_async_subsystem_top.md#cycles)
+**Consecutive MMA throughput.** Steady-state N128 FP16 same-address accumulation issues 16 × 4 microtiles per core. With A and B in SMEM and each word read once, the 4 KiB A and 4 KiB B reads also take 64 cycles at 128 B/cycle. After warmup, the target interval between first dots is **64 cycles**, sustaining one microtile per core per cycle across the boundary. This requires early command and pin readiness, an aligned K-major layout using all eight read groups, successful D ACKs in time for the corresponding C reads, ready result and write ports, and no competing traffic. [Top-level acceptance conditions and observation edges](../rtl_specs/top/blackwell_async_subsystem_top.md#cycles)
 
-### 2.4 copy 交接与存储端口争用
+### 2.4 Copy handoff and memory port contention
 
-TMA 对队首 copy 检查 GMEM、SMEM 地址区间和 fence。新写与旧读相交时等旧源读取结束，新访问依赖旧写时等旧目标写 ACK 结清。前条末段在 `f` 进入 S0，独立后条在地址、fence、绑定及容量满足时最早于 `f+1` 送首段。load 在成功接收 GMEM 数据时取数据槽，store 在发 SMEM 源读前取槽。末次目标写请求接受即可释放该槽，迟到的 ACK 仍由原 tag 跟踪。MMA 取 A/B 与 TMA store 读源竞争同组 SMEM 读口；TMA load 写与 MMA 读遇到同 bank 同 word 冲突时错开。实际 grant 决定哪一块延后。[TMA 数据通路](../rtl_specs/tma/blackwell_tma_data_path.md#peak) · [SMEM 仲裁](../rtl_specs/smem/blackwell_smem_fabric.md)
+TMA checks the head copy's GMEM and SMEM ranges and fences. A new write overlapping an old read waits for the old source reads to finish. An access dependent on an old write waits for its destination write ACKs. If the previous last segment enters S0 at `f`, an independent successor can send its first segment at `f+1` when its addresses, fences, binding, and capacity allow. A load takes a data slot on successful GMEM data reception. A store takes one before issuing its SMEM source read. Acceptance of the final destination write request releases the slot. The original tag tracks late ACKs. MMA A/B fetches compete with TMA store source reads for the same SMEM group read ports. A TMA load write and MMA read to the same bank and word use different edges. Actual grants determine which block is delayed. [TMA data path](../rtl_specs/tma/blackwell_tma_data_path.md#peak) · [SMEM arbitration](../rtl_specs/smem/blackwell_smem_fabric.md)
 
-TMEM LD 把每个 lane 当前的完整 128-bit word 留在 512 B 缓冲中，按寄存器顺序送 RF。ST 的 128 B 缓冲可在旧 RF beat 的末笔 TMEM 写请求被接受的同一沿接替为下一 beat；旧 ACK 保留原身份。[LD/ST 数据通路](../rtl_specs/tmem/blackwell_tmem_ldst_engine.md#ld-word)
+TMEM LD keeps each lane's full current 128-bit word in the 512 B buffer and sends RF beats in register order. ST can replace the contents of its 128 B buffer with the next RF beat on the edge that accepts the old beat's last TMEM write request. Outstanding ACKs retain the old identity. [LD/ST data path](../rtl_specs/tmem/blackwell_tmem_ldst_engine.md#ld-word)
 
-### 2.5 完成通知、记录回收与可见性
+### 2.5 Completion notification, record reclamation, and visibility
 
-每条 MMA 按自己的 id 收齐读返回、算术结果和实际 D 写 ACK，归还 pin 等资源，向 tracker 通知一次。engine 的三个命令记录按接受序回收。若两条指令来自独立 issuer 且数据无依赖，M1 可以先完成并触发自己的 commit arrival。M0 仍在等待 ACK 时，两条命令记录都占槽。[跨 issuer 非空 commit 验收](../rtl_specs/top/blackwell_async_subsystem_top.md#mma-nonempty-commit)
+Each MMA collects its own read returns, arithmetic results, and actual D write ACKs, releases resources including its pin, and notifies the tracker once by ID. The engine reclaims its three command records in acceptance order. If the instructions have independent issuers and no data dependency, M1 can complete first and trigger its own commit arrival. While M0 awaits an ACK, both records remain occupied. [Nonempty commits across issuers](../rtl_specs/top/blackwell_async_subsystem_top.md#mma-nonempty-commit)
 
-| 消费者观察什么 | 成功所需的边沿 |
+| What the consumer observes | Edges required for success |
 |---|---|
-| TMEM LD/ST | LD 最后 RF beat 被接受才完成数据交付；ST 等所有实际写 ACK。普通 done 被消费后才向 wait tracker 结清该操作。同 warp 的 ST wait 再按自己的截止集合返回。 |
-| TMA bulk group | 每条 tensor copy 以两位区分当前组、最近关闭组和更早组。`.read 0/1` 捕获同 issuer 已到截止组且尚欠源读的 ticket。store 的 full 另等所有实际 GMEM 写 ACK。[TMA unit](../rtl_specs/tma/blackwell_tma_unit.md#tickets) |
-| 经 mbarrier 消费 TC 或 TMA load 的结果 | 成功 TC commit 产生 arrival。TMA load 收齐实际 SMEM 写 ACK 后提交 complete-tx。该 phase 的 arrival 与字节条件均满足才翻转，消费 warp 匹配 phase 并取得 acquire ACK 后才返回成功谓词。[mbarrier wait](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md) |
+| TMEM LD/ST | LD finishes delivering data when RF accepts its last beat. ST waits for every actual write ACK. The operation clears its obligation to the wait tracker after its ordinary done is consumed. The same warp's ST wait then returns according to its cutoff set. |
+| TMA bulk group | Two bits per tensor copy distinguish the current, most recently closed, and older groups. `.read 0/1` captures tickets of the same issuer that have reached the cutoff group and still owe source reads. Store full completion also waits for all actual GMEM write ACKs. [TMA unit](../rtl_specs/tma/blackwell_tma_unit.md#tickets) |
+| Consuming TC or TMA load results through mbarrier | A successful TC commit generates an arrival. A TMA load submits complete-tx after receiving all actual SMEM write ACKs. The phase flips once both arrival and byte conditions are satisfied. A consuming warp returns a true predicate after matching the phase and receiving the acquire ACK. [mbarrier wait](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md) |
 
-无论 `time_hint` 取何值，一次等待的预算均为 **64 个 ARMED 拍**。超时返回 false，匹配 phase 后须取得成功的 acquire 确认才返回 true。[等待预算与第 64/65 沿边界](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md#wait-budget)
+For every value of `time_hint`, each wait has a budget of **64 ARMED cycles**. Timeout returns false. A phase match requires a successful acquire acknowledgment before returning true. [Wait budget and the 64th/65th edge](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md#wait-budget)
 
-上述时序适用于正常执行。运行期故障经顶层终止 CTA，外围隔离后复位。三个 kernel 的功能和关键边沿用于验收，整 kernel 总周期用于观测。[顶层合同](../rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol) · [目标用例](supported_ptx.md)
+These timings apply to normal execution. A runtime fault terminates the CTA at the top level, and the surrounding system isolates the subsystem before reset. Acceptance uses functional results and key handshake edges for the three kernels. Total kernel cycles are recorded for observation. [Top-level contract](../rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol) · [Target workloads](supported_ptx.md)

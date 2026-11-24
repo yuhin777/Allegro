@@ -2,30 +2,30 @@
 
 ## Description
 
-本模块连接TMEM客户端与四个32-bank partition，执行逐bank仲裁、无冲突请求合并及身份路由。TMEM数据、SRAM读输出、返回backup、R_W和ACK均由partition唯一持有，fabric不建立第二套payload缓存。
+Connects TMEM clients to four 32-bank partitions, arbitrates per bank, combines nonconflicting requests, and routes by identity. The partitions exclusively own TMEM data, SRAM read outputs, backup returns, R_W, and ACKs. The fabric adds no duplicate payload buffer.
 
-| 信号 / 通道 | 方向、类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| `clk`、`rst_n` | 输入，1 bit | 顶层 | 仲裁控制复位。 |
-| `epoch_i` | 输入，16 bit，无握手 | 顶层 | 当前单CTA生命周期；旧在途未隔离前不得更改。 |
-| `rd_req[6][128]` | 输入通道，[tmem_rd_req_t](#transactions) | 四核、scale B、LD/ST | client0…5，每项含tag78、lane7、word7、byte_mask16。 |
-| `rd_rsp[6][128]` | 输出通道，[tmem_rd_rsp_t](#transactions) | 四核、scale B、LD/ST | 按原client/lane返回tag78、data128、status4。 |
-| `wr_req[6][128]` | 输入通道，[tmem_wr_req_t](#transactions) | 四核、LD/ST | 逐atom含tag、lane、word、mask及data128。 |
-| `wr_ack[6][128]` | 输出通道，[tmem_wr_ack_t](#transactions) | 四核、LD/ST | 原tag及status4；只对应真实写入。 |
-| `live[3]` | 入，按年龄排序的 {valid1,rec2,id58} | MMA engine | 经 top 接入。逐 bank 仲裁独立于此端口。 |
-| `drained_o` | 输出，1 bit，无握手 | 顶层 | 四partition均排空且无held仲裁请求。 |
-| `fault_o` | 输出，1bit，无握手 | 顶层 | 协议 fault 电平，向顶层汇总。 |
+| `clk`, `rst_n` | Input, 1 bit | Top level | Reset arbitration control. |
+| `epoch_i` | Input, 16 bits, no handshake | Top level | Current single-CTA lifetime. Change only after old outstanding transactions are isolated. |
+| `rd_req[6][128]` | Input channel, [tmem_rd_req_t](#transactions) | Four cores, scale B, LD/ST | Clients0…5. Each entry has tag78, lane7, word7, and byte_mask16. |
+| `rd_rsp[6][128]` | Output channel, [tmem_rd_rsp_t](#transactions) | Four cores, scale B, LD/ST | Return tag78, data128, and status4 to the original client/lane. |
+| `wr_req[6][128]` | Input channel, [tmem_wr_req_t](#transactions) | Four cores, LD/ST | Each atom contains tag, lane, word, mask, and data128. |
+| `wr_ack[6][128]` | Output channel, [tmem_wr_ack_t](#transactions) | Four cores, LD/ST | Original tag and status4 for an actual write only. |
+| `live[3]` | Input, {valid1,rec2,id58} in age order | MMA engine | Connected through the top. Per-bank arbitration is independent of this port. |
+| `drained_o` | Output, 1 bit, no handshake | Top level | All four partitions drained and no held arbitrated request. |
+| `fault_o` | Output, 1 bit, no handshake | Top level | Protocol fault level aggregated at the top. |
 
 ```mermaid
 flowchart LR
-    TC[四个MMA core] --> ARB[逐bank仲裁 / 权限已验证]
-    SB[scale B快照] --> ARB
+    TC["Four MMA cores"] --> ARB["Per-bank arbitration / access already authorized"]
+    SB["Scale B snapshot"] --> ARB
     RF[RF LD/ST] --> ARB
     ARB --> P0[partition0 / bank0..31]
     ARB --> P1[partition1 / bank32..63]
     ARB --> P2[partition2 / bank64..95]
     ARB --> P3[partition3 / bank96..127]
-    P0 & P1 & P2 & P3 --> ROUTE[按tag.client路由返回与ACK]
+    P0 & P1 & P2 & P3 --> ROUTE["Route returns and ACKs by tag.client"]
     ROUTE --> TC
     ROUTE --> SB
     ROUTE --> RF
@@ -33,103 +33,103 @@ flowchart LR
 
 ## Functionality
 
-物理组织与地址引用 [TMEM布局](blackwell_tmem_fabric.md#tmem-layout)；事务格式引用 [memory transaction](../top/blackwell_async_subsystem_top.md#memory-routing)。总容量256 KiB，每bank每拍至多1R+1W。
+See [TMEM layout](blackwell_tmem_fabric.md#tmem-layout) for physical organization and addressing and [memory transaction](../top/blackwell_async_subsystem_top.md#memory-routing) for transactions. Total capacity is 256 KiB. Each bank supports at most 1R+1W per cycle.
 
-逻辑通道展开遵循 [公共接口](../top/blackwell_async_subsystem_top.md#common-protocol)；向量每个atom独立valid/ready，向量本身不是额外存储。
+Expand logical channels per [common interfaces](../top/blackwell_async_subsystem_top.md#common-protocol). Each atom has independent valid/ready. A channel vector does not add storage.
 
-fabric内部实例化四个partition；内部part_rd/ret/wr/ack各为4×32条相同公共atom通道，不是额外外部端口，子模块drained聚合到本模块输出。
+The fabric instantiates four partitions. Internal part_rd/ret/wr/ack each expand to 4×32 common atom channels, without additional external ports. Aggregate child drained indications at the output.
 
-客户端接口按 128 个 bank 展开，每个请求只驱动所访问的 lane。
+Expand each client interface over 128 banks. A request drives only the accessed lane.
 
-客户端负责根据allocation/命令完成地址合法性验证并在生命周期内保持授权。fabric检查端口client与tag.client一致、lane索引一致及epoch匹配；非法请求不应到达SRAM，集成断言必须捕获该协议错误。
+Clients validate addresses against allocation and command and maintain authorization throughout the access lifetime. The fabric checks port client against tag.client, lane against port index, and epoch. Illegal requests must not reach SRAM. Integration assertions must catch the protocol violation.
 
 <a id="tmem-layout"></a>
 
-### TMEM 地址与 MMA 布局
+### TMEM addressing and MMA layout
 
-#### 地址和存储
+#### Addresses and storage
 
-`tmem_addr_t`为32bit：高16bit是lane，低16bit是column。有效lane为0…127、column为0…511；计算先扩展检查，不能截断高位。每cell为32bit，`bank=lane, word=column//4, cell=column%4`，一个bank word为128bit。
+`tmem_addr_t` is 32 bits. The high 16 bits encode lane and the low 16 column. Valid lanes are 0…127 and columns 0…511. Widen before checking and do not truncate high bits. Each cell is 32 bits, with `bank=lane, word=column//4, cell=column%4` and a 128-bit bank word.
 
-所有allocation覆盖完整128lane，仅按column划分。RF可见的warp分区由`warp_id%4`选择；同一CTA中warp0/4/8…访问同一分区，不由warp高位增加额外TMEM容量。
+Every allocation covers all 128 lanes and is divided only by column. `warp_id%4` selects the RF-visible warp partition. Warps 0/4/8… of one CTA access the same partition. High warp bits do not add TMEM capacity.
 
-#### MMA 布局
+#### MMA layout
 
-普通与 WS 共用 M128、layout D。全局输出 (m,n) 位于 lane=m、column=Dbase+n；每核负责 32 个连续 lane 和全部 N 列，C、D 共用地址，均使用完整的 32-bit cell。Dbase是d_tmem的column字段；M128要求d_tmem.lane=0且Dbase+N≤512。
+Ordinary and WS share M128 and layout D. Global output (m,n) maps to lane=m, column=Dbase+n. Each core covers 32 contiguous lanes and all N columns. C and D share an address and use the full 32-bit cell. Dbase is the column field of d_tmem. M128 requires d_tmem.lane=0 and Dbase+N≤512.
 
-TMEM A 的一行按 K 个元素顺序排布；FP16/BF16 为 16 bit、TF32 为 32 bit、i8 和 f8f6f4 为 8-bit 容器（FP6 取低 6 bit，普通 E2M1 取 [5:2]），mxf4/mxf4nvf4 为紧凑 4-bit nibble。行内元素 e 的 bit 偏移为 e×容器位宽。令Aref的两个字段为lane0/col0，容器位宽为w。非转置时元素(m,k)的lane=lane0+m、bit_index=k×w；允许的转置时lane=lane0+k、bit_index=m×w。column=col0+floor(bit_index/32)，cell内bit=bit_index%32。先以扩展位宽检查所有lane<128、column<512及allocation，故M128非转置要求lane0=0。native FP4禁止转置。[MMA 命令](../tensor_core/blackwell_tc_mma_engine.md#mma-command) · [core](../tensor_core/blackwell_tc_mma_core.md)
+A TMEM A row stores K elements in order. FP16/BF16 use 16 bits, TF32 uses 32, and i8 and f8f6f4 use 8-bit containers (low six bits for FP6, [5:2] for ordinary E2M1). mxf4/mxf4nvf4 use packed 4-bit nibbles. Element e has row bit offset e×container width. Let Aref contain lane0/col0 and w be the width. Without transpose, element (m,k) has lane=lane0+m and bit_index=k×w. Where transpose is allowed use lane=lane0+k and bit_index=m×w. column=col0+floor(bit_index/32) and bit within cell=bit_index%32. Widen before checking every lane<128, column<512, and allocation. Nontransposed M128 therefore requires lane0=0. Native FP4 forbids transpose. [MMA command](../tensor_core/blackwell_tc_mma_engine.md#mma-command) · [core](../tensor_core/blackwell_tc_mma_core.md)
 
-#### 客户端到分区的连接
+#### Client-to-partition connections
 
-分区号为 `lane // 32`，区内 bank 号为 `lane % 32`。按下表连接请求路径，读返回与写 ACK 按原 client 和 lane 路由。
+Partition index is `lane // 32` and bank index within it is `lane % 32`. Connect requests as below and route read returns and write ACKs by original client and lane.
 
-| 访问 | 客户端 | 分区连接 |
+| Access | Client | Partition connection |
 |---|---|---|
-| C 读、D 写、非转置 A 读 | 核 `i`（client 0…3） | 直连分区 `i`，本核行号覆盖 lane `32i…32i+31`。 |
-| 转置 A 读 | 核 `i`（client 0…3） | 每个 atom 按源 lane `lane0+k` 选分区，同一核可访问多个分区。 |
-| scale A、scale B 读 | scale A 来自各核，scale B 来自 client 4 | 只接分区 0，源 lane 为 `x % 32`。[scale 布局](../tensor_core/blackwell_tc_scale_b_snapshot.md#scale-layout) |
-| RF LD/ST | client 5 | 连接四个分区，每条指令只访问 `warp_id % 4` 指定的分区。[RF 地址映射](blackwell_tmem_ldst_engine.md) |
+| C reads, D writes, nontransposed A reads | Core `i` (clients 0…3) | Direct connection to partition `i`. Local rows cover lanes `32i…32i+31`. |
+| Transposed A reads | Core `i` (clients 0…3) | Each atom selects its partition by source lane `lane0+k`. One core may access several partitions. |
+| Scale A and scale B reads | Scale A from each core, scale B from client 4 | Partition 0 only. Source lane is `x % 32`. [scale layout](../tensor_core/blackwell_tc_scale_b_snapshot.md#scale-layout) |
+| RF LD/ST | client 5 | Connects to all four partitions. Each instruction accesses only the partition specified by `warp_id % 4`. [RF address mapping](blackwell_tmem_ldst_engine.md) |
 
-分区内各 bank 独立仲裁。多个客户端同拍访问不同 bank 时，只要对应 bank 的握手条件满足，就可同时接受，即使它们落在同一分区。
+Each bank arbitrates independently within a partition. Different clients accessing different banks on one edge can all be accepted when their banks' handshake conditions hold, including within the same partition.
 
 <a id="transactions"></a>
 
-### 存储事务类型
+### Memory transaction types
 
-| 类型 | 字段（从高到低） | 位数 |
+| Type | Fields (high to low) | Bits |
 |---|---|---:|
 | `tmem_rd_req_t` | tag78, lane7, word7, byte_mask16 | 108 |
 | `tmem_wr_req_t` | tag78, lane7, word7, byte_mask16, data128 | 236 |
 | `tmem_rd_rsp_t` | tag78, data128, status4 | 210 |
 | `tmem_wr_ack_t` | tag78, status4 | 82 |
 
-mask bit b 对应 data[8b+:8]；16 B 原子，写未选 byte 保持，读未选 byte 返回0。tag78 见顶层 memory-routing；所有写 ACK 必须证明实际写入。
+Mask bit b selects data[8b+:8] in a 16 B atom. Unselected bytes retain their values on writes and return zero on reads. See top-level memory-routing for tag78. Every write ACK must establish actual commit.
 
-每 client 可提供128个独立 bank 原子；`bank_frame<T,N>` 只是N个通道的展开，不另占payload存储。部分接受只清对应项，其余原子保持。一个写周期的ACK身份帧保存逐banktag/status，不复制写数据。
+Each client can present 128 independent bank atoms. `bank_frame<T,N>` expands N channels without extra payload storage. Partial acceptance clears only the accepted entries. Hold the other atoms. A write cycle's ACK identity frame retains per-bank tag/status without copying write data.
 
-### 逐 bank 选择与冲突仲裁
+### Per-bank selection and conflict arbitration
 
-| 状态 | 形式 | 目的 |
+| State | Form | Purpose |
 |---|---|---|
-| 读轮询指针 | 每bank一个client索引 | 空闲服务机会的公平选择。 |
-| 写轮询指针 | 每bank一个client索引 | 不同客户端写请求公平选择。 |
-| held选择 | 每bank读/写各一个选择及valid | 下游尚未接受时锁定上游，payload仍由上游持有。 |
-| 返回路由 | 组合解码tag.client | 不另存返回payload、live-ID表或ACK副本。 |
+| Read round-robin cursor | One client index per bank | Fair selection among otherwise available service opportunities. |
+| Write round-robin cursor | One client index per bank | Fair selection of writes from different clients. |
+| Held selection | One read and one write selection plus valid per bank | Lock the source until downstream acceptance. Upstream holds payload. |
+| Return routing | Combinational decode of tag.client | No additional return payload, live-ID table, or ACK copies. |
 
-grant沿g只预留下一沿g+1的宏访问。先选择本拍将被R_W接受的写，再把本拍同bank同word的读候选ready压低；二者若同时接受都将在g+1实际采样，因此必须在g决定冲突。旧R_W在g执行的写属于上一拍已经仲裁的时隙，不能误拿它替代下一拍冲突比较。不同word的1R+1W可以并行。
+A grant at g reserves the macro access at g+1. First select the write to accept into R_W on this edge, then suppress ready for a same-bank, same-word read candidate. Both would execute at g+1, so resolve the conflict at g. The old R_W writing at g belongs to the slot already arbitrated on the previous edge and cannot replace this next-edge comparison. Different words permit simultaneous 1R+1W.
 
-对 bank `b`，唯一的 C 读源是核 `b // 32` 的 lane `b` 端口。[core](../tensor_core/blackwell_tc_mma_core.md) 在此端口送出已通过依赖检查的请求。读端已有 held 选择时保持至 fire。新选择时，若本地核有合格的 C 读（`token.kind=2`），优先选它，否则在其余合格的 A、scale A/B 和 RF 读之间按 client 轮询。写端仍优先选择可提交的老 D，再按 client 轮询。各 bank 独立推进。
+For bank `b` the only C source is core `b // 32` on lane port `b`. [core](../tensor_core/blackwell_tc_mma_core.md) presents a dependency-cleared request there. Hold an existing read selection until fire. For a new selection prioritize eligible local C (`token.kind=2`). Otherwise round-robin by client among eligible A, scale A/B, and RF reads. Writes prioritize eligible old D, then round-robin by client. Each bank advances independently.
 
-在无MMA需求的bank，不得因为别的bank忙而阻塞普通客户端。读credit不足只阻止该bank读；ACK credit不足只阻止相应partition的新写接受。
+A busy bank elsewhere cannot block ordinary clients at a bank without MMA demand. Insufficient read credit blocks only reads for that bank. Insufficient ACK credit blocks only new writes for the corresponding partition.
 
-held请求锁定至partition接受。发出valid不能依赖对端ready；选中源必须保持payload，其他源的请求可以继续在其他bank执行。
+Lock a held request until partition acceptance. valid cannot depend on destination ready. The selected source must retain payload. Other sources can still access other banks.
 
-### 组装分区帧
+### Partition frame assembly
 
-同一拍不同bank的请求合成为一次物理32-bank分区操作。这里的“合并”不把多个word请求塞入同一bank，也不改变请求的token或完成数量。
+Combine requests to different banks on one edge into one physical 32-bank partition operation. This does not admit multiple words to one bank or change tokens or completion counts.
 
-同一partition的R_W可以同时承接多个客户端的不同bank写；每个有效bank保存自己的tag、word和byte mask。ACK帧因而也是逐bank身份集合，不能只有一个全帧owner。
+One partition R_W can accept writes from multiple clients to different banks simultaneously. Each valid bank holds its own tag, word, and byte mask. Its ACK frame must therefore hold per-bank identities rather than a single frame owner.
 
-对同一bank同word的多个读，只有同一语义读取且目的集合可完整保留时才可共享一次源读。基线TMEM无需做跨客户端读去重；串行服务仍正确，性能保证只要求指定的MMA窗口。
+Multiple reads to the same bank and word may share one source read only if they have identical read semantics and all destinations can be retained. The TMEM baseline does not require cross-client deduplication. Serial service is correct. The performance guarantee applies to the specified MMA windows.
 
-源请求握手发生于partition已经预留相应读credit或R_W/ACK位置的沿。fabric不得先对上游确认，再等待尚未预留的物理容量。
+A source request handshakes on the edge where the partition reserves the corresponding read credit or R_W/ACK space. Never acknowledge upstream before reserving physical capacity.
 
-### 从 grant 到返回与 ACK
+### From grant to return and ACK
 
-fabric 的地址解码和选择为组合逻辑。读 grant 与写接受沿即分区相应请求的 fire，之后的 SRAM 采样、返回与实际写 ACK 均遵循 [partition 的读写边沿](blackwell_tmem_partition.md)。
+The fabric decodes addresses and selects requests combinationally. A read grant or write acceptance is the corresponding partition request fire. Subsequent SRAM sampling, return, and actual write ACK follow the [partition read/write edges](blackwell_tmem_partition.md).
 
-每分区读、写峰值各512 B/cycle；四分区总峰值各2048 B/cycle。峰值按实际有效bank和byte mask统计，不把未使用lane或重试请求计入已完成字节。
+Each partition peaks at 512 B/cycle in each direction. Across four partitions the peak is 2048 B/cycle per direction. Count only actual enabled banks and bytes. Unused lanes and retries do not count as completed bytes.
 
-D非对齐、一般descriptor和真实bank争用允许降低吞吐；不能改变返回排序/身份语义来隐藏冲突。逐bank保持避免把整分区ready误当成必须全有或全无。
+Unaligned D, general descriptors, and real contention may lower throughput. Preserve return order and identity under conflict. Per-bank retention allows partial partition acceptance.
 
-### 验证
+### Verification
 
-本地 C 与其他核的转置 A 同时请求同一可读 bank 时，新选择给 C。若 A 已 held，则先交付该笔 A。两个 client 同沿写不同 bank，各自暂停 ACK，检查部分退休、原 client/token 及 held 的稳定性。单个 bank 读 credit 耗尽或某一分区 ACK 帧满，仅对应请求受阻。实际接受才推进轮询。
+When local C and another core's transposed A request the same readable bank, a fresh selection chooses C. If A is already held, deliver A first. Let two clients write different banks on one edge and stall their ACKs independently. Check partial retirement, original client/token, and held stability. Exhausting one bank's read credit or filling one partition's ACK frames blocks only affected requests. Advance round-robin only on actual acceptance.
 
-协议故障额外计1bit `protocol_fault_q`，触发条件为端口与tag.client不符、lane索引或epoch违约，以及任一partition的fault。置位、复位和在途响应的处理遵循[公共故障规则](../top/blackwell_async_subsystem_top.md#common-protocol)。
+Protocol faults add one bit `protocol_fault_q`. Set it for port/tag.client mismatch, lane index or epoch violation, or any partition fault. Follow the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and outstanding responses.
 
 ## Submodules
 
-| 子模块 | 实例数 | 连接与父模块控制 |
+| Submodule | Instances | Connections and parent control |
 | --- | --- | --- |
-| [tmem_partition](blackwell_tmem_partition.md) | 4 | 分区 i 连接 bank 32i…32i+31。fabric 逐 bank 选择请求并把各目的响应送回原 client。 |
+| [tmem_partition](blackwell_tmem_partition.md) | 4 | Partition i connects to banks 32i…32i+31. The fabric selects requests per bank and routes each response to its original client. |

@@ -1,26 +1,26 @@
-# 跨 MMA 流水设计记录
+# Cross-MMA pipeline design record
 
-这里记录两个 FA4 kernel 如何使用 Allegro 的操作数缓冲和共享端口。descriptor 与指令顺序取自离线 PTX，时序表按各段列出的布局、许可和背压条件推导。资源配置和发射规则见 [Microarch Brief](microarch_brief.md)，通用的跨模块验收见[连续 MMA 周期基准](../rtl_specs/top/blackwell_async_subsystem_top.md#cycles)。
+This record shows how the two FA4 kernels use Allegro's operand buffers and shared ports. Descriptors and instruction order come from offline PTX. Each timing table derives its edges under the stated layout, permission, and backpressure conditions. See the [Microarch Brief](microarch_brief.md) for resources and issue rules and the [Consecutive MMA cycle baseline](../rtl_specs/top/blackwell_async_subsystem_top.md#cycles) for cross-module acceptance criteria.
 
 <a id="fa4-layout-audit"></a>
-## 两个 FA4 kernel 的实际 QK / PV 排程
+## QK and PV schedules for the two FA4 kernels
 
-下表以同一输出 tile 内相邻 K16 指令的首次 `dot_fire` 计间隔。QK 从预热后的首 dot 起算。PV 采用每四拍给 V 两个时隙的排程，假定 pin、P/O 软件许可、TMEM 操作数及时就绪，四核全接收、ACK 按最早沿返回。周期为项目接口的可行轨迹。
+The table measures the interval between the first `dot_fire` of consecutive K16 instructions within one output tile. QK starts at the first dot after warmup. PV assigns V two slots every four cycles. It assumes timely pin, software P/O permission, and TMEM operands, acceptance on all four cores, and ACKs on their earliest edges. These are feasible traces for the project interfaces.
 
-| 用例和乘法 | 每个输出 tile 的 K16 步数 | 每条 SMEM A / B 读请求（16 B atom） | 每条每核 dot 拍 | 相邻 K 步首发间隔 |
+| Case and product | K16 steps per output tile | SMEM A / B reads per instruction (16 B atoms) | Dot cycles per core per instruction | First-issue interval between K steps |
 |---|---:|---:|---:|---:|
-| H32D64FullB2S128，QK，N128 | 4 | 256 / 256 | 64 | 64 |
-| H16D128CausalB32S1024，QK，N128 | 8 | 256 / 256 | 64 | 64 |
-| H32D64FullB2S128，PV，N64 | 8 | 0 / 128 | 32 | 32 |
-| H16D128CausalB32S1024，PV，N128 | 8 | 0 / 256 | 64 | 64 |
+| H32D64FullB2S128, QK, N128 | 4 | 256 / 256 | 64 | 64 |
+| H16D128CausalB32S1024, QK, N128 | 8 | 256 / 256 | 64 | 64 |
+| H32D64FullB2S128, PV, N64 | 8 | 0 / 128 | 32 | 32 |
+| H16D128CausalB32S1024, PV, N128 | 8 | 0 / 256 | 64 | 64 |
 
-### 实际指令与地址
+### Instructions and addresses
 
-核对了两个用例的离线 PTX 及对应调用形状。导出件标记为 PTX 8.8、`sm_100a`，下列指令使用项目 PTX 8.7 合同内的普通 `tcgen05.mma.cta_group::1.kind::f16`。QK 的 instruction descriptor 都是 `0x08200010`，PV 分别为 `0x08110010` 和 `0x08210010`。Q/K/V 的 SMEM descriptor 高字均为 `0x40004040`，对应 128 B swizzle、SBO 1,024 B。两个用例均逐指令重读 B。[固定用例](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/dsl/cutedsl/validation/configs/fa4_cases.csv) · [上游 QK/PV 定义](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1573-L1640) · [项目描述符解码](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md#matrix-descriptor)
+The offline PTX and invocation shapes were checked for both cases. The exports specify PTX 8.8 and `sm_100a`. The instructions use ordinary `tcgen05.mma.cta_group::1.kind::f16` within the project's PTX 8.7 contract. Both QK instruction descriptors are `0x08200010`. The PV descriptors are `0x08110010` and `0x08210010` respectively. Q/K/V SMEM descriptors all have high word `0x40004040`, selecting 128 B swizzle and a 1,024 B SBO. Both cases reread B for every instruction. [Fixed cases](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/dsl/cutedsl/validation/configs/fa4_cases.csv) · [Upstream QK/PV definition](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1573-L1640) · [Project descriptor decode](../rtl_specs/tensor_core/blackwell_tc_mma_engine.md#matrix-descriptor)
 
-离线 PTX 中 QK descriptor 低字的 K16 偏移以 16 B 为单位。D64 依次加 `0/2/4/6`，D128 接着用 `0x400/0x402/0x404/0x406`。PV 每步的 V descriptor 低字增加 `0x80`，P 的 TMEM 操作数则增加 8 个 32-bit column。
+The QK descriptor low word in the offline PTX expresses K16 offsets in 16 B units. D64 adds `0/2/4/6` in order. D128 continues with `0x400/0x402/0x404/0x406`. Each PV step increments the V descriptor low word by `0x80` and advances the P TMEM operand by eight 32-bit columns.
 
-令 `s` 为 K16 步，`k=0…15`，`a` 为对应 SMEM stage 的字节基址。以下均为 FP16 元素首字节，地址先换位再取组。QK 第 4→5 个 K16 步跨 16 KiB panel，PV 的每一步沿 V 的序列维前进 2,048 B。
+Let `s` denote the K16 step and `a` the byte base of the corresponding SMEM stage. The within-step element index is `k=0…15`. The formulas give the first byte of each FP16 element. Apply the swizzle before selecting the group. QK crosses a 16 KiB panel from the fourth to the fifth K16 step. Each PV step advances 2,048 B along V's sequence dimension.
 
 ```text
 sw(x)        = x XOR (((x >> 7) & 7) << 4)
@@ -29,105 +29,105 @@ V(n,s,k)     = sw(a + 16384*(n//64) + 128*(16*s+k) + 2*(n%64))
 group(addr)  = (addr >> 4) & 7
 ```
 
-QK 的 `row` 分别是 Q 的输出行和 K 的输出列。PV 的第二个 64 列 panel 只在 N128 被访问。TMEM 用 32-bit column 编号：D64 用例的 S/P/O 基址依次为 0/64/256；D128 用例的两个 Q stage 分别为 0/64/256 与 128/192/384。PV 的 `P_base+8*s` 每行读两个 16 B word，与本条 O 地址分离。QK 每个新 S 的第一步注零，余步读旧 S。PV 每个 O 的首个 KV tile 首步注零，后续 KV tile 首步读取已校正的 O，其余七步均同址累加。[上游 TMEM 分区](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L285-L298) · [O 累加谓词](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1719-L1784)
+For QK, `row` denotes Q's output row or K's output column. Only N128 PV accesses the second 64-column panel. TMEM uses 32-bit column indices. The S/P/O bases are 0/64/256 for D64 and 0/64/256 and 128/192/384 for the two D128 Q stages. PV reads two 16 B words per row at `P_base+8*s`, disjoint from this instruction's O. QK injects zero at the first step of each new S and reads the previous S thereafter. For each O, PV injects zero on the first step of the first KV tile and reads corrected O on the first step of later tiles. The other seven steps accumulate in place. [Upstream TMEM partitioning](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L285-L298) · [O accumulation predicate](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1719-L1784)
 
-### TMA 输入布局与地址核对
+### TMA input layout and address checks
 
-公开样例的 Q/K 逻辑 dims=[64,128,2,1]，stride[1:4]=[256,128,32768] B，box=[64,128,1,1]。从相同 base 计算 (0,0,1,0) 得 +128，(0,1,0,0) 得 +256，(63,127,1,0) 得 +32766，最后一个 FP16 的高字节位于 +32767。将 stride[2] 错当作 stride[1]×128 会错读另一个 head。以两种 head 填不同数据，先比较编码/解码，再比较两条 tensor load 访问集合；头切换时清 cache 不是修正地址的手段。[实捕 Q/K 样例](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L107-L125)
+The published Q/K example has logical dims=[64,128,2,1], stride[1:4]=[256,128,32768] B, and box=[64,128,1,1]. Relative to the same base, (0,0,1,0) maps to +128, (0,1,0,0) to +256, and (63,127,1,0) to +32766. The high byte of the last FP16 is at +32767. Treating stride[2] as stride[1]×128 reads the wrong head. Fill two heads with distinct data, compare encoding and decoding, then compare the address sets of the two tensor loads. Clearing the cache on a head switch cannot correct an addressing error. [Captured Q/K example](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L107-L125)
 
-地址回归采用 FP16 B/S/H/D host tensor 的连续输入布局，按逻辑 D/S/H/B 重排并将元素stride乘二。固定夹具为：F1 的 dims=[64,128,32,2]、byte stride[1…3]=[4096,128,524288]；F2 的 dims=[128,1024,16,32]、byte stride[1…3]=[4096,256,4194304]。这是按 host 输入推导的地址参考，不宣称已捕获这两个运行时 opaque 描述符。分别核对同一序列位置切换 head、同 head 推进序列、切换 batch 的地址差。
+The address regression starts with contiguous FP16 B/S/H/D host tensors, permutes them to logical D/S/H/B, and doubles the element strides to obtain byte strides. F1 has dims=[64,128,32,2] and byte stride[1…3]=[4096,128,524288]. F2 has dims=[128,1024,16,32] and byte stride[1…3]=[4096,256,4194304]. These fixtures derive reference addresses from the host layout. The opaque runtime descriptors for these two cases were not captured. Check the deltas for a head switch at one sequence position, a sequence increment within one head, and a batch switch.
 
-rows=128 时，D128 的 QK 子块字节偏移为 `0/32/64/96/16384/16416/16448/16480`，PV 的 MN-major descriptor 对应 LBO=16384、SBO=1024。D64 的 QK 子块偏移为 0/32/64/96 B，PV 只访问一个 panel。[上游 FA4 descriptor 样例](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L29-L51)
+At rows=128, the D128 QK subblock byte offsets are `0/32/64/96/16384/16416/16448/16480`. The MN-major PV descriptor has LBO=16384 and SBO=1024. D64 QK subblock offsets are 0/32/64/96 B, and PV accesses one panel. [Upstream FA4 descriptor example](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L29-L51)
 
-宽 head 附加用例取 smem_base=0、rows=128：row0/b=128 得 16384，row1/b=0 得 144，row127/b=255 得 32655（换位前为32767）；两个 panel 不与下一行别名。这是项目公开布局的验收，不据此推定原始 CUDA descriptor 的字节 ABI。[Flash 宽 head 测例](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L156-L165) · [CUDA tiled map API](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html)
+The additional wide-head case uses smem_base=0 and rows=128. For row0/b=128 the address is 16384, for row1/b=0 it is 144, and for row127/b=255 it is 32655 (32767 before swizzle). Neither panel aliases the next row. This checks the project's published layout. It does not establish the byte ABI of the original CUDA descriptor. [Flash wide-head test](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L156-L165) · [CUDA tiled map API](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html)
 
-### QK 的四拍重复窗口
+### Repeating four-cycle QK window
 
-对任意八行及同一 half，上式给出的八个组是 0…7 的排列。每拍八组各 grant 一笔，全部 32 个物理 bank 各读一次。每四拍两拍给 A、两拍给 B，64 拍刚好覆盖一条 MMA 的 512 笔请求。令 F 为某 K 步首 dot，S=F+4j 为其八列块 j 首 dot。核 c 的 A 行组 r 两半在 `F−64+16r+4c+h` grant，h=0/1，两拍后返回。最晚的 r=3 在 F−1 收齐，首用在 F+2。B[j] 在 S−10/−9 grant，S−8/−7 返回，S−6 分发，S−1 装 R_OP。八个 B 返回各写不同的 piece，两槽交替即可。[SMEM 仲裁](../rtl_specs/smem/blackwell_smem_fabric.md) · [操作数和写回](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
+For any eight rows and a fixed half, the formula gives a permutation of groups 0…7. Each cycle all eight groups grant one request and each of the 32 banks reads once. Two cycles out of four serve A and two serve B. In 64 cycles they cover the 512 requests of one MMA. Let F be the first dot of a K step and S=F+4j the first dot of its eight-column block j. The two halves of A row group r on core c receive grants at `F−64+16r+4c+h`, with h=0/1, and return two cycles later. The last group, r=3, is complete at F−1 and first used at F+2. B[j] receives grants at S−10/−9, returns at S−8/−7, distributes at S−6, and loads R_OP at S−1. Each of the eight B returns writes a distinct piece. Two alternating slots suffice. [SMEM arbitration](../rtl_specs/smem/blackwell_smem_fabric.md) · [Operands and writeback](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
 
-前步首 dot 为 0 时，旧 D[0] 在 12 收齐成功 ACK，新 C[0] 在 58/59 读、61/62 返回。C[1] 在 62/63 读、65/66 返回。63 发旧末 dot 并装新首 R_OP，64 发新首 dot，此时旧末 ACK 尚要等到 72。把实际的 K 子步地址代入上述排程，D64 得到首发 0、64、128、192；D128 两个 Q stage 各得 0、64、…、448。以非均匀整数 FP16 输入逐块写回，各 stage 的 65,536 B FP32 输出与按坐标独立累加一致。上述 64 拍内八组均已满载，有外围读插入时须按实际获准沿重算。
+With the previous step's first dot at 0, old D[0] receives its last successful ACK at 12. New C[0] reads at 58/59 and returns at 61/62. C[1] reads at 62/63 and returns at 65/66. Edge 63 issues the last old dot and loads the first new R_OP. Edge 64 issues the first new dot, ahead of the old final ACK at 72. Substituting the actual K-step addresses gives first issues at 0, 64, 128, and 192 for D64 and 0, 64, …, 448 for each D128 Q stage. With nonuniform integer-valued FP16 inputs and blockwise writeback, all 65,536 B of FP32 output per stage match independent coordinate-wise accumulation. All eight groups are occupied throughout the 64 cycles. Recompute the schedule from actual grants if another reader intervenes.
 
-### PV 的 V 装填与同址 C
+### PV V fills and same-address C
 
-每个 V 八列块的 16 个源 atom 各读一次。固定 h，行内 K 编号 u=0…7 的组号为 `u XOR (j mod 8)`；QK 对应为 `c XOR (2*(s mod 4)+h)`，此处 c 是八列块内的列号 0…7。这两个简式取自本例对齐的 stage 基址，一般地址由上面的 group(sw(x)) 计算。两者在一批八笔中各占八组。PV 一个返回携带同一 K 的八个 FP16，写同一逻辑行的四个 32-bit 段。出槽的两个 8×8 半字方阵转置后，core 看到按列排列的原值。[loader 装配公式与逐拍表](../rtl_specs/tensor_core/blackwell_tc_b_loader.md#service)
+Read each of the 16 source atoms in an eight-column V block once. For fixed h, the group of within-row K index u=0…7 is `u XOR (j mod 8)`. For QK it is `c XOR (2*(s mod 4)+h)`, where c is the column index 0…7 within the block. These shortcuts assume the aligned stage bases in this example. For general addresses use group(sw(x)) above. Each batch of eight requests uses all eight groups. A PV return carries eight FP16 values for the same K and writes four 32-bit segments of one logical row. Transposing the two 8×8 halfword matrices at slot output presents the original values to the core in column order. [Loader assembly formulas and cycle table](../rtl_specs/tensor_core/blackwell_tc_b_loader.md#service)
 
-以首笔 V grant 为 0，前提同表。V 块 0/1/2 分别在 4/8/12 完成四核交付，下一沿可装 R_OP，再下一沿可发 dot。块 b 的四个行组在 `6+4b…9+4b` 发射（b 为跨 K 步的连续块号）。D64 的步 0 末块在 34…37 发、步 1 首块在 38…41 发；D128 对应为 66…69 和 70…73。若 A 类 SMEM 请求缺席，fabric 可提前服务 V；模型按实际交付与四拍消费分别计时。
+Take the first V grant as 0 under the table's conditions. All four cores receive V blocks 0/1/2 at 4/8/12 respectively. R_OP can load one edge later and a dot can issue on the following edge. The four row groups of block b issue at `6+4b…9+4b`, where b counts blocks continuously across K steps. For D64 the last block of step 0 issues at 34…37 and the first block of step 1 at 38…41. The D128 windows are 66…69 and 70…73. If no A-class SMEM requests are present, the fabric may serve V sooner. The model tracks actual delivery separately from four-cycle consumption.
 
-同址累加时，步 0 的 D[0] 在 18 收到末 ACK。D64 步 1 的 C[0] 在 32/33 grant、35/36 返回，赶上 37 的首 R_OP；D128 在 64/65 grant、67/68 返回，赶上 69。C[1] 相应推迟四拍。P 的两帧读使用 C 预取空出的 TMEM 读沿，D 使用独立写端口。逐沿比较每个 lane 的读写 word，检验旧 D 成功 ACK 先于对应 C 读。非均匀 P/V 的八步结果按输出 (m,n) 独立累加，包含首步注零和读取已校正 O 两种情形。
+For in-place accumulation, step 0 D[0] receives its last ACK at 18. For D64, step 1 C[0] receives grants at 32/33 and returns at 35/36, in time for the first R_OP at 37. For D128 it receives grants at 64/65 and returns at 67/68, in time for 69. C[1] follows four cycles later. The two P read frames use TMEM read edges left free by C prefetch. D uses the separate write port. Compare each lane's read and write words edge by edge and verify the successful old D ACK precedes its C read. Independently accumulate eight steps of nonuniform P/V by output coordinate (m,n), covering both initial zero injection and corrected O.
 
-临时模型按上述真实布局检查了 384 个八列块。固定 B 时隙时，按现行 SMEM 返回合同推得四核交付沿为 4、8、12、…；允许借用空闲时隙时，各块也均在对应截止沿前或当沿交付。分别暂停一个返回组、一个 core 以及同时暂停两者，核对了列序原始位和每目的恰好一次。PV 八步非均匀累加对拍覆盖 D64 的 32,768 B，以及 D128 两个 stage 各 65,536 B 的 FP32 输出。
+A temporary model checked 384 eight-column blocks with the actual layouts above. With fixed B slots, the SMEM return contract yields four-core deliveries at 4, 8, 12, …. Allowing idle slots to be borrowed also delivers each block by its deadline. Stalling one return group, one core, and both together checked the original bits in column order and exactly one delivery per destination. The eight-step nonuniform PV comparison covered all 32,768 B of FP32 output for D64 and 65,536 B for each of the two D128 stages.
 
 <a id="fa4-handoffs"></a>
-### 真实的乘法顺序
+### Order of matrix products
 
-下文记 QKₛ(t)、PVₛ(t) 为 Q stage s 对物理 KV tile t 的整次乘法。D64 每次 QK 有 4 条 K16，D128 有 8 条；两者每次 PV 都有 8 条。按调用形状解开 MMA warp 的循环后：
+QKₛ(t) and PVₛ(t) denote a complete product for Q stage s and physical KV tile t. Each D64 QK contains four K16 instructions and each D128 QK contains eight. PV contains eight in both cases. Expanding the MMA warp loops for the actual invocation shapes gives the following sequences.
 
-- **D64，全注意力。** 一个工作 tile 的序列为 `QK₀(0) → PV₀(0) → O_full`。QK 用 SMEM 的 Q、K 写 S0，PV 要读由 S0 生成的 P0。PTX 中循环体也有 PV→QK 站点，但此用例 KV 长度为 128，循环次数为零；实际走尾部 PV。下一工作 tile 另有自己的生产者与 barrier phase。
-- **D128，causal。** 同一工作 tile 处理相邻两个 128 行的 Q stage。四个 256 行工作区间各遍历 L=2、4、6、8 个 KV tile，从 H=L−1 降到 0。开头执行 `QK₀(H) → QK₁(H)`；每个 t=H…1 依次执行 `PV₀(t) → QK₀(t−1) → PV₁(t) → QK₁(t−1)`；结尾执行 `PV₀(0) → PV₁(0)`。每个工作 tile 有 2L−1 次 QK→PV，全部跨 Q stage；有 2(L−1) 次 PV→QK，全部回到同一 Q stage。因果 mask 改变有效工作量，已进入的乘法仍执行其 K16 序列。[上游 causal 范围](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/block_info.py#L21-L39) · [MMA warp 的序言、交错循环与尾段](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1683-L1824)
+- **D64, full attention.** One work tile executes `QK₀(0) → PV₀(0) → O_full`. QK reads Q and K from SMEM and writes S0. PV needs P0 produced from S0. The PTX loop body contains a PV→QK site, but KV length 128 gives zero loop iterations in this case. Execution takes the PV epilogue. The next work tile has its own producers and barrier phase.
+- **D128, causal.** One work tile handles two consecutive 128-row Q stages. The four 256-row work ranges traverse L=2, 4, 6, and 8 KV tiles respectively, descending from H=L−1 to 0. Execute `QK₀(H) → QK₁(H)` first, then `PV₀(t) → QK₀(t−1) → PV₁(t) → QK₁(t−1)` for each t=H…1, and finally `PV₀(0) → PV₁(0)`. Each work tile has 2L−1 QK→PV transitions, all crossing Q stages, and 2(L−1) PV→QK transitions, all returning to the same Q stage. The causal mask changes the useful work. Each product that starts still executes its K16 sequence. [Upstream causal bounds](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/block_info.py#L21-L39) · [MMA warp prologue, interleaved loop, and epilogue](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1683-L1824)
 
-#### TMA 和 P 以哪个边沿为准
+#### TMA and P readiness edges
 
-KV 生产者按 K(H)、V(H)、K(H−1)、V(H−1)… 搬运，与计算并行。MMA warp 首次 QK 等 Q stage 和 K stage，首次 PV 等 V stage 及本 Q stage 的 P/O 许可。每个 stage 的 TMA 可见链依次经过最后一次目标 SMEM 写 ACK、各 copy 的成功 complete-tx、该 phase 的 arrival 和 byte 条件同时满足，最后是消费 warp 的 wait acquire ACK 和成功谓词。D64 的一个 K 或 V stage 为 16 KiB；D128 为 32 KiB，实际 PTX 在同一 stage 的 32,768 B expect-tx 下发两笔 16 KiB panel copy。首个 panel 的完成无法放行整 stage。wait 在 c 沿匹配 phase，acquire 最早 c+1 发；若 a 沿接受 acquire ACK，成功谓词最早 a+1 交付。warp 还要执行分支、地址准备并提交命令。[上游预取顺序](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1471-L1513) · [TMA 实际写与完成](../rtl_specs/tma/blackwell_tma_completion_tracker.md) · [wait 与 acquire](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md)
+The KV producer transfers K(H), V(H), K(H−1), V(H−1), … alongside computation. The MMA warp waits for the Q and K stages before its first QK. Its first PV waits for V and the P/O permission for its Q stage. TMA visibility requires the last destination SMEM write ACK, successful complete-tx for each copy, satisfaction of both arrival and byte counts for the phase, and finally a wait acquire ACK and true predicate for the consuming warp. A D64 K or V stage is 16 KiB. A D128 stage is 32 KiB. Its PTX issues two 16 KiB panel copies against one 32,768 B expect-tx. Completing the first panel cannot release the stage. A wait matching the phase at c can issue acquire at c+1 at the earliest. If the acquire ACK is accepted at a, the true predicate can be delivered at a+1 at the earliest. The warp must still execute its branch, prepare addresses, and submit the command. [Upstream prefetch order](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L1471-L1513) · [TMA writes and completion](../rtl_specs/tma/blackwell_tma_completion_tracker.md) · [Wait and acquire](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md)
 
-两个 kernel 的 arrival 都丢弃结果（`_`），wait 使用 parity，PTX 中出现非零提示 `10000000`。四列对齐的 TMEM LD x32 每 lane 取 8 个 128-bit word，整 warp 向 RF 交付 32 个 beat、共 4 KiB。[LD 数据通路](../rtl_specs/tmem/blackwell_tmem_ldst_engine.md#ld-word)
+Both kernels discard the arrival result (`_`), wait on parity, and use a nonzero PTX hint `10000000`. A four-column-aligned TMEM LD x32 reads eight 128-bit words per lane and delivers 32 RF beats, 4 KiB in total, for the warp. [LD data path](../rtl_specs/tmem/blackwell_tmem_ldst_engine.md#ld-word)
 
-P 来自 softmax warp。它先等对应 QK 的 S_full，读 S 到 RF、计算概率、写 P[0…95]，用 PTX 的 `tcgen05.wait::st` 确认自己的写，再到达 P/O barrier。校正 warp 也要为同一 phase 到达；首个 KV tile 无旧 O 需重缩放，后续 tile 按实际 scale 决定是否读改写 O。P[96…127] 的写确认另行到达 lastsplit barrier。两份 PTX 的 MMA warp 都把第二次 wait 放在 PV 的 K16 步 5 与步 6 之间。若 PV 步 0 首 dot 为 0，无气泡的步 6 首 dot 应在 192（D64）或 384（D128）。要接上该沿 F，步 6 的第一块 B 最迟在 F−2 交付；按相邻两拍 grant 排程，首请求最迟在 F−7 进入 R_BREQ，F−6、F−5 两沿 grant。wait 若挡住 cmd.fire，提前计算 SMEM 地址也得不到这个时隙。[softmax 分段写 P](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L2280-L2356) · [O 校正与 release](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L2479-L2499)
+The softmax warp produces P. It waits for S_full from the corresponding QK, reads S into RF, computes probabilities, and writes P[0…95]. It uses PTX `tcgen05.wait::st` to confirm its writes before arriving at the P/O barrier. The correction warp must also arrive for the same phase. The first KV tile has no old O to rescale. For later tiles the actual scale determines whether O needs a read-modify-write. Confirmation of P[96…127] arrives separately at the lastsplit barrier. Both PTX versions place the MMA warp's second wait between PV K16 steps 5 and 6. With step 0's first dot at 0, uninterrupted step 6 starts at 192 (D64) or 384 (D128). To meet that edge F, step 6's first B block must arrive by F−2. With consecutive grant edges, the first request must enter R_BREQ by F−7 and receive grants at F−6 and F−5. If the wait blocks cmd.fire, computing the SMEM address early cannot claim that slot. [Split P writes in softmax](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L2280-L2356) · [O correction and release](https://github.com/Dao-AILab/flash-attention/blob/d80a77103021c4e980f8cbbf85774f6a19e6474a/flash_attn/cute/flash_fwd_sm100.py#L2479-L2499)
 
 #### QK → PV
 
-以**紧邻前条乘法的最后一条 K16 MMA** 首 dot 为 0。其理想发射窗口为 0…63，末 D 写在 69/70 接受、71 实写、72 退休 ACK，tracker 最早在 75 接收 engine done。commit 可提前登记，实际 S_full arrival 要等其覆盖的操作完成；不能把 72 直接用作 P 就绪沿。[MMA 写尾](../rtl_specs/top/blackwell_async_subsystem_top.md#cycles) · [commit 到 arrival](../rtl_specs/tensor_core/blackwell_tc_async_completion.md)
+Take the first dot of **the last K16 MMA of the immediately preceding product** as 0. Its ideal issue window is 0…63. The last D writes are accepted at 69/70, the last write commits at 71, and its ACK retires at 72. The tracker can accept engine done at 75 at the earliest. A commit may register early, but its S_full arrival waits for the operations it covers. Edge 72 therefore does not establish P readiness. [MMA writeback tail](../rtl_specs/top/blackwell_async_subsystem_top.md#cycles) · [Commit to arrival](../rtl_specs/tensor_core/blackwell_tc_async_completion.md)
 
-| 边沿 | D64，同 stage S0 → P0 | D128，跨 stage，例如 S1 → P0 |
+| Edge | D64, same stage S0 → P0 | D128, cross-stage, e.g. S1 → P0 |
 |---|---|---|
-| 0…55 | V 可由 TMA 搬入 SMEM。此工作 tile 的 P0 仍等当前 S0。 | P0 的生产者是更早的 QK₀(t)。softmax 和 O₀ 校正可与当前 QK₁ 重叠。若 V 和 P/O 的 wait 已放行 PV、pin 和槽位及时，V 首块可在 54/55 grant。 |
-| 56…63 | 即使 V 已写入，未发出的 PV 还不能请求 loader。本 stage 的 P 地址也与旧 S 后半部相交。 | 可在 56/57 读 P 的两帧，59/60 返回。V 在 56/57 返回、58 分发。如需旧 O，C0 在 58/59 grant、61/62 返回；首 tile 则注零。63 装新 R_OP。 |
-| 64 及以后 | 只考虑硬件别名，旧 ACK=72 后 P 最早 73/74 grant、76/77 返回，79 是局部下界。真实顺序还要经过 tracker、S_full、softmax、P/O release 与成功 acquire。 | 条件满足时 64 即可首发，旧 S1 末 ACK 在 72 照常退休。若 P0、O₀ 或 V 有一项晚到，须按该项实际放行后的准备沿重排。 |
+| 0…55 | TMA can transfer V to SMEM. P0 for this work tile still depends on the current S0. | An earlier QK₀(t) produced the input for P0. Softmax and O₀ correction can overlap the current QK₁. If the V and P/O waits release PV and the pin and slots are ready, the first V block can receive grants at 54/55. |
+| 56…63 | Even if V is in SMEM, an unissued PV cannot request the loader. This stage's P also overlaps the second half of the old S address range. | The two P frames can read at 56/57 and return at 59/60. V returns at 56/57 and distributes at 58. If old O is required, C0 receives grants at 58/59 and returns at 61/62. The first tile injects zero. Load the new R_OP at 63. |
+| 64 onward | Considering hardware aliasing alone, after the old ACK at 72, P can receive grants at 73/74 and return at 76/77. Edge 79 is a local lower bound. The actual path also passes through the tracker, S_full, softmax, P/O release, and successful acquire. | If the conditions hold, first issue is at 64 while the last old S1 ACK retires at 72. If P0, O₀, or V is late, reschedule preparation from its actual release edge. |
 
-D64 可把未知等待和已知准备分开计算。令 R 为两个 wait 已成功、PV 已接受并完成预检和 pin 后，V 与 P 都能开始 grant 的示例沿。V/P 均在 R、R+1 获准。SMEM 的 V 在 R+2、R+3 返回，R+4 四核交付；TMEM 的 P 在 R+3、R+4 返回。最早 R+5 装 R_OP，R+6 首 dot。真实 R 取决于生产者、wait 的 acquire 确认和 warp 调度。D128 的重叠窗口则相当可观：序言中 QK₀ 与 PV₀ 之间有一整次 QK₁（512 个有效 dot 拍）；在交错循环中，对应的 QK 与 PV 之间可有两整次乘法。要比较的是本 stage 的许可和首块期限。
+For D64, separate variable wait time from known preparation edges. Let R be an example edge when V and P can both start receiving grants after both waits succeed and PV is accepted, prechecked, and pinned. Both receive grants at R and R+1. SMEM returns V at R+2 and R+3 for four-core delivery at R+4. TMEM returns P at R+3 and R+4. R_OP can load at R+5 and the first dot can issue at R+6. Actual R depends on producer progress, wait acquire acknowledgments, and warp scheduling. D128 has a larger overlap window. In the prologue a complete QK₁ (512 active dot cycles) separates QK₀ and PV₀. In the interleaved loop two complete products can separate the corresponding QK and PV. Compare the permission for the particular stage against its first-block deadline.
 
-#### PV → 下一条 QK
+#### PV → next QK
 
-D128 的每个非末 KV tile 有两种回切。PV₀(t) 后，MMA warp 推进 KV 环并等待 K(t−1) 的成功 acquire，再发 QK₀(t−1)。PV₁(t) 后，warp 为 V(t) 发出释放其 SMEM 槽的异步 commit，随后 QK₁(t−1) 复用已经通过 wait 的同一 K；此处没有第二个 K wait。commit 登记与其实际 arrival 是两个边沿。新 QK 的第一步 `input_d=0`，直接注零；旧 PV 写 O、新 QK 写 S，地址分离。P 与将写入的 S 共用部分地址，而旧 P 的最后一次 op_load 先于新指令首发，已在 R_OP 的操作数可安全完成。[core 取数与依赖](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
+Each nonfinal D128 KV tile has two return paths. After PV₀(t), the MMA warp advances the KV ring, waits for successful acquire of K(t−1), then issues QK₀(t−1). After PV₁(t), the warp issues an asynchronous commit to release the V(t) SMEM slot. QK₁(t−1) reuses the same K whose wait already succeeded, without a second K wait. Commit registration and actual arrival occur on separate edges. The first new QK step uses `input_d=0` and injects zero. Old PV writes O and new QK writes a disjoint S. P partially overlaps the destination S, but the old P's final op_load precedes the new instruction's first issue. Operands already in R_OP can finish safely. [Core operand fetch and dependencies](../rtl_specs/tensor_core/blackwell_tc_mma_core.md)
 
-以前条 **PV 的最后一条 K16** 发出首个 dot 的沿为 0。下表假设下一条 QK 已提前通过 wait、预检和 pin，操作数端口按正常排程获准，dot 和写回均可接收。核 `c=0…3` 各负责从 `32c` 开始的 32 行 Q。每核一次发射用自己的八行 Q 和共用的八个 K 向量，对每个行列组合做一次 16 项点积，得到一个 8×8 输出微块。对同一组八个输出列，四次发射依次用完本核的四组 Q。
+Take the first dot of **the last K16 of the preceding PV** as edge 0. Assume the next QK has already passed wait, precheck, and pin, its operands receive the normally scheduled grants, and both dot and writeback can accept. Core `c=0…3` owns 32 Q rows starting at `32c`. Each core issue uses eight local Q rows and eight common K vectors. One 16-term dot per row/column pair produces an 8×8 output microtile. Four consecutive issues use all four local Q row groups for the same eight output columns.
 
-旧 PV 执行期间，SMEM 每四拍给 Q 两个读拍。第一拍从八行各取前 16 B，第二拍各取后 16 B。这样每行取齐 16 个 FP16，八行共 256 B。每核四组合计 1 KiB，占八个读拍。行组 `r=0…3` 在核 `c` 的两个 grant 沿为 `16r+4c` 和 `16r+4c+1`，各在两拍后返回。B 的时隙先读旧 PV 的 V。新 QK 的首个 K 块在 54/55 grant、56/57 返回，58 分发到四核。
+While the old PV runs, SMEM gives Q two read cycles in every four. The first reads the first 16 B of each of eight rows, the second the remaining 16 B. This supplies all 16 FP16 values per row, 256 B for eight rows. Four groups per core total 1 KiB and take eight read cycles. Row group `r=0…3` on core `c` receives grants at `16r+4c` and `16r+4c+1`, each returning two cycles later. B slots first read the old PV's V. The new QK's first K block receives grants at 54/55, returns at 56/57, and distributes to all four cores at 58.
 
-| Q 行组（各核本地行号） | SMEM grant 沿（依次为核 0、1、2、3） | 四核中最晚的 Q 返回沿 | 各核装入 R_OP | 各核发射 dot |
+| Q row group (core-local rows) | SMEM grant edges (cores 0, 1, 2, 3 in order) | Latest Q return across the four cores | R_OP load per core | Dot issue per core |
 |---|---|---:|---:|---:|
-| 0（0…7） | 0/1、4/5、8/9、12/13 | 15 | 63 | 64 |
-| 1（8…15） | 16/17、20/21、24/25、28/29 | 31 | 64 | 65 |
-| 2（16…23） | 32/33、36/37、40/41、44/45 | 47 | 65 | 66 |
-| 3（24…31） | 48/49、52/53、56/57、60/61 | 63 | 66 | 67 |
+| 0 (0…7) | 0/1, 4/5, 8/9, 12/13 | 15 | 63 | 64 |
+| 1 (8…15) | 16/17, 20/21, 24/25, 28/29 | 31 | 64 | 65 |
+| 2 (16…23) | 32/33, 36/37, 40/41, 44/45 | 47 | 65 | 66 |
+| 3 (24…31) | 48/49, 52/53, 56/57, 60/61 | 63 | 66 | 67 |
 
-旧 PV 在 62 装入末个微块，63 发射，同沿四核装入新 QK 的首个微块。首个微块由 engine 统一放行，此后各核按自己的操作数就绪情况推进。表中每组 Q 都在装入前返回，所以 64…67 每核每拍发射一个微块。第 68 拍转到输出列 8…15，从同一份本地 Q 的第 0 行组开始复用。旧 PV 写 O 的末 ACK 可在 72 退休。[四核发射规则](../rtl_specs/tensor_core/blackwell_tc_mma_core.md) · [QK 的四拍重复窗口](#qk-的四拍重复窗口)
+The old PV loads its last microtile at 62 and issues it at 63. On that edge all four cores load the first new QK microtile. The engine releases the first microtile on all cores together. Each core then advances as its operands become ready. Every Q group in the table returns before its load, so each core issues one microtile per cycle at 64…67. Edge 68 moves to output columns 8…15 and reuses local Q starting with row group 0. The final old PV write ACK for O can retire at 72. [Four-core issue rules](../rtl_specs/tensor_core/blackwell_tc_mma_core.md) · [Repeating four-cycle QK window](#repeating-four-cycle-qk-window)
 
-新 QK 从 K16 步 1 开始读取自己写的 S。以步 0 首 dot 重新记 0，D[0] 的末次成功 ACK 在 12，步 1 的 C0 在 58/59 读，64 首发。PV 对 O 的同址累加也按块等成功 ACK，跨 KV tile 另等校正 warp 发布 O。对应块的 ACK 晚到会推迟该块的读；若仅末块 ACK 晚到且写回容量足够，后条仍可按时首发。上述两个交接方向均用实际换位地址逐拍核对了八组 SMEM 的 grant、双槽释放及所列 TMEM 读写 word。
+The new QK reads the S it wrote starting at K16 step 1. Renumbering from step 0's first dot at 0, D[0] receives its final successful ACK at 12. Step 1 C0 reads at 58/59 for first issue at 64. In-place PV accumulation on O also waits for successful ACKs block by block. Across KV tiles it additionally waits for the correction warp to publish O. A late ACK delays the read of the corresponding block. If only the final block ACK is late and writeback capacity suffices, the next instruction can still start on time. Both handoff directions were checked edge by edge with actual swizzled addresses against the eight SMEM group grants, two-slot releases, and listed TMEM read/write words.
 
-#### 哪些等待可以隐藏
+#### Which waits can overlap other work?
 
-- **生产者数据依赖。** D64 同 stage 的 S→softmax→P，后续 tile 必需的 O 重缩放，以及 PV 步 6 的末段 P，都要求真实写确认及成功 acquire。可让独立 TMA 搬运和另一 stage 的计算覆盖这些时间；当前指令无权越过 wait 读取未发布的数据。
-- **现有预取能覆盖的准备。** 已通过 wait 的命令可在前条末次 dot 前装 Q 行组、首个 K/V 块、P 帧和合法 C 块。优先让 D128 的下一 K stage 提前发布，并检查最晚的 Q 行组。若想在整条 MMA 尚被 wait 挡住时，先把已发布的 V 或 Q 从 SMEM 搬入 TC buffer，需要另行定义独立预取及源 stage 生命周期；当前 loader 只接已登记的 MMA。
+- **Producer dependencies.** The D64 same-stage S→softmax→P chain, required O rescaling on later tiles, and late P for PV step 6 all require actual write acknowledgment and successful acquire. Independent TMA transfers or computation on another stage can overlap the wait. The current instruction must wait before reading unpublished data.
+- **Preparation covered by existing prefetch.** After its wait succeeds, a command can load Q row groups, its first K/V block, P frames, and eligible C blocks before the preceding instruction's last dot. For D128, prioritize early publication of the next K stage and check the last Q row group's deadline. Moving already published V or Q from SMEM to the TC buffer while the entire MMA is still blocked by a wait would require a separately specified prefetch and source-stage lifetime. The current loader accepts registered MMAs only.
 
 <a id="tma-budget"></a>
-### TMA 服务拍与消费者期限
+### TMA service cycles and consumer deadlines
 
-所有 copy 共用 128 B/拍。D128 两个独立 16 KiB panel 可在相邻沿将前条末段、后条首段送入 walker；理想 GMEM READ 在 129/130 拍交接。两条分别等待末次目标写 ACK 和 producer_rsp。每个 panel 单独登记 complete-tx，消费期限仍按整个 stage 的成功 wait。命令间隙、源返回、bank 争用、ACK 和 barrier 等待另算。下表只计对齐满段的目的写服务，假设源持续就绪、八组空闲、64 个事务 tag 和 16 个数据槽各自能及时周转。load 等外存时只占 tag，成功返回才占 RAM；store 在源读前先占 RAM。两向均在最后目标请求接受时释放行，实际写 ACK 仍归原 tag。[双 panel 的最早发读沿](../rtl_specs/tma/blackwell_tma_unit.md#copy-overlap)
+All copies share 128 B/cycle. For the two independent D128 16 KiB panels, the first copy's last segment and the second copy's first segment can enter the walker on adjacent edges. Ideal GMEM READ handoff is at cycles 129/130. Each copy waits for its own final destination write ACK and producer_rsp. Each panel registers its own complete-tx. The consumer deadline depends on successful wait for the entire stage. Command gaps, source returns, bank contention, ACKs, and barrier waits add time. The table counts only destination write service for aligned full segments. It assumes continuous source readiness, eight free groups, and timely reuse of the 64 transaction tags and 16 data slots. A load waiting on external memory occupies only a tag and takes RAM on a successful return. A store reserves RAM before its source read. Both release the row at final destination request acceptance. The actual write ACK retains the original tag. [Earliest read issue for two panels](../rtl_specs/tma/blackwell_tma_unit.md#copy-overlap)
 
-| K/V 数据 | 总量 | 最少 SMEM 写服务拍 | 可用于重叠的计算 |
+| K/V data | Total | Minimum SMEM write service cycles | Computation available for overlap |
 |---|---:|---:|---|
-| D64，一份 K 或 V | 16 KiB | 128 | 同工作 tile 的 QK 为 256 拍；若 V 从窗口起点开始满速写，纯写服务占一半。实际 PV 仍等 V 和本 stage 的 P/O。 |
-| D128，一份 K 或 V | 32 KiB | 256 | 同一 stage 两笔 16 KiB panel copy，各 128 拍，分别完成后才满足 32,768 B 的 expect-tx。 |
-| D128，一个 KV tile 的 K+V | 64 KiB | 512 | 两个 Q stage 共 2×(512 QK + 512 PV)=2,048 个有效 dot 拍。 |
+| D64, one K or V | 16 KiB | 128 | QK for the same work tile takes 256 cycles. If V writes at full rate from the start of this window, write service occupies half of it. Actual PV also waits for V and this stage's P/O. |
+| D128, one K or V | 32 KiB | 256 | Two 16 KiB panel copies serve the same stage, 128 cycles each. Both must complete to satisfy the 32,768 B expect-tx. |
+| D128, K+V for one KV tile | 64 KiB | 512 | The two Q stages together provide 2×(512 QK + 512 PV)=2,048 active dot cycles. |
 
-K/V 三槽环可将读入提前。用实际 copy 的首个 grant、末次目标 ACK 和 complete-tx 排出 phase 的最早放行沿。store 方向同样以 128 B/拍为峰值，O 的 SMEM 源读与 Q/K/V 操作数争同组的读 grant；其 GMEM 写 ACK 另行跟踪。比较两类争用时，load 写与 MMA 读只有同 bank 同 word 冲突才须错开。[TMA 调度](../rtl_specs/tma/blackwell_tma_unit.md) · [满行逐拍示例](../rtl_specs/tma/blackwell_tma_data_path.md#peak)
+The three-slot K/V ring allows reads to start early. Use the first actual grant, last destination ACK, and complete-tx of each copy to derive the earliest phase release. Stores also peak at 128 B/cycle. SMEM source reads of O compete with Q/K/V operand reads for the same group grants. GMEM write ACKs are tracked separately. A load write and an MMA read need separate edges only on a same-bank, same-word conflict. [TMA scheduling](../rtl_specs/tma/blackwell_tma_unit.md) · [Full-line cycle example](../rtl_specs/tma/blackwell_tma_data_path.md#peak)
 
-H20 单 CTA、D128 热数据、两个逻辑 tile 在途的独立 load 实验测得 95.3 B/SM 拍。上表的 128 B/拍来自项目端口宽度，store 方向取规格推导值。
+An independent-load experiment on H20 with one CTA, hot D128 data, and two logical tiles in flight measured 95.3 B per SM cycle. The 128 B/cycle in the table comes from the project's port width. The store figure is derived from the specification.
 
-实测归因时，用同一工作 tile、Q stage、KV 序号、barrier 地址/phase 和 MMA id 对齐：记录最后目标写 ACK、complete-tx、phase 翻转、wait 成功、cmd.fire/prepare、各行组与首 B 块就绪、相关 D 块 ACK、四核 op_load/dot_fire。分别只推迟 K 或 V 的最终 complete-tx、P 后段的 arrive 或对应 C 块的 ACK，比较第一个后移的消费沿。多个门限同时未满足时按最晚者归因，避免把同一段空拍重复计入 TMA 和 P。
+For measurements, align events by work tile, Q stage, KV index, barrier address/phase, and MMA ID. Record the final destination write ACK, complete-tx, phase flip, successful wait, cmd.fire/prepare, readiness of each row group and the first B block, relevant D block ACKs, and four-core op_load/dot_fire. Delay only the final K or V complete-tx, late P arrival, or the corresponding C block ACK in turn. Identify the first consumer edge that moves. If several conditions are outstanding, attribute the delay to the last one satisfied to avoid counting the same idle cycles against both TMA and P.
 
-## 设计时的模型对照
+## Design-time model comparisons
 
-对[通用 N128 同址累加向量](../rtl_specs/top/blackwell_async_subsystem_top.md#mma-vectors)，临时边沿模型首发为 0、64、128、192、256、320、384、448，最终 65,536 个 FP32 结果字节与独立坐标求和一致。另以 64 组暂停序列检查 N256 原位覆盖及慢核部分交付。隔离换指令门控时，块 0 成功 ACK 延至 64 则 C0 最早 65 grant；只延迟末 ACK 到 80，后条仍在 64 首发；C1 于 70 收齐则后条块 1 首发延至 72。结果描述的是临时模型，正式实现需按各模块的验收用例复测。
+For the [Generic N128 in-place accumulation vector](../rtl_specs/top/blackwell_async_subsystem_top.md#mma-vectors), the temporary edge model first issued at 0, 64, 128, 192, 256, 320, 384, and 448. All 65,536 FP32 result bytes matched independent coordinate-wise sums. Another 64 stall sequences checked N256 in-place overwrite and partial delivery to a slow core. Isolating the instruction handoff conditions gave three results. Delaying the successful block 0 ACK to 64 moved the earliest C0 grant to 65. Delaying only the final ACK to 80 preserved the next first issue at 64. Receiving all of C1 at 70 moved the next instruction's first block 1 issue to 72. These results describe the temporary model. The implementation must repeat the module acceptance cases.
 
-分块设计的公开参考包括 [CUTLASS fragment 双缓冲](https://docs.nvidia.com/cutlass/4.3.1/media/docs/cpp/efficient_gemm.html#pipelining)、[NVDLA CDMA/CBUF 消费量跟踪](https://nvdla.org/hw/v1/ias/unit_description#convolution-buffer) 和 [CUDA SMEM bank 布局](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory-and-memory-banks)。
+Public references for the block design include [CUTLASS fragment double buffering](https://docs.nvidia.com/cutlass/4.3.1/media/docs/cpp/efficient_gemm.html#pipelining), [NVDLA CDMA/CBUF consumption tracking](https://nvdla.org/hw/v1/ias/unit_description#convolution-buffer), and [CUDA SMEM bank layout](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory-and-memory-banks).

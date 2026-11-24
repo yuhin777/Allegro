@@ -97,62 +97,62 @@ def chain(y, stages, kind):
         if index:
             line([(xs[index-1]+355, y+71), (x-4, y+71)], C[kind], 3, arrow=True)
 
-txt(64, 68, 'Allegro  |  跨 MMA 连续发射与分块预取', 44)
-txt(64, 122, '单 CTA · 三个有序命令记录 · 两个输入上下文 · 四核各 64 路完整 dot', 26, C['muted'])
+txt(64, 68, 'Allegro  |  Consecutive MMA issue and block prefetch', 44)
+txt(64, 122, 'Single CTA · Three ordered command records · Two input contexts · Four cores with 64 complete dot lanes each', 26, C['muted'])
 
-lane(52, 175, 2136, 280, '命令与 B 源读取', C['tealfill'], C['teal'])
-chain(249, [('engine', ['cmd 与 tracker 同沿登记', '按 id 预检、pin、选择分区']),
-            ('SMEM 物理阵列', ['32 bank × 1,824 × 32 bit', '8 组 · 每方向共 128 B/拍']),
-            ('R_BREQ → grant', ['16 B atom 选四个相邻 bank', 'g 同沿采样，g+2 最早交付']),
-            ('共享 B loader', ['2 × 256 B，每行 4 × 32 bit', '半精度整 atom / 其他 masked']),
-            ('四目的分发', ['K 直通 / N 转置后共享列序', '四核独立握手，末目的释放槽'])], 'teal')
-txt(90, 421, 'FP16/BF16 八列块读 16 笔 16 B atom。两个槽可分属相邻命令，分发时检查每核的分区选择和覆盖保护。', 23, C['muted'])
+lane(52, 175, 2136, 280, 'Command admission and B source reads', C['tealfill'], C['teal'])
+chain(249, [('engine', ['Register command and tracker together', 'Precheck, pin, select partition by ID']),
+            ('SMEM physical array', ['32 banks × 1,824 words × 32 bits', '8 groups · 128 B/cycle per direction']),
+            ('R_BREQ → grant', ['16 B atom across four adjacent banks', 'Sample at g, deliver from g+2']),
+            ('Shared B loader', ['2 × 256 B, four 32-bit words per row', 'Full atoms for FP16/BF16, masks otherwise']),
+            ('Four-way distribution', ['K passes through, N transposes to column order', 'Cores accept separately, last frees slot'])], 'teal')
+txt(90, 421, 'An eight-column FP16/BF16 block takes sixteen 16 B reads. Adjacent commands may own the two slots. Each core checks its partition and overwrite permission.', 23, C['muted'])
 
-lane(52, 480, 2136, 280, '每核输入  /  三种操作数以各自最后读取沿回收', C['bluefill'], C['blue'])
+lane(52, 480, 2136, 280, 'Per-core inputs  /  Reuse each operand after its own last read', C['bluefill'], C['blue'])
 for x, title, body in [
-        (90, 'A  /  行组', ['2 × 1 KiB，按 256 B 组就绪', 'r=0…3 在各列块重用']),
-        (510, 'B  /  列块', ['8 KiB，四个 WS 分区', '末次 op_load 后可逐块覆盖']),
-        (930, 'C  /  列块', ['2 × 1 KiB，跨指令换主', '同址 C[j] 等老 D[j] 成功 ACK']),
-        (1350, 'scale A / B', ['本核 2 × 128 B scale A', '共享 4 KiB 内取两份快照']),
-        (1770, 'R_OP  /  832 B', ['取本次 r、j 与对应 scale', '首片四核同沿，之后独立推进'])]:
+        (90, 'A  /  row groups', ['2 × 1 KiB, ready by 256 B group', 'Reuse r=0…3 across column blocks']),
+        (510, 'B  /  column blocks', ['8 KiB in four WS partitions', 'Overwrite each block after its final op_load']),
+        (930, 'C  /  column blocks', ['2 × 1 KiB, transfer ownership across commands', 'Same-address C[j] waits for old D[j] ACK success']),
+        (1350, 'scale A / B', ['2 × 128 B of scale A per core', 'Two snapshots in 4 KiB shared scale B']),
+        (1770, 'R_OP  /  832 B', ['Select r, j, and their scales', 'First load in lockstep, then independent'])]:
     node(x, 554, title, body, 'blue', 355, 142)
-txt(90, 726, 'B0 已装好就可供本条首片使用。四核整份安装成功才发布 WS collector。核间共享的 B 源数据只读一份。', 23, C['muted'])
+txt(90, 726, 'The first microtile can use installed B0. Publish a WS collector only after full installation on all four cores. Read shared B source data once.', 23, C['muted'])
 
-lane(52, 785, 2136, 280, '发射与 D 写回', C['purplefill'], C['purple'])
-chain(859, [('R_OP 送旧装新', ['首片按 id 准入', '8 行 × 8 列 / 核 / 拍']),
-            ('原生 dot 流水', ['P = 5 / 6 / 5 / 3', '不同族可相邻发射']),
-            ('R_DOT → D 双槽', ['每槽 1 KiB；由结果 tag 选槽', '最后写接受后归还数据槽']),
-            ('TMEM R_W', ['128 bank × 128 bit', 'w 接受，w+1 实际写入']),
-            ('w+2 真实 ACK', ['只结算原 id / j', '全部必要写成功才开放依赖'])], 'purple')
-txt(90, 1031, '各族独立接收，队首族按发射序交付；旧指令的写尾与 pin 继续按原 id 结算。', 23, C['muted'])
+lane(52, 785, 2136, 280, 'Dot issue and D writeback', C['purplefill'], C['purple'])
+chain(859, [('R_OP issue and refill', ['Admit first microtile by ID', '8 rows × 8 columns per core per cycle']),
+            ('Native dot pipelines', ['P = 5 / 6 / 5 / 3', 'Different families can issue back to back']),
+            ('R_DOT → two D slots', ['1 KiB per slot, selected by result tag', 'Release data slot on last write acceptance']),
+            ('TMEM R_W', ['128 banks × 128 bits', 'Accept at w, write at w+1']),
+            ('Write ACK at w+2', ['Settle the original ID and block j', 'Release dependency after all required writes succeed'])], 'purple')
+txt(90, 1031, 'Families accept independently and deliver in issue order through the head family. Settle trailing writes and the pin against the original instruction ID.', 23, C['muted'])
 
-lane(52, 1090, 2136, 280, '完成与同步', C['orangefill'], C['orange'])
-chain(1164, [('末 op_load / dot', ['最后操作数已复制进 R_OP', '已发微块仍保留身份']),
-            ('local_done', ['本核本 id 的读、算术、写', '及真实 ACK 责任已结清']),
-            ('engine 收尾', ['汇合四核及 loader / 快照', '归还 handle，发布 done']),
-            ('TC tracker', ['按 id 接受一次最终完成', '结算本 issuer 的 commit']),
-            ('mbarrier', ['arrival → phase', 'wait 按实际 acquire 唤醒'])], 'orange')
-txt(90, 1336, '首片交接在数据通路，最终完成在 tracker。stop 后继续排空三个命令记录、部分分发、已展示请求及写 ACK。', 23, C['muted'])
+lane(52, 1090, 2136, 280, 'Completion and synchronization', C['orangefill'], C['orange'])
+chain(1164, [('Final op_load / dot', ['Last operands copied into R_OP', 'Issued microtiles retain their identities']),
+            ('local_done', ['All reads, computation, writes, and ACKs', 'for this core and ID have settled']),
+            ('Engine completion', ['Join four cores, loader, and snapshots', 'Return handle and publish done']),
+            ('TC tracker', ['Accept one final completion per ID', "Settle this issuer's commit"]),
+            ('mbarrier', ['arrival → phase', 'Wait succeeds after acquire ACK'])], 'orange')
+txt(90, 1336, 'The data path hands off first issue. The tracker receives final completion. After stop, drain all three records, partial deliveries, presented requests, and write ACKs.', 23, C['muted'])
 
-lane(52, 1395, 2136, 530, '稳态 N128 FP16 同址累加  /  对齐 K-major、已预热、无竞争，以下为握手沿', C['bluefill'], C['blue'])
-txt(92, 1486, '前条 dot   0 … 63', 30, C['purple'])
-txt(850, 1486, '后条 dot   64 … 127', 30, C['teal'])
+lane(52, 1395, 2136, 530, 'Steady-state N128 FP16 in-place accumulation  /  Aligned K-major, warm, uncontended. Numbers denote handshake edges.', C['bluefill'], C['blue'])
+txt(92, 1486, 'Previous dots   0 … 63', 30, C['purple'])
+txt(850, 1486, 'Next dots   64 … 127', 30, C['teal'])
 rect(92, 1520, 754, 16, C['purple'], radius=0)
 rect(846, 1520, 754, 16, C['teal'], radius=0)
-txt(1650, 1528, '首发间隔 64 拍', 25)
-txt(92, 1594, '后条 C0    58 / 59 grant → 61 / 62 返回 → 63 装 R_OP → 64 首 dot', 28)
-txt(92, 1654, '后条 C1    62 / 63 grant → 65 / 66 返回 → 67 装 R_OP → 68 块 1 首 dot', 28)
-txt(92, 1724, '前条写尾    68 末片入 D → 69 / 70 接受写 → 71 末写提交 → 72 末 ACK', 28)
-txt(92, 1784, '前条完成    73 接受 local_done → 74 资源交还并发布 done → 75 tracker 最早接受', 28)
-txt(92, 1870, '两条指令的数据共用 128 B/拍 SMEM；一般布局、其他客户端、迟到 ACK 与输出反压按真实边沿计时。', 23, C['muted'])
-lane(52, 1950, 2136, 340, 'TMA  /  单 walker，各 copy 共用后端峰值 128 B/拍', C['tealfill'], C['teal'])
+txt(1650, 1528, '64 cycles between first dots', 25)
+txt(92, 1594, 'Next C0    Grant 58/59 → return 61/62 → load R_OP at 63 → first dot at 64', 28)
+txt(92, 1654, 'Next C1    Grant 62/63 → return 65/66 → load R_OP at 67 → first dot of block 1 at 68', 28)
+txt(92, 1724, 'Previous writes    Last result enters D at 68 → writes accepted at 69/70 → final write commits at 71 → final ACK at 72', 28)
+txt(92, 1784, 'Previous completion    Accept local_done at 73 → return resources and publish done at 74 → earliest tracker acceptance at 75', 28)
+txt(92, 1870, 'Both commands share 128 B/cycle of SMEM. For other layouts, competing clients, late ACKs, or output stalls, use actual handshake edges.', 23, C['muted'])
+lane(52, 1950, 2136, 340, 'TMA  /  One walker, with all copies sharing a peak of 128 B/cycle', C['tealfill'], C['teal'])
 xs = [90, 510, 930, 1350, 1770]
 for i, (title, body) in enumerate([
-        ('GMEM / L2', ['128 B 行 · 9-bit ID', '返回受阻时保持 ID 与数据']),
-        ('16 × 128 B 数据 RAM', ['load 收到返回时分槽', 'store 读 SMEM 前预留槽']),
-        ('共享 SMEM / client 8', ['八组各 16 B · 独立握手', '每组四个 32-bit bank']),
-        ('tracker / 64 个事务 tag', ['在途命令按 ticket 结算', '真实写 ACK 按原 tag 结算']),
-        ('copy 完成', ['load → mbarrier 确认', 'store → bulk group full'])]):
+        ('GMEM / L2', ['128 B line · 9-bit ID', 'Hold ID and data on a stalled return']),
+        ('16 × 128 B data RAM', ['Load takes a slot on return', 'Store reserves a slot before reading SMEM']),
+        ('Shared SMEM / client 8', ['Eight independent 16 B group ports', 'Four 32-bit banks per group']),
+        ('Tracker / 64 transaction tags', ['Track in-flight commands by ticket', 'Match actual write ACKs by original tag']),
+        ('Copy completion', ['Load → mbarrier acknowledgment', 'store → bulk group full'])]):
     node(xs[i], 2020, title, body, 'teal', 355, 142)
     if i in (1, 2):
         left, right = xs[i-1]+355, xs[i]-4
@@ -161,8 +161,8 @@ for i, (title, body) in enumerate([
 for i in (3, 4):
     line([(xs[i-1]+355,2091),(xs[i]-4,2091)], C['orange'], 3, arrow=True)
 line([(267,2163),(267,2192),(1527,2192),(1527,2164)], C['orange'], 3, arrow=True)
-txt(90, 2224, '数据向右 load、向左 store。最后一组 SMEM 写或整行 GMEM 写被接受即释放数据槽。', 23, C['muted'])
-txt(90, 2258, '橙线为完成通路：load 收各组 SMEM 写 ACK，store 收 GMEM 写 ACK。store 的 .read 在全部源读完成后即可放行。', 23, C['muted'])
+txt(90, 2224, 'Loads move right and stores move left. Release the data slot on acceptance of the final SMEM group write or the GMEM line write.', 23, C['muted'])
+txt(90, 2258, 'Orange arrows show completion. Loads collect per-group SMEM write ACKs and stores collect GMEM write ACKs. Store .read may complete once all source reads finish.', 23, C['muted'])
 svg.append('</svg>')
 (OUT/'tensor_core_tmem_pipeline.svg').write_text('\n'.join(svg))
 im.save(OUT/'tensor_core_tmem_pipeline.png')

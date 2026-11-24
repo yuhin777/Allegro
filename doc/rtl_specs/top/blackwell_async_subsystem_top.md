@@ -2,246 +2,246 @@
 
 ## Description
 
-本模块把一个 SM100a 单 CTA 的异步执行单元接到 warp 指令前端、RF、LSU、GMEM 和 ordering 服务。顶层负责联合接受、共享端口路由及 CTA 生命周期；外围负责解码、warp 收敛和程序序。入口命令见 [PTX 支持范围](../../proposals/supported_ptx.md)。
+Connects one SM100a single-CTA asynchronous backend to the warp instruction front end, RF, LSU, GMEM, and ordering services. The top level handles joint acceptance, shared port routing, and CTA lifetime. The surrounding system handles decode, warp convergence, and program order. See [Supported PTX](../../proposals/supported_ptx.md) for ingress commands.
 
-| 信号 / 通道 | 方向、类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| mma_cmd / tc_op_done | 入 [mma_cmd_t](../tensor_core/blackwell_tc_mma_engine.md#mma-command) / 出 [op_done_t](#identity) | warp 前端 | 三个命令记录的每次接受均与tracker.register_op原子登记；每个id仅完成一次 |
-| tc_commit / tc_commit_done | 入 [tc_commit_t](../tensor_core/blackwell_tc_completion_tracker.md#commit-contract) / 出 op_done_t | warp 前端 | 捕获当前 issuer 的旧前缀，对目标本地对象提交一次 |
-| tmem_manage / tmem_manage_rsp | 入/出 [tmem_manage_cmd_t](../tmem/blackwell_tmem_manager.md#management-types) / [tmem_manage_rsp_t](../tmem/blackwell_tmem_manager.md#management-types) | 管理前端 | 管理前端负责 ALLOC 的 [dst] 普通 SMEM 弱写与同址顺序 |
-| tmem_alloc_credit | 出，1 bit 电平 | 管理前端的 warp 仲裁器 | 直连 manager.alloc_credit_o；仲裁器在驱动 tmem_manage.valid 前据此筛选 ALLOC，DEALLOC 可独立参选。[准入与归还沿](../tmem/blackwell_tmem_manager.md#alloc-admission) |
-| tmem_ldst / tmem_ldst_done；rf_store / rf_load | 入/出 [tmem_ldst_cmd_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) / op_done_t；入/出 [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) | warp 前端、RF | 外部预留每个目标 RF，最后 load beat 接受后才可结算读依赖 |
-| tmem_wait / tmem_wait_done | 入 [tmem_wait_cmd_t](../tmem/blackwell_tmem_wait_tracker.md#wait-types) / 出 op_done_t | warp 前端 | 软件 wait::st 截止前同 warp 的 store |
-| tma_cmd / tma_rsp | 入 [tma_cmd_t](../tma/blackwell_tma_unit.md#command) / 出 [tma_rsp_t](../tma/blackwell_tma_unit.md#command) | warp 前端 | load、store、prefetch.tensormap、bulk group |
-| bar_cmd / bar_rsp | 入 [bar_cmd_t](../mbarrier/blackwell_mbarrier_frontend.md#command) / 出 [bar_rsp_t](../mbarrier/blackwell_mbarrier_frontend.md#command) | warp 前端 | init、arrive、try_wait、inval 等及相应可见性 |
-| smem_rd/rsp、smem_wr/ack [8] | 入请求/出返回，各自 SMEM atom 类型 | 外围 LSU | 外部 LSU client12；普通访问不得绕过活跃 barrier 的权威对象 |
-| gmem_req / gmem_rsp | 出/入 [gmem_req_t](../tma/blackwell_tma_unit.md#gmem-types) / [gmem_rsp_t](../tma/blackwell_tma_unit.md#gmem-types) | GMEM | TMA 数据与 descriptor 共用 128 B 通道，9-bit ID 路由乱序回应，gmem_rsp_ready 独立于 gmem_req_ready |
-| order_req / order_rsp | 出/入 [order_req_t](#ordering) / [order_rsp_t](#ordering) | ordering 服务 | release/acquire/proxy/init fence 与最终 CTA_CLOSE |
-| close_req/rsp、open_req/rsp | 入事件/出 status；入 epoch16/出 status | CTA 控制器 | 完整关闭事务，隔离后打开新 epoch |
-| lsu_quiescent、isolated | 入 bit | 外围 LSU、隔离控制 | 旧 LSU 工作及其可见性责任已完成；外部复位前响应已隔离 |
-| epoch、stopped、drained、fault | 出 16/1/1/1 bit | CTA 控制器 | 当前 epoch、正常关闭、在途排空、运行终止（sticky）。 |
-| clk、rst_n | 入，各 1 bit | 外围时钟与复位 | 上升沿采样，低有效同步复位。 |
+| mma_cmd / tc_op_done | Input [mma_cmd_t](../tensor_core/blackwell_tc_mma_engine.md#mma-command) / output [op_done_t](#identity) | Warp front end | Each acceptance in the three command records registers atomically with tracker.register_op. Each ID completes once |
+| tc_commit / tc_commit_done | Input [tc_commit_t](../tensor_core/blackwell_tc_completion_tracker.md#commit-contract) / output op_done_t | Warp front end | Capture the current issuer's earlier operations and submit once to the target local object |
+| tmem_manage / tmem_manage_rsp | Input/output [tmem_manage_cmd_t](../tmem/blackwell_tmem_manager.md#management-types) / [tmem_manage_rsp_t](../tmem/blackwell_tmem_manager.md#management-types) | Management front end | The management front end handles the ordinary weak SMEM write to ALLOC [dst] and same-address order |
+| tmem_alloc_credit | Output, 1-bit level | Management front-end warp arbiter | Connect directly to manager.alloc_credit_o. The arbiter filters ALLOC before driving tmem_manage.valid. DEALLOC is independently eligible. [Admission and release edges](../tmem/blackwell_tmem_manager.md#alloc-admission) |
+| tmem_ldst / tmem_ldst_done, rf_store / rf_load | Input/output [tmem_ldst_cmd_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) / op_done_t and input/output [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) | Warp front end, RF | The external system reserves each RF destination. Settle the read dependency only after final load beat acceptance |
+| tmem_wait / tmem_wait_done | Input [tmem_wait_cmd_t](../tmem/blackwell_tmem_wait_tracker.md#wait-types) / output op_done_t | Warp front end | Software wait::st covers same-warp stores before its cutoff |
+| tma_cmd / tma_rsp | Input [tma_cmd_t](../tma/blackwell_tma_unit.md#command) / output [tma_rsp_t](../tma/blackwell_tma_unit.md#command) | Warp front end | load, store, prefetch.tensormap, bulk group |
+| bar_cmd / bar_rsp | Input [bar_cmd_t](../mbarrier/blackwell_mbarrier_frontend.md#command) / output [bar_rsp_t](../mbarrier/blackwell_mbarrier_frontend.md#command) | Warp front end | init, arrive, try_wait, inval, and their visibility operations |
+| smem_rd/rsp, smem_wr/ack [8] | Request input/return output, each an SMEM atom type | External LSU | External LSU client12. Ordinary accesses must not bypass the authoritative active barrier object |
+| gmem_req / gmem_rsp | Output/input [gmem_req_t](../tma/blackwell_tma_unit.md#gmem-types) / [gmem_rsp_t](../tma/blackwell_tma_unit.md#gmem-types) | GMEM | TMA data and descriptors share a 128 B channel. A 9-bit ID routes out-of-order replies. gmem_rsp_ready is independent of gmem_req_ready |
+| order_req / order_rsp | Output/input [order_req_t](#ordering) / [order_rsp_t](#ordering) | Ordering service | release/acquire/proxy/init fence and final CTA_CLOSE |
+| close_req/rsp, open_req/rsp | Event input/status output, epoch16 input/status output | CTA controller | Complete close transaction, open new epoch after isolation |
+| lsu_quiescent, isolated | Bit input | External LSU, isolation control | Old LSU work and its visibility obligations complete / external responses isolated before reset |
+| epoch, stopped, drained, fault | Outputs 16/1/1/1 bits | CTA controller | Current epoch, normal closure, outstanding work drained, and run termination (sticky). |
+| clk, rst_n | Inputs, 1 bit each | External clock and reset | Rising-edge sampling, active-low synchronous reset. |
 
 ```mermaid
 flowchart LR
- FE[前端 / RF] --> ENG[MMA engine]
+ FE["Front end / RF"] --> ENG[MMA engine]
  ENG --> CO[4 x core / dot array]
  ENG --> SB[scale B snapshot]
- ENG --> BL[B loader / 两个256 B装配槽]
+ ENG --> BL["B loader / two 256 B assembly slots"]
  BL --> CO
  FE --> RF[LDST / wait tracker]
  CO & SB & RF --> TF[TMEM fabric / 4 x partition]
  ENG & RF --> MAN[TMEM manager]
- CO --> SF[共享 SMEM fabric]
+ CO --> SF["Shared SMEM fabric"]
  BL --> SF
  ENG --> TRACK[TC tracker] --> BR[completion bridge] --> BAR[bar frontend]
  FE --> TMA[TMA unit / cache / setup / walker / data / tracker]
- TMA <-->|八组各 16 B| SF
+ TMA <-->|Eight 16 B groups| SF
  GM[GMEM] <-->|128 B / 9-bit ID| TMA
  TMA --> BAR
  BAR <--> UNIT[bar unit / backing]
  BAR <--> WAIT[bar wait]
  UNIT --> WAIT
  UNIT --> SF
- TMA & BAR & WAIT --> ORD[外部 ordering]
+ TMA & BAR & WAIT --> ORD["External ordering"]
 ```
 
 ## Functionality
 
 <a id="common-protocol"></a>
 
-### 公共协议、复位及状态码
+### Common protocol, reset, and status codes
 
-#### 时钟与握手
+#### Clock and handshakes
 
-- 单时钟 `clk`，上升沿采样；`rst_n` 为低有效**同步**复位。时序模块端口表可省略共有的时钟和复位。组合算术模块无时钟，SRAM 的数据和 Q 无复位端口。
-- 表中的 `x : T` 是逻辑通道，展开为 `x_valid`、`x_ready`、`x_payload : T`。发送端输出 valid/payload，接收端输出 ready；数组通道每项独立握手。没有 payload 的事件仍有 valid/ready。
-- `fire(t)=valid(t-) && ready(t-)`，`t-` 是边沿 t 前；寄存器新值在 t 后可见，最早在 t+1 被下游采样。组合函数没有隐藏寄存器。
-- GMEM 外围提供可暂停的返回通道。gmem_rsp_valid 已置位而 ready=0 时，ID、1024-bit 数据和 status 必须稳定至 fire。接入无法暂停的 L2 时，适配器必须在发出每笔请求前为该笔返回取得可靠存储空间，耗尽 credit 时停发新请求；返回被 TMA 接收后归还 credit。每笔承诺须覆盖完整回应，实际可发数受适配器 credit 和空闲 tag 双重限制；适配器存储另计。新请求停发不得阻断已发事务返回、SMEM 写及其确认。[GMEM 类型与 class](../tma/blackwell_tma_unit.md#gmem-types)
-- `valid && !ready` 时 valid 和全部 payload/tag 保持。发送端不能等待 ready 才产生 valid；ready 可依赖本地容量和下游 ready，但跨模块不得形成组合环。
-- 单级暂停和 FIFO 满时同沿出入的状态方程分别见 [弹性寄存器](../base/blackwell_pipeline_reg.md) 与 [FIFO](../base/blackwell_fifo.md)。
-- 多个通道需原子接受时，接收端仅在全部资源可预留时拉高 ready；不能先消费一侧再等待另一侧而丢失身份。顶层明确标出的原子接受组允许用另一端的容量ready限定valid，但必须证明ready不依赖本组valid且在joint fire前保留容量；该例外不适用于普通通道。
+- One clock `clk`, sampled on the rising edge. `rst_n` is an active-low **synchronous** reset. Sequential module port tables may omit the common clock/reset. Combinational arithmetic modules have no clock. SRAM data and Q have no reset port.
+- In tables, `x : T` denotes a logical channel expanded into `x_valid`, `x_ready`, and `x_payload : T`. The source drives valid/payload and the sink drives ready. Array entries handshake independently. Events without payload still have valid/ready.
+- `fire(t)=valid(t-) && ready(t-)`, where `t-` denotes the instant before edge t. New register values are visible after t and may be sampled downstream at t+1 at the earliest. Combinational functions contain no hidden registers.
+- The external GMEM interface provides a stallable response channel. With gmem_rsp_valid asserted and ready=0, hold ID, 1024-bit data, and status stable until fire. For a nonstallable L2, the adapter must obtain guaranteed storage for each complete reply before issuing its request and stop issuing when credits run out. Return credit when TMA accepts the response. Adapter credits and free tags jointly limit issue. Account for adapter storage separately. Stopping new requests must not block outstanding returns, SMEM writes, or their ACKs. [GMEM types and classes](../tma/blackwell_tma_unit.md#gmem-types)
+- When `valid && !ready`, hold valid and the entire payload/tag. A sender must generate valid independently of ready. ready may depend on local capacity and downstream ready but must not create a cross-module combinational loop.
+- See [Elastic register](../base/blackwell_pipeline_reg.md) and [FIFO](../base/blackwell_fifo.md) for the state equations for a stalled stage and simultaneous dequeue/enqueue in a full FIFO respectively.
+- When channels require atomic acceptance, assert ready only when all resources can be reserved. Do not consume one side and lose identity while waiting for the other. For explicitly identified top-level atomic groups, valid may be qualified by the other endpoint's capacity-ready only if ready is independent of the group's valid and capacity is retained until joint fire. This exception applies only to those groups.
 
-#### 身份、完成和复位
+#### Identity, completion, and reset
 
-完整操作身份为 [async_id_t](blackwell_async_subsystem_top.md#identity)。`seq` 在一个 epoch 的同 issuer 内唯一且不回绕。存储返回按[完整存储身份](#memory-routing)匹配。
+The full operation identity is [async_id_t](blackwell_async_subsystem_top.md#identity). `seq` is unique per issuer in an epoch and does not wrap. Match memory returns by [full memory identity](#memory-routing).
 
-接受、源读取、目的写接受、实际写完成、ACK 退休、软件响应消费是不同事件。模块的 `done` 表示其全部必要副作用已经完成；输出背压可以延迟响应消费，不能撤销已经提交的副作用。
+Acceptance, source read, destination write acceptance, actual write commit, ACK retirement, and software response consumption are separate events. A module's `done` means all required side effects have completed. Output backpressure may delay response consumption and cannot undo committed effects.
 
-正常关闭的 `stop` 封闭新外部命令；内部响应、生产者完成与排空继续。`drained` 必须包括已接受命令、请求、返回、流水和 held response；静态缓存内容不等于在途操作。
+Normal shutdown `stop` closes new external commands. Internal replies, producer completions, and drain continue. `drained` must account for accepted commands, requests, returns, pipelines, and held responses. Static cached contents alone are not outstanding operations.
 
-复位清 valid、credit、live ID、allocation 和 cache 有效位，不清 payload RAM。复位前外部存储必须取消旧事务或保证不会再返回；顶层只在取得该隔离确认后允许新 epoch。正常 epoch 切换要求全部引擎 drained、dirty barrier 写回及 ordering 完成。epoch 不用于静默丢弃仍在途的有效工作。
+Reset clears valid, credit state, live IDs, allocation, and cache valid bits. Payload RAM persists. External memory must cancel old transactions or guarantee no further responses before reset. The top permits a new epoch only after isolation acknowledgment. Normal epoch transition requires every engine drained, dirty barriers written back, and ordering complete. Never use epoch mismatch to silently discard valid in-flight work.
 
-授权换 epoch 时各模块清静态 cache/collector 有效位、allocation/permit 和本地序号，payload 保留。
+At an authorized epoch change modules clear static cache/collector valid bits, allocation/permit, and local sequence numbers while preserving payload.
 
-各模块检测到活动事务的非 OK 存储或 ordering 返回、非法内部身份、重复返回或执行期协议违约时报告 fault。管理结果的 SMEM 弱写由外围 LSU 执行，其非 OK ACK 同样进入这条故障路径。顶层汇总为一个 sticky `fault`，其寄存电平作为执行控制模块共用的 1-bit `halt_i`（端口表可省略），并通知 CTA 控制器本次运行已终止。错误事件不得推进依赖它的写回、arrival、complete-tx、成功 done 或 close。已提交的写及已完成的握手保留；已展示的 valid/payload 按接口保持到握手或外部隔离复位。检测沿只阻止依赖错误事件的成功提交，独立接口按实际 fire 结算。`halt_i=1` 期间关闭新指令及派生工作，已展示通道正常握手后不再补入新项。恢复由外围隔离旧请求、响应和 RF/ordering 接口后整体同步复位，无需先取得 drained 或 close_rsp。
+Modules report fault on non-OK memory or ordering replies to active transactions, illegal internal identities, duplicate returns, and execution protocol violations. The external LSU performs the weak SMEM write of a management result. Its non-OK ACK takes the same fault path. The top aggregates faults into sticky `fault`. Its registered level supplies the common 1-bit `halt_i` to execution control modules (it may be omitted from port tables) and signals run termination to the CTA controller. An error cannot advance a dependent writeback, arrival, complete-tx, successful done, or close. Preserve committed writes and completed handshakes. Hold already presented valid/payload until handshake or external isolated reset. On detection suppress only successful commits depending on the error and settle independent actual fires. During `halt_i=1` close new instructions and derived work. After an already presented channel handshakes, do not refill it. Recovery isolates old requests, responses, RF, and ordering interfaces externally and then applies a full synchronous reset. Neither drained nor close_rsp is required first.
 
-#### 状态码
+#### Status codes
 
-公共接口的 `status_t` 为 4 bit。入口静态拒绝使用以下编码；执行中收到异常状态时按上述 fault 合同处理。
+The common `status_t` is 4 bits. Static ingress rejections use the encodings below. Exceptional status during execution follows the fault contract above.
 
-| 值 | 名称 | 含义 |
+| Value | Name | Meaning |
 |---:|---|---|
-| 0 | OK | 成功；wait 的未满足谓词仍可为 OK |
-| 1 | UNSUPPORTED | 不属于本项目指令子集 |
-| 2 | INVALID | 字段或组合非法 |
-| 3 | RANGE | 地址、计数或大小越界 |
-| 4 | MEMORY | 外部事务错误 |
-| 5 | STALE | epoch/对象生命周期不匹配 |
-| 6 | PROTOCOL | 非 live ID、重复响应或硬件协议顺序违约（不检查软件 collector 序列） |
-| 7…15 | reserved | 不发出；接收时视为 PROTOCOL |
+| 0 | OK | Success. An unsatisfied wait predicate may still return OK |
+| 1 | UNSUPPORTED | Outside the project instruction subset |
+| 2 | INVALID | Illegal field or combination |
+| 3 | RANGE | Address, count, or size out of range |
+| 4 | MEMORY | External transaction error |
+| 5 | STALE | Epoch/object lifetime mismatch |
+| 6 | PROTOCOL | Nonlive ID, duplicate response, or hardware protocol order violation (software collector sequences are not checked) |
+| 7…15 | reserved | Never issued. Treat as PROTOCOL if received |
 
-异步登记前的入口预检可按 UNSUPPORTED/INVALID/RANGE 拒绝非法命令。同步 TMEM 管理预检使用自己的响应槽。这些拒绝均无数据或同步副作用。只有取得 descriptor、对象或展开地址后才可发现的违约，若已登记命令则终止本次运行。合法的 tensor OOB、collector 物理 miss 和 wait 超时按各模块正常路径处理。
+Ingress precheck may reject illegal commands with UNSUPPORTED/INVALID/RANGE before asynchronous registration. Synchronous TMEM management precheck uses its own response slot. These rejections have no data or synchronization side effects. A violation discoverable only after reading a descriptor, object, or expanded address terminates the run if the command has already registered. Legal tensor OOB, physical collector misses, and wait timeouts take their modules' normal paths.
 
-#### 配置与计容
+#### Configuration and resource accounting
 
-物理配置固定为四核；TMEM 128×128×128 bit，SMEM 32×1824×32 bit。每个模块文档独占其资源深度、状态位宽和时序的定义；父模块只引用与汇总。实例数与每实例容量相乘，广播视图不算第二份存储。
+The physical configuration has four cores, TMEM of 128×128×128 bits, and SMEM of 32×1824×32 bits. Each module specification owns its resource depths, state widths, and timing. Parent modules reference and aggregate them. Multiply per-instance capacity by instance count. Broadcast views do not add a second copy of storage.
 
-数据字节、valid/tag/credit 等控制位、宏内读输出分别计量。每个新增 FIFO、暂存 payload 和格式流水均须列出，不能用“adapter”隐去存储。内部有限表满时背压，不能通过覆盖活跃项获得吞吐。
+Count data bytes, control bits such as valid/tag/credit, and macro read outputs separately. List each added FIFO, payload register, and format pipeline. An adapter's storage counts toward capacity. Backpressure when a finite table fills. Never overwrite a live entry to improve throughput.
 
-端口中 `T[N]` 是 N 条 T 元素通道或总线，是否独立握手须明确；`bits(T)` 由拥有者模块的字段之和计算。位向量按低索引元素占低位；字节地址递增对应 payload 的低位到高位。packed struct 按字段表从高位到低位排列，除非所属模块给出显式 bit/byte 编码。
+In port tables `T[N]` denotes N channels or a bus of T entries. Specify whether handshakes are independent. Compute `bits(T)` from the owning module's fields. Low-index elements occupy low bits, and ascending byte addresses map from low to high payload bits. Pack structures from high to low in field-table order unless the owner specifies explicit bit/byte encoding.
 
 <a id="identity"></a>
 
-### 公共操作身份
+### Common operation identity
 
-| 类型/字段 | 位宽 | 定义 |
+| Type/field | Width | Definition |
 |---|---:|---|
-| `async_id_t.epoch` | 16 | 当前单 CTA 生命周期；后端全部排空后才能更换 |
-| `async_id_t.issuer` | 10 | CTA 线程号；`warp=issuer[9:5]`，`lane=issuer[4:0]` |
-| `async_id_t.seq` | 32 | 外部命令使用0…0xfffffffe，递增、不回绕、不复用 |
-| `async_id_t` | 58 | packed 顺序 `{epoch,issuer,seq}` |
+| `async_id_t.epoch` | 16 | Current single-CTA lifetime, changed only after the backend drains |
+| `async_id_t.issuer` | 10 | CTA thread index, `warp=issuer[9:5]`, `lane=issuer[4:0]` |
+| `async_id_t.seq` | 32 | External commands use 0…0xfffffffe in increasing order without wrap or reuse |
+| `async_id_t` | 58 | Packed order `{epoch,issuer,seq}` |
 | `op_done_t` | 62 | `{id:async_id_t,status:status_t}` |
 
-同一 issuer 的所有命令共用递增 seq；不同 issuer 的 seq 不比较大小。调用者依每个发起线程的程序序提交TC 的 MMA/COMMIT。一次commit只覆盖当前epoch内**完整10bit issuer与自身相同**且在截止前接受的操作。同warp内不同lane各有独立集合。外部指令前端负责跨线程同步。
+All commands from one issuer share an increasing seq. Do not compare seq across issuers. The caller submits TC MMA/COMMIT in each issuing thread's program order. A commit covers only operations in its epoch accepted before the cutoff with **the same full 10-bit issuer**. Different lanes of the same warp have independent sets. The external instruction front end handles cross-thread synchronization.
 
-`{epoch,issuer=1023,seq=0xffffffff}`仅保留给顶层CTA关闭时的最终ordering，所有外部命令不得使用。其他issuer的seq=0xffffffff也不分配，避免保留号因入口差异而成为合法软件身份。
+Reserve `{epoch,issuer=1023,seq=0xffffffff}` exclusively for the top-level final ordering on CTA close. External commands must not use it. Do not allocate seq=0xffffffff for other issuers either, so the reserved number cannot become a legal software identity through another ingress.
 
 <a id="ordering"></a>
 
-### Ordering 服务
+### Ordering service
 
-`order_req_t={id:58, kind:3, scope:2, from_proxy:2, to_proxy:2, addr:64, bytes:32}` 共163bit；`order_rsp_t=op_done_t`。kind=0 RELEASE、1 ACQUIRE、2 PROXY_FENCE、3 保留、4 CTA_CLOSE、5 MBARRIER_INIT_RELEASE，其他非法。scope=0 CTA、1 GPU、2 SYS、3 CLUSTER（本 CTA 所在单 CTA cluster）；proxy=0 generic、1 async、2 tensormap，3保留。
+`order_req_t={id:58, kind:3, scope:2, from_proxy:2, to_proxy:2, addr:64, bytes:32}` totals 163 bits, with `order_rsp_t=op_done_t`. kind=0 RELEASE, 1 ACQUIRE, 2 PROXY_FENCE, 3 reserved, 4 CTA_CLOSE, 5 MBARRIER_INIT_RELEASE. Other values are invalid. scope=0 CTA, 1 GPU, 2 SYS, 3 CLUSTER (the single-CTA cluster containing this CTA). proxy=0 generic, 1 async, 2 tensormap, 3 reserved.
 
-请求按id匹配确认；同id至多一个ordering在途。除 CTA_CLOSE 外，bytes=0表示该scope下该issuer此前相关访问，非零表示半开区间[addr,addr+bytes)。加法用65bit检查溢出。
+Match acknowledgments by ID, with at most one ordering transaction outstanding per ID. Except for CTA_CLOSE, bytes=0 covers the issuer's relevant preceding accesses at the specified scope. Nonzero bytes covers the half-open range [addr,addr+bytes). Check addition overflow in 65 bits.
 
-- CTA_CLOSE：保留关闭身份，scope=CTA、addr=bytes=0、async→generic。确认必须覆盖整个待关闭 epoch 的所有 issuer 及内部 backing 写回的有限前缀；保留 issuer 仅用于路由 ACK。
-- RELEASE：对应先前写满足指定scope可见性后才确认，之后才可提交arrival等同步更新。
-- ACQUIRE：相应wait已观察成功，再向外部请求acquire；其确认后才能返回软件成功wait。
-- PROXY_FENCE：确认from_proxy的先前写可被to_proxy的后续访问观察。
-- MBARRIER_INIT_RELEASE：先前该 issuer 在本 CTA 初始化的对象均已提交，再向单 CTA cluster 发布其初始化，匹配 ACK 后才能放行后继同步。
+- CTA_CLOSE uses the reserved close identity, scope=CTA, addr=bytes=0, and async→generic. The ACK must cover the finite prefix of work from all issuers in the closing epoch, including internal backing writebacks. The reserved issuer serves only to route the ACK.
+- RELEASE acknowledges only after prior writes satisfy visibility at the specified scope. Synchronization updates such as arrival can commit afterward.
+- ACQUIRE follows successful phase observation by the wait. Return a successful software wait only after external acquire acknowledgment.
+- PROXY_FENCE confirms that subsequent to_proxy accesses can observe earlier from_proxy writes.
+- MBARRIER_INIT_RELEASE first requires all earlier objects initialized by this issuer in the CTA to have committed. Publish their initialization to the single-CTA cluster. Release subsequent synchronization only after a matching ACK.
 
-外部排序适配器不得无条件回OK。顶层测试环境须显式实现这些契约，或证明其单时钟内存模型已经满足后再确认。TMA copy 的隐式可见性由每笔目标写的成功 ACK 承诺。显式 proxy fence、barrier release/acquire 和 CTA_CLOSE 仍各自取得 ordering 确认。
+The external ordering adapter must not return OK unconditionally. The top-level fixture must implement these contracts or establish that its single-clock memory model satisfies them before acknowledgment. For TMA copy, each successful destination write ACK guarantees implicit visibility for that write. Explicit proxy fence, barrier release/acquire, and CTA_CLOSE still require their own ordering acknowledgments.
 
 <a id="memory-routing"></a>
 
-### 公共存储身份与类型入口
+### Common memory identity and type references
 
-`mem_tag_t={id:async_id_t,client:u4,token:u16}`，78bit。同一接口内，每个未交付的源读或未退休的写 ACK 都以完整 tag 区分。在同一 id、client 内，token 须保留到对应返回或 ACK 退休。不同命令可同时使用同一 client 和 token，返回仍归各自 id。
+`mem_tag_t={id:async_id_t,client:u4,token:u16}` is 78 bits. On a given interface the full tag distinguishes each undelivered source read or unretired write ACK. Within an ID/client retain the token until its return or ACK retires. Different commands can use the same client and token simultaneously. Their responses still belong to their respective IDs.
 
-| client | 唯一用途 |
+| client | Purpose |
 |---:|---|
-| 0…3 | 四核TMEM访问及SMEM A |
-| 4 | scale B snapshot，仅TMEM |
-| 5 | RF LD/ST，仅TMEM |
-| 6 | 共享B loader，仅SMEM |
-| 7、10、13…15 | 保留 |
+| 0…3 | TMEM for four cores and SMEM A |
+| 4 | Scale B snapshot, TMEM only |
+| 5 | RF LD/ST, TMEM only |
+| 6 | Shared B loader, SMEM only |
+| 7, 10, 13…15 | Reserved |
 | 8 | TMA data |
-| 9 | TMA descriptor的外部存储身份类别 |
+| 9 | External memory identity class for TMA descriptors |
 | 11 | mbarrier backing |
-| 12 | 外围普通SMEM LSU |
+| 12 | External ordinary SMEM LSU |
 
-| 类型/语义 | 唯一拥有者 |
+| Type/semantics | Owner |
 |---|---|
-| TMEM地址、MMA布局、tmem_rd/wr请求与rsp/ack | [TMEM fabric](../tmem/blackwell_tmem_fabric.md#transactions) |
-| SMEM地址、分离及联合smem_atom请求/返回 | [SMEM fabric](../smem/blackwell_smem_fabric.md#transactions) |
-| GMEM 128 B请求/返回、gmem_id_t | [TMA unit](../tma/blackwell_tma_unit.md#gmem-types) |
-| ordering请求/确认 | [本模块ordering](#ordering) |
-| MMA命令/descriptor、B选择与驻留key | [MMA engine](../tensor_core/blackwell_tc_mma_engine.md#mma-command) |
+| TMEM addresses, MMA layout, tmem_rd/wr requests and rsp/ack | [TMEM fabric](../tmem/blackwell_tmem_fabric.md#transactions) |
+| SMEM addresses, separate and combined smem_atom requests/returns | [SMEM fabric](../smem/blackwell_smem_fabric.md#transactions) |
+| GMEM 128 B requests/returns and gmem_id_t | [TMA unit](../tma/blackwell_tma_unit.md#gmem-types) |
+| Ordering requests and acknowledgments | [Ordering in this module](#ordering) |
+| MMA command/descriptor, B selection and residency key | [MMA engine](../tensor_core/blackwell_tc_mma_engine.md#mma-command) |
 | B load/data/result | [B loader](../tensor_core/blackwell_tc_b_loader.md#types) |
-| RF命令/beat、wait及完成登记 | [LDST](../tmem/blackwell_tmem_ldst_engine.md#rf-types)、[wait tracker](../tmem/blackwell_tmem_wait_tracker.md#wait-types) |
-| TMA context/segment/tag 事件 | [setup](../tma/blackwell_tma_setup.md#context)、[request generator](../tma/blackwell_tma_request_generator.md#segment)、[tracker](../tma/blackwell_tma_completion_tracker.md#transfer-types) |
+| RF command/beat, wait and completion registration | [LDST](../tmem/blackwell_tmem_ldst_engine.md#rf-types), [wait tracker](../tmem/blackwell_tmem_wait_tracker.md#wait-types) |
+| TMA context/segment/tag events | [setup](../tma/blackwell_tma_setup.md#context), [request generator](../tma/blackwell_tma_request_generator.md#segment), [tracker](../tma/blackwell_tma_completion_tracker.md#transfer-types) |
 
-帧数组的各atom独立valid/ready，不把整帧全ready作为通常条件。容量预留与部分接受不能复制已完成事务；未接受payload保持。物理SRAM、返回、ACK状态分别由fabric/partition拥有，父层只路由。缓存静态数据不等于在途工作；close时仍须结清三个命令记录、两个装配槽和部分分发和全部held结果。
+Frame arrays have independent valid/ready per atom. Do not generally require a whole frame to be ready. Reservation and partial acceptance must not duplicate completed transactions. Hold unaccepted payload. Fabric/partition own their physical SRAM, return, and ACK state. Parents only route. Static cached data does not constitute in-flight work. Close still waits for three command records, two assembly slots, partial distribution, and all held results.
 
-### 内部连接及预留
+### Internal connections and reservations
 
-| 产生 → 消费 | 通道、状态及其释放 |
+| Producer → consumer | Channel, state, and release |
 |---|---|
-| MMA cmd → engine + TC tracker | joint fire。令 re/rt 为与本组 valid 无关且为当前命令保留的 capacity ready。external_ready=re&&rt、engine_valid=v&&rt、register_valid=v&&re。engine_done 写预留操作行，不依赖软件 op_done.ready，发射切换不重登。 |
-| TC tracker → bridge ↔ bar frontend | ready_commit 带 slot 和含 id/地址的 commit，bar_req/rsp 只提交一次。软件 commit_done 消费后 retire 才释放槽。commit 候选 addr 接 frontend.commit_candidate_addr，commit_blocked 时不登记；允许已登记事务继续。 |
-| engine / LDST ↔ manager | 两来源公平仲裁 pin，保留 source/id 到响应交付。固定 user 对应 MMA rec 0…2、LD、ST。unpin 独立轮询，可在 pin_rsp 背压期间释放使用位。 |
-| R_RF_ISSUE ↔ RF tracker → LDST | 外部 ldst 接受同沿分配 live 行，顶层持 cmd92，slot 返回后保存 slot5 并发 issue97，再释放。普通 done 终端不以 wait_done 为接收前提。 |
-| engine → SMEM / TMEM fabric | live[3] 为按接受序排列的 {valid1,rec2,id58}，最老在前。SMEM 在 R_BREQ 入口用 live 比较同组 A 候选的年龄。TMEM 依据本地核请求的 token.kind 识别 C 读。各模块共用同一 epoch。 |
-| TMA ↔ frontend | bind_req/rsp 先于首笔 load；producer_done/rsp 直接成对路由，不借用软件响应槽。每个成功绑定的 load 在正常执行中只提交一次 complete-tx。 |
-| frontend ↔ unit ↔ backing；frontend ↔ wait | service_req/rsp 的 route/slot 预留；unit.change 无背压广播；wait.probe 经 frontend 查询，wait 与旧 commit 的同址 busy 供 INIT/INVAL 排他 gate 使用；写回与回填由 backing 唯一发起。 |
-| 各执行模块 → top → CTA 控制器及各模块 | 本地运行故障汇总为终止电平，隔离复位优先于正常关闭。 |
+| MMA cmd → engine + TC tracker | Joint fire. Let re/rt be the capacity-ready signals reserved for this command, independent of group valid. external_ready=re&&rt, engine_valid=v&&rt, register_valid=v&&re. engine_done writes the reserved operation entry independently of software op_done.ready. Issue handoff does not reregister it. |
+| TC tracker → bridge ↔ bar frontend | ready_commit carries slot and the commit ID/address. bar_req/rsp submits once. The slot is released on retire, after software consumes commit_done. Connect candidate commit addr to frontend.commit_candidate_addr. Suppress new registration when commit_blocked and let registered transactions proceed. |
+| engine / LDST ↔ manager | Arbitrate pins fairly between two sources and retain source/ID through response delivery. Fixed users correspond to MMA rec 0…2, LD, and ST. Unpin arbitrates independently and may release a use bit while pin_rsp is stalled. |
+| R_RF_ISSUE ↔ RF tracker → LDST | Allocate a live entry on external ldst acceptance. The top holds cmd92, saves slot5 when slot returns, sends issue97, then releases its record. Ordinary done acceptance is independent of wait_done. |
+| engine → SMEM / TMEM fabric | live[3] holds {valid1,rec2,id58} in acceptance order, oldest first. SMEM uses live at R_BREQ ingress to compare ages of same-group A candidates. TMEM identifies C reads from the local core's token.kind. Modules share one epoch. |
+| TMA ↔ frontend | bind_req/rsp precedes the first load request. Route producer_done/rsp directly as a pair with separate storage from software responses. During normal execution each successfully bound load submits exactly one complete-tx. |
+| frontend ↔ unit ↔ backing, frontend ↔ wait | Reserve service_req/rsp by route/slot. unit.change broadcasts without backpressure. wait.probe queries through the front end. Same-address busy from waits and old commits feeds the INIT/INVAL exclusive gate. Only backing initiates writeback and refill. |
+| Execution modules → top → CTA controller and modules | Aggregate local runtime faults into a termination level. Isolated reset takes priority over normal close. |
 
-前端负责程序序，MMA 交接及逐块同址依赖见 [MMA core](../tensor_core/blackwell_tc_mma_core.md)。bar.sync、线程同步和 RF 依赖仍按外部可见性、RF 写回和 fence 结算。
+The front end enforces program order. See [MMA core](../tensor_core/blackwell_tc_mma_core.md) for MMA handoff and blockwise same-address dependencies. Settle bar.sync, thread synchronization, and RF dependencies according to actual external visibility, RF writeback, and fences.
 
-### 路由、时序与生命周期
+### Routing, timing, and lifetime
 
-TMEM client0…3=core、4=scale B、5=LDST，各有 128 条 lane 路由。SMEM client0…3=core A、6=B loader、8=TMA data、11=barrier backing、12=外围 LSU（含管理结果普通写）。每 client 按 group=(addr>>4)&7 选择 8 个 atom 口。TMA req[g] 固定接 client8 的组 g，按 write 分至 wr_req[8][g] 或 rd_req[8][g]。wr_ack[8][g]、rd_rsp[8][g] 复接该组的 rsp[g] 并保留方向与原 tag，八路 ready 独立。同组两类回应竞争时在可接收的候选间轮询，选中并展示后锁至 fire；其他组可同时退休。各 copy 的读写按组和 tag 区分。[client8 的 token](../tma/blackwell_tma_completion_tracker.md#transfer-types) 携事务 tag、组号和 phase，数据槽可在写请求接受后复用。backing 单口在候选组间轮询，已展示的回应保持。
+TMEM clients0…3 are the cores, 4 is scale B, and 5 is LDST, each with 128 lane routes. SMEM clients0…3 are core A, 6 is B loader, 8 is TMA data, 11 is barrier backing, and 12 is external LSU (including ordinary management result writes). Each client selects one of eight atom ports by group=(addr>>4)&7. TMA req[g] connects to client8 group g and routes by write to wr_req[8][g] or rd_req[8][g]. Multiplex wr_ack[8][g] and rd_rsp[8][g] onto rsp[g], preserving direction and original tag. All eight readies are independent. If both response classes compete in one group, round-robin among acceptable candidates, then lock the presented selection until fire. Other groups may retire concurrently. Group and tag distinguish each copy's reads and writes. The [client8 token](../tma/blackwell_tma_completion_tracker.md#transfer-types) carries transaction tag, group, and phase. Reuse its data slot after write request acceptance. The single backing port round-robins among candidate groups and holds a presented reply.
 
-ordering 来源为 TMA unit（含 proxy fence）、bar frontend（含 init-release fence）、wait 与最终 close。公平轮询，保存一个 held/source 和一个在途 source/id 到匹配 ACK。bar frontend 发 init release 前等待此前 init 对象实际提交；本地 singleton cluster 之外的访问拒绝。ordering ACK 的服务不得依赖后续软件 wait 消费。关闭时的保留 id 只作路由，kind=CTA_CLOSE 覆盖所有 issuer，包括内部 dirty backing 写。
+Ordering sources are the TMA unit (including proxy fence), barrier front end (including init-release fence), wait, and final close. Round-robin fairly. Keep one held selection/source and one outstanding source/ID until matching ACK. Before init release, the barrier front end waits for actual commit of preceding init objects. Reject accesses outside the local singleton cluster. Ordering ACK service must be independent of subsequent software wait consumption. At close the reserved ID serves routing only. kind=CTA_CLOSE covers all issuers, including internal dirty backing writes.
 
-| 生命周期 | 进入和退出条件 |
+| Lifetime | Entry and exit conditions |
 |---|---|
-| CLOSED / OPEN_RESULT | 同步复位将状态置为 CLOSED、16-bit `epoch` 置为 0。在 CLOSED，首次和后续 open 都要求 `isolated && open.epoch != epoch`，因此首次可用值为 1…65535。open 握手沿锁存新 epoch，子模块在观察到新 epoch 时按各自规则初始化。open_rsp 消费后进入 RUN，首条命令最早在下一沿接受。 |
-| RUN → DRAIN | 全部外部指令 valid 为 0、无 held 命令后接受 close，停止新指令；已接受的派生 issue、读写、RF、producer、done、ordering 继续。 |
-| DRAIN → FLUSH | 全部已接受操作、tracker live 行、held 返回和外部 LSU 工作完成，lsu_quiescent 有效。 |
-| FLUSH → ORDER | dirty 对象逐项写回并收到实际成功 ACK，随后发一次 CTA_CLOSE。 |
-| ORDER → END | 收到匹配的成功 CTA_CLOSE ACK。 |
-| END → CLOSED | manager 无 pin 或 held 响应时接受 epoch_end，清 allocation。消费最终 close_rsp 后保留旧 epoch 供下次 open 比较。 |
+| CLOSED / OPEN_RESULT | Synchronous reset enters CLOSED and sets 16-bit `epoch` to 0. In CLOSED, all open operations including the first require `isolated && open.epoch != epoch`, so the first permitted value is 1…65535. Latch the new epoch on open handshake. Submodules initialize by their own rules upon observing the new epoch. Enter RUN after open_rsp consumption. The earliest first command acceptance is the next edge. |
+| RUN → DRAIN | Accept close once all external instruction valid signals are zero and no command is held. Block new instructions. Continue derived issue, reads/writes, RF, producers, done, and ordering for accepted work. |
+| DRAIN → FLUSH | All accepted operations, tracker live entries, held returns, and external LSU work have finished. lsu_quiescent is asserted. |
+| FLUSH → ORDER | Write back dirty objects individually and receive their actual successful ACKs, then issue CTA_CLOSE once. |
+| ORDER → END | Receive the matching successful CTA_CLOSE ACK. |
+| END → CLOSED | Once free of pins and held responses the manager accepts epoch_end and clears allocation. After final close_rsp consumption retain the old epoch for comparison on the next open. |
 
-顶层保存 epoch/FSM、fault、仲裁 held/source、在途 ordering 与 pin 身份、R_RF_ISSUE、flush/close-order 握手状态及最终响应 valid。正常关闭的结果只在 END 后发布。
+The top holds epoch/FSM, fault, arbiter held/source, outstanding ordering and pin identities, R_RF_ISSUE, flush/close-order handshake state, and final response valid. Publish normal close result only after END.
 
 <a id="mma-nonempty-commit"></a>
 
-### 跨 issuer 的非空 commit
+### Nonempty commits across issuers
 
-同一 CTA、epoch、warp 的线程 5（A）先发普通 FP16 MMA 写 X，线程 6（B）随后发 MMA 写 Y。B 的 register_op 已 fire 且其 engine_done 尚未 fire 时，B 发 commit 到已初始化、只差一次 arrival 的独立 barrier。检查快照 pending 恰含 B 的操作。令 X/Y 列区间不相交、input_d=0，各源与目的没有跨指令别名。用普通 MMA 合法的 disable_lane_mask 让 A 只写 TMEM 分区 0，B 只写分区 1，避免扣住的 ACK 占用 B 所需的 bank 或 ACK 帧。
+In the same CTA, epoch, and warp, thread 5 (A) first issues an ordinary FP16 MMA writing X. Thread 6 (B) next issues an MMA writing Y. After B's register_op.fire and before its engine_done.fire, B commits to a separate initialized barrier one arrival short of completion. Verify the pending snapshot contains only B's operation. Use disjoint X/Y column ranges, input_d=0, and no cross-instruction source/destination aliases. Use the legal ordinary MMA disable_lane_mask so A writes only TMEM partition 0 and B only partition 1. Holding an ACK for A then occupies no bank or ACK frame needed by B.
 
-只扣住 A 最后一笔实际写的匹配 ACK，其余接口持续 ready。先观察 B 的全部实际写 ACK 和 unpin，再观察 engine_done(B).fire 及 B 的 barrier 原子 arrival。此时 A 仍未 done，两条 engine 记录仍占槽。再放行 A 的 ACK，观察 engine_done(A).fire，回收次序必须为 A、B；B 的通知和 arrival 各恰好一次。若 B 已收尾却必须放行 A 才能通知，则验收失败。另测 A 的末 ACK 返回 MEMORY，B 先前提交的成功结果和 arrival 保持，顶层置 fault，A 不得触发成功 arrival。
+Hold only the matching ACK for A's last actual write and keep other interfaces ready. Observe all actual B write ACKs and unpin, then engine_done(B).fire and B's atomic barrier arrival. A is still unfinished and both engine records still occupy slots. Release A's ACK and observe engine_done(A).fire. Reclaim A then B. B must notify and arrive exactly once each. If B is terminal yet cannot notify until A is released, the test fails. Also return MEMORY for A's final ACK. B's previously committed success and arrival must remain, top-level fault must assert, and A must not generate a successful arrival.
 
-### 跨模块验收
+### Cross-module acceptance
 
-- 按下述稳态窗口跟踪前三条 N128，检查预取、执行和写尾可同时推进。N256 原位换 B 时暂停一个核，检查已交付目的、该核消费水位及旧 ACK 的身份。
-- 在上面的非空 commit 用例之外，覆盖独立空 commit、同址 INIT/INVAL 与新 commit 互斥、软件响应和 acquire 背压。
-- 按 id 对齐传输、RF 写回与 mbarrier。两笔独立 load 绑定同一 phase 时，分别确认各自字节，消费 warp 等待全部 expect-tx 和 arrival 满足并取得 acquire 确认。验收数据槽满后的恢复、跨命令连续发读和第三条独立短 copy 的进展。[TMA 数据通路](../tma/blackwell_tma_data_path.md#peak) · [walker 交接用例](../tma/blackwell_tma_unit.md#copy-overlap)
-- 分别在第二 phase、descriptor、末目标 ACK、dirty flush 和最终 ordering 注入正常背压，解除后检查原事务继续；另向末 ACK 注入 MEMORY，检查 fault 和隔离复位。
+- Trace the first three N128 instructions under the steady-state window below. Check that prefetch, execution, and trailing writes can advance concurrently. For N256 in-place B replacement, stall one core and check deliveries already made, that core's consumption watermark, and the identity of old ACKs.
+- In addition to the nonempty commit above, cover independent empty commits, same-address INIT/INVAL exclusion of new commits, and backpressure on software responses and acquire.
+- Align transfers, RF writeback, and mbarrier by ID. When two independent loads bind the same phase, acknowledge each byte contribution separately. The consuming warp waits for all expect-tx and arrival obligations and successful acquire. Test recovery after data slots fill, consecutive reads across commands, and progress of a third independent short copy. [TMA data path](../tma/blackwell_tma_data_path.md#peak) · [Walker handoff example](../tma/blackwell_tma_unit.md#copy-overlap)
+- Apply normal backpressure separately during the second phase, descriptor access, final destination ACK, dirty flush, and final ordering. On release check that the original transaction continues. Separately inject MEMORY at the final ACK and check fault and isolated reset.
 
 <a id="cycles"></a>
-#### 连续 MMA 的周期边界
+#### Cycle boundaries for consecutive MMAs
 
-以 M0、M1 表示连续两条 N128 FP16→FP32 同址累加，启用全部写 lane。SMEM A/B 独立且各 4 KiB 对齐，K-major、无 swizzle、LBO=128 B、SBO=256 B。先检查/pin，分区选择及时，D 同址且四 cell 对齐，四核无背压，其他客户端无争用。布置每个 128 B 半块的八个 atom 分属八组，跨全部 32 个物理 bank。列块 j 含四个八行组，每条每核发 Q=N/2 片。表中均为握手沿，F=64i 为第 i 条 N128 的首 dot，S=F+4j；首条负数沿来自预热。
+Let M0 and M1 be successive N128 FP16→FP32 same-address accumulations with all write lanes enabled. SMEM A and B are independent and each 4 KiB aligned, K-major, with no swizzle, LBO=128 B, and SBO=256 B. Precheck/pin in advance, select partitions in time, use same-address four-cell-aligned D, and assume no core backpressure or other client contention. Map each 128 B half-block's eight atoms to distinct groups across all 32 physical banks. Column block j has four eight-row groups. Each instruction issues Q=N/2 microtiles per core. All table entries are handshake edges. F=64i is instruction i's first N128 dot and S=F+4j. Negative edges of the first instruction come from warmup.
 
-| 对象 | grant | ready 与消费 |
+| object specification | grant | Readiness and consumption |
 |---|---|---|
-| B[j] 两个 128 B 半块 | S−10、S−9 | S−8、S−7 返回；S−6 分发；S−1 首 op_load。相邻块交替用两个装配槽。 |
-| 每核 C[j] 两帧 | S−6、S−5 | S−3、S−2 返回；S−1 取首片。首 grant 可与前两块的末 op_load 同沿。 |
-| 下一条 A[r] | g=F−64+16r+4c+h | c 为核 0…3，h=0/1。每 grant 读该核八行各 16 B，g+2 返回。组 r 最晚 F−49+16r 齐，第一次 op_load 为 F+r−1。 |
+| Two 128 B halves of B[j] | S−10, S−9 | Return at S−8 and S−7, distribute at S−6, and first op_load at S−1. Adjacent blocks alternate assembly slots. |
+| Two frames per core for C[j] | S−6, S−5 | Return at S−3 and S−2. Load the first microtile at S−1. The first grant can coincide with the last op_load of the block two positions earlier. |
+| Next instruction's A[r] | g=F−64+16r+4c+h | c selects core 0…3 and h=0/1. Each grant reads 16 B from each of eight rows on that core and returns at g+2. Group r is ready by F−49+16r and its first op_load is F+r−1. |
 
-在前条首 dot 为 0 时，后条 C0 在 58/59 grant，61/62 返回，赶上 63 装首片。C1 在 62/63 grant、65/66 返回，赶上 67 装块 1 的首片。
+With the previous first dot at 0, the next C0 gets grants at 58/59 and returns at 61/62 for first load at 63. C1 gets grants at 62/63 and returns at 65/66 for block 1's first load at 67.
 
-| 以前条首 dot 为第 0 沿 | 验收观察 |
+| Relative to the preceding first dot at edge 0 | Acceptance observation |
 |---|---|
-| 63 → 64 | 63 沿发 M0 末 dot 并装 M1 首片，64 沿发 M1 首 dot。 |
-| 68 → 72 | 68 沿 M0 最后结果入 D，69/70 接受末两帧写，71 实写末帧，72 退休末 ACK。 |
-| 73 → 75 | 服务及时，73 沿可接受 M0 的 local_done，74 归还剩余资源并发布 done，75 tracker 可接受。 |
+| 63 → 64 | Edge 63 issues M0's last dot and loads M1's first microtile. Edge 64 issues M1's first dot. |
+| 68 → 72 | M0's last result enters D at 68. The final two write frames are accepted at 69/70, the last frame writes at 71, and its final ACK retires at 72. |
+| 73 → 75 | With timely service M0's local_done can be accepted at 73. Return remaining resources and publish done at 74. The tracker can accept at 75. |
 
-单族连续、全写、对齐且服务及时的尾部通式为 L=F+Q−1、末 ACK=L+Ldot+5，其中 Ldot 为对应[算术族](../tensor_core/blackwell_tc_dot_array.md)的级数减一。首条冷装、WS 命中、跨族、全禁写和争用情形按接口事件取时间：全部核首组输入和 R_OP 空间沿前有效时可装 R_OP，首 dot 最早在下一沿。冷装首个源 R_BREQ 接受不代表所有其他输入已准备好。
+For consecutive single-family instructions with all writes enabled, aligned accesses, and timely service, the tail formula is L=F+Q−1 and final ACK=L+Ldot+5, where Ldot is the corresponding [arithmetic family](../tensor_core/blackwell_tc_dot_array.md) pipeline stage count minus one. Use actual interface events for cold fill, WS hits, family changes, fully disabled writes, and contention. Load R_OP when all cores have first-group inputs and R_OP space before the edge. The earliest first dot is the next edge. Acceptance of the first cold source R_BREQ does not establish readiness of other inputs.
 
-| FP16，A/B 均从 SMEM 且每字只读一次 | N64 | N128 | N256 |
+| FP16, A and B from SMEM, each word read once | N64 | N128 | N256 |
 |---|---:|---:|---:|
-| 后端每条唯一 A+B | 4+2 KiB | 4+4 KiB | 4+8 KiB |
-| 至少需要的 SMEM 读拍 | 48 | 64 | 96 |
-| dot 服务拍 | 32 | 64 | 128 |
+| Unique A+B per backend per instruction | 4+2 KiB | 4+4 KiB | 4+8 KiB |
+| Minimum SMEM read cycles | 48 | 64 | 96 |
+| Dot service cycles | 32 | 64 | 128 |
 
 <a id="mma-vectors"></a>
-#### 连续累加的复算向量
+#### Reference vector for consecutive accumulations
 
-八条 N128 FP16 同址累加，命令 i、行 m、列 n 和 K 坐标 k 从 0 开始。A、B 取 FP16 可精确表示的整数，C 为初始 FP32 累加值。
+Eight N128 FP16 instructions accumulate in place. Command i, row m, column n, and K index k start at zero. A and B are exactly representable integer-valued FP16. C is the initial FP32 accumulator.
 
 ```text
 A[i,m,k] = ((3*m + 2*k + i*(k+1)) mod 7) - 3
@@ -249,31 +249,31 @@ B[i,n,k] = ((n + 3*k + i*(n+2)) mod 9) - 4
 C[m,n]   = m - 2*n
 ```
 
-逐坐标独立计算初始 C 加上八条指令所有 k 项的乘积和，逐字节比对 65,536 B FP32 结果。记录每条首 dot、末写接受、实写、末 ACK 和 tracker 接受沿。在上述布局与服务条件下，八条首 dot 应依次为 0、64、128、192、256、320、384、448。
+For each coordinate independently add the initial C to products over all k from all eight instructions. Compare all 65,536 FP32 result bytes. Record first dot, last write acceptance, actual write, final ACK, and tracker acceptance for each instruction. Under the stated layout and service conditions the eight first dots must occur at 0, 64, 128, 192, 256, 320, 384, and 448.
 
 ## Submodules
 
-下列直接子模块每后端各一份，顶层负责联合接受、pin 仲裁、ordering 路由和关闭控制。
+There is one instance of each direct submodule below per backend. The top handles joint acceptance, pin arbitration, ordering routes, and close control.
 
-| 通路 | 直接子模块 |
+| Path | Direct submodules |
 | --- | --- |
-| MMA 与 commit | [tc_mma_engine](../tensor_core/blackwell_tc_mma_engine.md)、[tc_completion_tracker](../tensor_core/blackwell_tc_completion_tracker.md)、[tc_async_completion](../tensor_core/blackwell_tc_async_completion.md) |
-| TMEM 分配、访问与等待 | [tmem_manager](../tmem/blackwell_tmem_manager.md)、[tmem_fabric](../tmem/blackwell_tmem_fabric.md)、[tmem_ldst_engine](../tmem/blackwell_tmem_ldst_engine.md)、[tmem_wait_tracker](../tmem/blackwell_tmem_wait_tracker.md) |
-| SMEM 与 TMA | [smem_fabric](../smem/blackwell_smem_fabric.md)、[tma_unit](../tma/blackwell_tma_unit.md) |
-| mbarrier 对象与等待 | [mbarrier_frontend](../mbarrier/blackwell_mbarrier_frontend.md)、[mbarrier_unit](../mbarrier/blackwell_mbarrier_unit.md)、[mbarrier_wait](../mbarrier/blackwell_mbarrier_wait.md)、[mbarrier_backing](../mbarrier/blackwell_mbarrier_backing.md) |
+| MMA and commit | [tc_mma_engine](../tensor_core/blackwell_tc_mma_engine.md), [tc_completion_tracker](../tensor_core/blackwell_tc_completion_tracker.md), [tc_async_completion](../tensor_core/blackwell_tc_async_completion.md) |
+| TMEM allocation, access, and waits | [tmem_manager](../tmem/blackwell_tmem_manager.md), [tmem_fabric](../tmem/blackwell_tmem_fabric.md), [tmem_ldst_engine](../tmem/blackwell_tmem_ldst_engine.md), [tmem_wait_tracker](../tmem/blackwell_tmem_wait_tracker.md) |
+| SMEM and TMA | [smem_fabric](../smem/blackwell_smem_fabric.md), [tma_unit](../tma/blackwell_tma_unit.md) |
+| mbarrier objects and waits | [mbarrier_frontend](../mbarrier/blackwell_mbarrier_frontend.md), [mbarrier_unit](../mbarrier/blackwell_mbarrier_unit.md), [mbarrier_wait](../mbarrier/blackwell_mbarrier_wait.md), [mbarrier_backing](../mbarrier/blackwell_mbarrier_backing.md) |
 
 <a id="module-index"></a>
-### 模块索引
+### Module index
 
-35 份规格按模块列出。同一模块的多个实例共用一份规格。
+The 35 specifications are listed by module. Multiple instances share one specification.
 
-| 子系统 | 模块 |
+| Subsystem | Module |
 |---|---|
 | top | [blackwell_async_subsystem_top](../top/blackwell_async_subsystem_top.md) |
-| tensor_core | [blackwell_tc_async_completion](../tensor_core/blackwell_tc_async_completion.md)、[blackwell_tc_b_loader](../tensor_core/blackwell_tc_b_loader.md)、[blackwell_tc_completion_tracker](../tensor_core/blackwell_tc_completion_tracker.md)、[blackwell_tc_dot_array](../tensor_core/blackwell_tc_dot_array.md)、[blackwell_tc_mma_core](../tensor_core/blackwell_tc_mma_core.md)、[blackwell_tc_mma_engine](../tensor_core/blackwell_tc_mma_engine.md)、[blackwell_tc_scale_b_snapshot](../tensor_core/blackwell_tc_scale_b_snapshot.md) |
-| tmem | [blackwell_tmem_fabric](../tmem/blackwell_tmem_fabric.md)、[blackwell_tmem_ldst_engine](../tmem/blackwell_tmem_ldst_engine.md)、[blackwell_tmem_manager](../tmem/blackwell_tmem_manager.md)、[blackwell_tmem_partition](../tmem/blackwell_tmem_partition.md)、[blackwell_tmem_wait_tracker](../tmem/blackwell_tmem_wait_tracker.md) |
+| tensor_core | [blackwell_tc_async_completion](../tensor_core/blackwell_tc_async_completion.md), [blackwell_tc_b_loader](../tensor_core/blackwell_tc_b_loader.md), [blackwell_tc_completion_tracker](../tensor_core/blackwell_tc_completion_tracker.md), [blackwell_tc_dot_array](../tensor_core/blackwell_tc_dot_array.md), [blackwell_tc_mma_core](../tensor_core/blackwell_tc_mma_core.md), [blackwell_tc_mma_engine](../tensor_core/blackwell_tc_mma_engine.md), [blackwell_tc_scale_b_snapshot](../tensor_core/blackwell_tc_scale_b_snapshot.md) |
+| tmem | [blackwell_tmem_fabric](../tmem/blackwell_tmem_fabric.md), [blackwell_tmem_ldst_engine](../tmem/blackwell_tmem_ldst_engine.md), [blackwell_tmem_manager](../tmem/blackwell_tmem_manager.md), [blackwell_tmem_partition](../tmem/blackwell_tmem_partition.md), [blackwell_tmem_wait_tracker](../tmem/blackwell_tmem_wait_tracker.md) |
 | smem | [blackwell_smem_fabric](../smem/blackwell_smem_fabric.md) |
-| tma | [blackwell_tma_completion_tracker](../tma/blackwell_tma_completion_tracker.md)、[blackwell_tma_data_path](../tma/blackwell_tma_data_path.md)、[blackwell_tma_descriptor_cache](../tma/blackwell_tma_descriptor_cache.md)、[blackwell_tma_request_generator](../tma/blackwell_tma_request_generator.md)、[blackwell_tma_setup](../tma/blackwell_tma_setup.md)、[blackwell_tma_unit](../tma/blackwell_tma_unit.md) |
-| mbarrier | [blackwell_mbarrier_backing](../mbarrier/blackwell_mbarrier_backing.md)、[blackwell_mbarrier_frontend](../mbarrier/blackwell_mbarrier_frontend.md)、[blackwell_mbarrier_unit](../mbarrier/blackwell_mbarrier_unit.md)、[blackwell_mbarrier_wait](../mbarrier/blackwell_mbarrier_wait.md) |
-| dot | [blackwell_dot_align_fixed_rz](../dot/blackwell_dot_align_fixed_rz.md)、[blackwell_dot_emax_tree](../dot/blackwell_dot_emax_tree.md)、[blackwell_dot_fp32_pack](../dot/blackwell_dot_fp32_pack.md)、[blackwell_dot_signed_reduce_tree](../dot/blackwell_dot_signed_reduce_tree.md)、[blackwell_f16tf32_dot](../dot/blackwell_f16tf32_dot.md)、[blackwell_f4f6f8_dot](../dot/blackwell_f4f6f8_dot.md)、[blackwell_fp4_dot](../dot/blackwell_fp4_dot.md)、[blackwell_int8_dot](../dot/blackwell_int8_dot.md) |
-| base | [blackwell_banked_sram](../base/blackwell_banked_sram.md)、[blackwell_fifo](../base/blackwell_fifo.md)、[blackwell_pipeline_reg](../base/blackwell_pipeline_reg.md) |
+| tma | [blackwell_tma_completion_tracker](../tma/blackwell_tma_completion_tracker.md), [blackwell_tma_data_path](../tma/blackwell_tma_data_path.md), [blackwell_tma_descriptor_cache](../tma/blackwell_tma_descriptor_cache.md), [blackwell_tma_request_generator](../tma/blackwell_tma_request_generator.md), [blackwell_tma_setup](../tma/blackwell_tma_setup.md), [blackwell_tma_unit](../tma/blackwell_tma_unit.md) |
+| mbarrier | [blackwell_mbarrier_backing](../mbarrier/blackwell_mbarrier_backing.md), [blackwell_mbarrier_frontend](../mbarrier/blackwell_mbarrier_frontend.md), [blackwell_mbarrier_unit](../mbarrier/blackwell_mbarrier_unit.md), [blackwell_mbarrier_wait](../mbarrier/blackwell_mbarrier_wait.md) |
+| dot | [blackwell_dot_align_fixed_rz](../dot/blackwell_dot_align_fixed_rz.md), [blackwell_dot_emax_tree](../dot/blackwell_dot_emax_tree.md), [blackwell_dot_fp32_pack](../dot/blackwell_dot_fp32_pack.md), [blackwell_dot_signed_reduce_tree](../dot/blackwell_dot_signed_reduce_tree.md), [blackwell_f16tf32_dot](../dot/blackwell_f16tf32_dot.md), [blackwell_f4f6f8_dot](../dot/blackwell_f4f6f8_dot.md), [blackwell_fp4_dot](../dot/blackwell_fp4_dot.md), [blackwell_int8_dot](../dot/blackwell_int8_dot.md) |
+| base | [blackwell_banked_sram](../base/blackwell_banked_sram.md), [blackwell_fifo](../base/blackwell_fifo.md), [blackwell_pipeline_reg](../base/blackwell_pipeline_reg.md) |

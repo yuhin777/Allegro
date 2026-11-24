@@ -2,19 +2,19 @@
 
 ## Description
 
-组合式有效指数最大值树。参数`TERM_N≥1, EXP_W≥2, DEFAULT_EXP`，指数均有符号；无clk、reset、valid/ready寄存通道。
+This combinational tree finds the maximum valid exponent. Parameters are `TERM_N≥1, EXP_W≥2, DEFAULT_EXP`. All exponents are signed. There is no clock, reset, or registered valid/ready channel.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| term_valid | 入 | TERM_N | dot 指数选择级 | 各项组合有效位 |
-| term_exp | 入 | TERM_N×EXP_W | dot 指数选择级 | 组合有符号指数 |
-| result_valid | 出 | 1 | dot 指数选择级 | 组合输出，至少一项有效 |
-| result_exp | 出 | EXP_W | dot 指数选择级 | 组合输出，全部无效时取 DEFAULT_EXP |
+| term_valid | Input | TERM_N | Dot exponent selection stage | Combinational valid bit per term |
+| term_exp | Input | TERM_N×EXP_W | Dot exponent selection stage | Combinational signed exponents |
+| result_valid | Output | 1 | Dot exponent selection stage | Combinational output, at least one term valid |
+| result_exp | Output | EXP_W | Dot exponent selection stage | Combinational output, DEFAULT_EXP when all terms are invalid |
 
 ## Functionality
 
-### 有效项的成对比较
+### Pairwise comparison of valid terms
 
-叶节点`(v,e)`；合并两个节点时，无效项不参与比较，两项有效则取有符号较大指数，相等取左侧；两者无效输出invalid/DEFAULT_EXP。按相邻索引递归，奇数尾项与invalid合并。共 ceil(log2 TERM_N) 层，结果 valid 是所有输入 valid 的 OR。
+Each leaf is `(v,e)`. Ignore invalid inputs when merging two nodes. With two valid inputs, take the larger signed exponent, choosing the left on a tie. Two invalid inputs produce invalid/DEFAULT_EXP. Recursively pair adjacent indices and pair an odd trailing entry with invalid. The tree has ceil(log2 TERM_N) levels. Result valid is the OR of all input valid bits.
 
-没有内部状态和额外拍数。父模块必须将输出捕获到其指定工作寄存级，不在本模块暗加流水。验证N=1、奇数N、所有invalid、最小负指数及相等指数；检查比较使用signed类型而不是无符号大小。
+There is no internal state or added latency. The parent captures the output at its specified pipeline stage. Verify N=1, odd N, all invalid, the minimum negative exponent, and equal exponents. Check that comparisons use signed arithmetic.

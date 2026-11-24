@@ -2,18 +2,18 @@
 
 ## Description
 
-为 TRY_WAIT.parity 保存至多 32 条未退休观察。对象状态唯一位于[unit](blackwell_mbarrier_unit.md)，等待者不 pin 其 cache。输入操作与返回类型见[命令对象](blackwell_mbarrier_frontend.md#command)。
+Holds up to 32 unretired TRY_WAIT.parity observations. The [unit](blackwell_mbarrier_unit.md) exclusively owns object state. Waiters do not pin its cache. See [command objects](blackwell_mbarrier_frontend.md#command) for input and return types.
 
-| 信号 / 通道 | 方向、类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| wait_cmd/rsp | 入 [bar_cmd_t](blackwell_mbarrier_frontend.md#command) / 出 [bar_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | 每条获得一项，完整 id 与 completed/status 保持至响应消费。 |
-| probe_req/rsp | 出 [bar_service_req_t](blackwell_mbarrier_frontend.md#command) / 入 [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | QUERY，route=1，slot5。此前已为返回预留存储。 |
-| change | 入 [bar_change_t](blackwell_mbarrier_unit.md#change-type) + pulse | 对象 unit | unit 对象提交沿广播，允许所有同址未解决项采样，不施加 backpressure。 |
-| acquire_req/rsp | 出 [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) / 入 [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) | ordering 服务 | 仅一笔在途，scope=CTA、async→generic、bytes=0。 |
-| busy_addr/addr_busy | 入32bit/出 bit，组合 | barrier frontend | 任一非 FREE 项命中该地址。 |
-| epoch、stop / drained、fault | 入 u16、bit / 出 bit、bit | 顶层 | 正常 stop 排空，异常通知顶层终止运行。 |
+| wait_cmd/rsp | Input [bar_cmd_t](blackwell_mbarrier_frontend.md#command) / output [bar_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | Allocate one entry per command. Hold the full ID and completed/status until response consumption. |
+| probe_req/rsp | Output [bar_service_req_t](blackwell_mbarrier_frontend.md#command) / input [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | QUERY, route=1, slot5. Reserve the return position beforehand. |
+| change | Input [bar_change_t](blackwell_mbarrier_unit.md#change-type) + pulse | Object unit | Broadcast on the unit's object commit edge. All unresolved matching-address entries may sample without backpressure. |
+| acquire_req/rsp | Output [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) / input [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) | Ordering service | One outstanding transaction, scope=CTA, async→generic, bytes=0. |
+| busy_addr/addr_busy | 32-bit input / bit output, combinational | barrier frontend | Any non-FREE entry matching the address. |
+| epoch, stop / drained, fault | Input u16, bit / output bit, bit | Top level | Normal stop drains. A fault notifies the top level to terminate the run. |
 
-时钟、复位及通道的采样约定见[顶层公共协议](../top/blackwell_async_subsystem_top.md#common-protocol)。
+The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
 ```mermaid
 flowchart LR
@@ -28,29 +28,29 @@ flowchart LR
 
 ## Functionality
 
-### 等待记录
+### Wait records
 
-每项保存 id58、addr32、expected_phase1、armed_tick6、state3、matched1、probe_pending1，共 102 bit，32 项共 3,264 bit。全表共用 6-bit 拍计数器 `tick`，另有 probe、结果和 ordering 的 held 索引与 valid。状态依次为 FREE、PROBE、ARMED 或 MATCHED、ACQUIRE、RESULT。超时从 ARMED 进入 RESULT。
+Each entry holds id58, addr32, expected_phase1, armed_tick6, state3, matched1, and probe_pending1, totaling 102 bits/entry and 3,264 bits for 32 entries. All entries share the 6-bit cycle counter `tick`. Probe, result, and ordering each have a held index and valid bit. The states are FREE, PROBE, ARMED or MATCHED, ACQUIRE, and RESULT. Timeout takes ARMED directly to RESULT.
 
-wait_cmd.fire 占槽，最早下一拍发 QUERY。匹配成功、对象已初始化且观察尚未确定时，phase 异于 expected 进入 MATCHED，相同进入 ARMED。超时锁存 OK/false，外围可再发 wait。QUERY 非 OK、未知 slot/id 或非法对象触发 fault。
+wait_cmd.fire allocates an entry. QUERY can issue on the next cycle. For a successful matching reply to an unresolved observation of an initialized object, enter MATCHED if phase differs from expected and ARMED otherwise. Timeout latches OK/false and the surrounding system may issue another wait. Non-OK QUERY, unknown slot/ID, or illegal object raises fault.
 
 <a id="wait-budget"></a>
 
-### ARMED 预算与同沿优先级
+### ARMED budget and same-edge priority
 
-每次进入 ARMED 都有 **64 个 ARMED 拍**，适用于省略、零及任意非零 `time_hint`。同步复位将 `tick` 清零，此后每个上升沿模 64 加一，包括 stop 排空期间。进入 ARMED 的沿把沿前 `tick` 存入本项 `armed_tick`。只有沿前已是 ARMED 的项才比较 `tick == armed_tick`，第一次相等正好在进入后的第 64 个上升沿。若该沿仍未匹配且无错误，则超时。QUERY 和 ACQUIRE 的等待时间均在此预算之外。[提示字段](blackwell_mbarrier_frontend.md#command)
+Every entry into ARMED gets **64 ARMED cycles**, whether `time_hint` is omitted, zero, or any nonzero value. Synchronous reset zeros `tick`. It then increments modulo 64 on every rising edge, including stop drain. On entry to ARMED, save pre-edge `tick` in the entry's `armed_tick`. Only entries already ARMED before an edge compare `tick == armed_tick`. The first equality occurs on the 64th rising edge after entry. If the entry is still unmatched and error-free at that edge, it times out. QUERY and ACQUIRE wait time is outside this budget. [hint field](blackwell_mbarrier_frontend.md#command)
 
-验收分别取省略提示、显式 0 和非零提示 641，初次 QUERY 均看到原 phase 且无错误。
+Run each acceptance case with an omitted hint, explicit zero, and nonzero hint 641. The initial QUERY sees the old phase without error in all three.
 
-| phase 翻转沿 | 结果 |
+| Phase flip edge | Result |
 | --- | --- |
-| 第 64 个 ARMED 沿 | change 优先于超时，进入 MATCHED；匹配 acquire ACK 成功后返回 true。 |
-| 第 65 个 ARMED 沿 | 第 64 沿已锁存 OK/false；即使响应尚未消费，第 65 沿也保持 false。 |
+| 64th ARMED edge | change wins over timeout. Enter MATCHED and return true after the matching acquire ACK succeeds. |
+| 65th ARMED edge | The 64th edge has already latched OK/false. The result stays false on edge 65 even if its response is still pending. |
 
-同沿有效 phase change 优先于初次 QUERY 的旧 phase 和 ARMED 超时。已确定的观察不被后到 phase 或旧 probe 改写。已展示的 probe 必须完成握手并接收成功回应；在展示前已由 change 确定观察时可省略 probe。若 probe 仍在途，保留其槽直至回应。非 OK、非法身份或对象失效按顶层故障合同处理，不产生依赖该事件的成功谓词。
+A valid same-edge phase change takes priority over an old phase from the initial QUERY and over ARMED timeout. Once resolved, a later phase or old probe cannot alter an observation. A presented probe must handshake and receive a successful reply. A change that resolves the observation before the probe is presented can suppress that probe. Retain the slot for an outstanding probe until its reply. Non-OK status, illegal identity, or object invalidation follows the top-level fault contract and cannot produce a true predicate dependent on that event.
 
-### Acquire 与结果交付
+### Acquire and result delivery
 
-MATCHED 最早在下一沿发 acquire。对同一 id 的匹配 acquire OK，是发布 completed=1 的必要条件；非 OK 报 fault。phase 在沿 c 匹配时 acquire 最早 c+1，ACK 在 a 接受则软件成功最早 a+1。多个 wait 可并存，单笔 ordering 背压不阻塞 producer、其他对象的 change 或先前 QUERY 返回。RESULT 按轮询选择并在背压中保持 id/predicate/status；消费后 FREE。
+MATCHED can issue acquire on the next edge. Publishing completed=1 requires a matching OK acquire for the same ID. A non-OK ACK raises fault. If phase matches at c, acquire can issue at c+1. With ACK acceptance at a, software can receive success at a+1. Multiple waits may coexist. Backpressure on the single ordering transaction does not block producers, changes at other objects, or earlier QUERY returns. Select RESULT by round-robin and hold ID/predicate/status under backpressure. Consumption returns the entry to FREE.
 
-同步复位清控制，正常 stop 停止新 wait，旧 probe、计时、ordering 和结果继续。授权换 epoch 要求 drained。验收覆盖 32 个等待者、跨四个以上 cache 行、旧 probe 晚到、acquire 背压、连续两次 phase 翻转，以及故障发生时已展示的结果仍保持。
+Synchronous reset clears control. Normal stop blocks new waits and allows old probes, timing, ordering, and results to continue. Authorized epoch transition requires drained. Test 32 waiters across more than four cache lines, late old probes, acquire backpressure, two consecutive phase flips, and retention of an already presented result on fault.

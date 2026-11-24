@@ -2,20 +2,20 @@
 
 ## Description
 
-前端仲裁软件命令、wait 探测、TC commit 和 TMA producer。模块拥有软件队列、TC 槽和 producer 绑定表，所有对象更新送 [unit](blackwell_mbarrier_unit.md)，等待记录由 [wait](blackwell_mbarrier_wait.md) 持有。
+The front end arbitrates software commands, wait probes, TC commits, and TMA producers. It owns the software queue, TC slot, and producer binding table. All object updates go to [unit](blackwell_mbarrier_unit.md). The [wait unit](blackwell_mbarrier_wait.md) owns wait records.
 
-| 信号 / 通道 | 方向、类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| sw_cmd/sw_rsp、wait_cmd/wait_rsp | 入/出、出/入 [bar_cmd_t](#command)/[bar_rsp_t](#command) | 软件前端、wait | TRY_WAIT 转 wait；其他软件命令以原 id 回应。 |
-| bind_req/bind_rsp、producer_done/producer_rsp | 入/出 [bar_bind_t](#command)/[op_done_t](../top/blackwell_async_subsystem_top.md#identity)、入/出 [bar_producer_done_t](#command)/op_done_t | TMA unit | TMA 单一 producer 类，预留绑定与两个结果位置。 |
-| tc_req/tc_rsp | 入/出 [tc_bar_req_t](#command)/op_done_t | TC completion bridge | 已由 tracker 登记的 TC commit，独立槽。 |
-| service_req/service_rsp、wait_probe_req/rsp | 出/入、入/出 [bar_service_req_t](#command)/[bar_service_rsp_t](#command) | 对象 unit、wait | unit 串行更新，route/slot 唯一预留返回。 |
-| release_req/release_rsp | 出/入 [order_req_t](../top/blackwell_async_subsystem_top.md#ordering)/[order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) | ordering 服务 | 软件 update 的 release 和 FENCE_INIT 共用有限在途预算。 |
-| wait_busy_addr/wait_addr_busy、commit_busy_addr/commit_addr_busy | 出32bit/入1bit，两组组合查询 | wait、TC tracker | 查 INIT/INVAL 地址的已有引用。 |
-| commit_candidate_addr/commit_blocked | 入32bit/出1bit，组合查询 | 顶层 commit 入口 | top 以新 commit 候选地址查询同址生命周期独占，结果 gate 新 commit fire。 |
-| epoch、stop、drained、fault | 入 u16、入 bit、出 bit、出 bit | 顶层 | 正常关闭时排空；运行故障通知顶层。 |
+| sw_cmd/sw_rsp, wait_cmd/wait_rsp | In/out, out/in [bar_cmd_t](#command)/[bar_rsp_t](#command) | Software front end, wait unit | Forward TRY_WAIT to wait. Return other software responses under their original IDs. |
+| bind_req/bind_rsp, producer_done/producer_rsp | In/out [bar_bind_t](#command)/[op_done_t](../top/blackwell_async_subsystem_top.md#identity), in/out [bar_producer_done_t](#command)/op_done_t | TMA unit | One TMA producer class. Reserve the binding and both result positions. |
+| tc_req/tc_rsp | In/out [tc_bar_req_t](#command)/op_done_t | TC completion bridge | Separate slot for a TC commit already registered in the tracker. |
+| service_req/service_rsp, wait_probe_req/rsp | Out/in, in/out [bar_service_req_t](#command)/[bar_service_rsp_t](#command) | Object unit, wait unit | The unit serializes updates. Each route/slot reserves one unique return position. |
+| release_req/release_rsp | Out/in [order_req_t](../top/blackwell_async_subsystem_top.md#ordering)/[order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) | Ordering service | Software update release and FENCE_INIT share a finite outstanding budget. |
+| wait_busy_addr/wait_addr_busy, commit_busy_addr/commit_addr_busy | Two combinational queries, 32-bit input / 1-bit output each | wait, TC tracker | Check existing references to the INIT/INVAL address. |
+| commit_candidate_addr/commit_blocked | 32-bit input / 1-bit output, combinational | Top-level commit ingress | The top queries lifecycle exclusivity at the candidate commit's address. The result gates new commit fire. |
+| epoch, stop, drained, fault | Input u16, input bit, output bit, output bit | Top level | Drain on normal shutdown. Notify the top level of runtime faults. |
 
-时钟、复位及通道的采样约定见[顶层公共协议](../top/blackwell_async_subsystem_top.md#common-protocol)。
+The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
 ```mermaid
 flowchart LR
@@ -30,62 +30,62 @@ flowchart LR
 
 ## Functionality
 
-### 接受与资源预留
+### Acceptance and resource reservation
 
-软件表 8 项，各含 cmd192、state3、rsp63，共 258bit/项，另有 8×8bit 接受先后矩阵。独立 TC 槽含 tc_bar_req90、state2。16 个 producer 行各存 id58、addr32、phase1、bytes32、state3（FREE/QUERY_REQ/QUERY_WAIT/BIND_RSP/WAIT_DATA/UPDATE_REQ/UPDATE_WAIT/PRODUCER_RSP），共 126bit/项。各类 service、release 和软件结果选择受阻保持到 fire。
+The eight software entries each contain cmd192, state3, and rsp63 (258 bits/entry), plus a shared 8×8-bit acceptance-order matrix. The separate TC slot holds tc_bar_req90 and state2. Each of 16 producer entries holds id58, addr32, phase1, bytes32, and state3 (FREE/QUERY_REQ/QUERY_WAIT/BIND_RSP/WAIT_DATA/UPDATE_REQ/UPDATE_WAIT/PRODUCER_RSP), totaling 126 bits/entry. Hold a stalled service, release, or software result selection until fire.
 
-### 软件命令与对象生命周期
+### Software commands and object lifetime
 
-软件命令预检后，同 issuer 按接受顺序进入对象服务；release 类型先完成公共 generic→async release。FENCE_INIT 与先前该 issuer INIT 的提交建立顺序，用独立 kind5 的 cluster ACK 退休，仅该 fence 的结果受阻时旧 service/producer 仍可继续。TRY 与更新的返回槽分离。
+After precheck, software commands from the same issuer enter object service in acceptance order. Release forms first complete the common generic→async release. FENCE_INIT orders after earlier INIT commits from its issuer and retires on a distinct kind5 cluster ACK. A stalled fence result allows older service and producer work to continue. TRY and update use separate return slots.
 
-已接受 INIT/INVAL 对该地址独占，直到软件响应退休。它等更早软件同址服务、活跃绑定、wait、TC 槽及 tracker 中该址未退 commit 排空后才占 unit。每边沿，`commit_blocked(addr)` 命中旧 gate 或本沿可接受的新 INIT/INVAL(addr)。同沿新 lifecycle 优先；top 只 gate **新 commit 登记**，不能 gate 从旧 commit 发来的 tc_req。已有绑定的 producer_done、已展示 wait/probe 和所有旧响应均继续推进。其他地址不受阻。gate 查询只依赖软件槽容量、既有引用及地址，不依赖新 commit.ready，避免组合环。
+An accepted INIT/INVAL owns its address exclusively until its software response retires. Before it occupies the unit, wait for earlier same-address software services, active bindings, waits, the TC slot, and unretired tracker commits for that address. On each edge `commit_blocked(addr)` matches an existing gate or a newly acceptable INIT/INVAL(addr). A new lifecycle command takes priority on that edge. The top gates only **new commit registration** and must let tc_req from old commits through. Bound producer_done, already presented waits/probes, and all old responses keep advancing. Other addresses remain eligible. The gate query depends only on software slot capacity, existing references, and address. It is independent of new commit.ready to avoid a combinational loop.
 
-### producer 绑定与完成
+### Producer binding and completion
 
-bind.fire 预留 producer 行，QUERY 成功后记录已初始化对象的 phase，保留至 producer_rsp 消费。producer_done 用已绑定的 phase 和逻辑字节数作一次 COMPLETE_TX；guard 与扣数在同一对象提交点检查。TC 请求只作一次 ARRIVE(1)。两者均等待原 route/slot 对应的 service_rsp。非 OK、错身份、重复更新或 phase guard 失配报告顶层 fault。
+bind.fire reserves a producer entry. A successful QUERY records the initialized object's phase and retains it until producer_rsp is consumed. producer_done uses the bound phase and logical byte count for one COMPLETE_TX. Check the guard and decrement at the same object commit point. A TC request performs exactly one ARRIVE(1). Both wait for service_rsp on the original route/slot. Report non-OK status, wrong identity, duplicate update, or phase guard mismatch as a top-level fault.
 
-### 服务选择与进展
+### Service selection and progress
 
-软件、wait probe、TC、producer 四类轮询，同类内轮询；持续有候选的类最多被另外三次 service fire 越过。unit.commit 与前端捕获结果独立，已预留槽不等待软件 ready。stop 关闭新软件操作，仍接旧 TMA bind/producer_done、TC、service 和 ordering。drained 要求所有 held/在途为空。同步复位清 owner/fault；重复/未知身份触发 fault。验证同址新 commit 与 INIT 同沿、旧 commit 在 gate 期间退休、两个不同 issuer 的独立 barrier、软件出口满时 producer 仍可更新及 phase guard。[专利结构参考](https://patents.google.com/patent/US20230289242A1/en)
+Round-robin across software, wait probe, TC, and producer classes and within each class. A continuously eligible class can be bypassed by at most three other service fires. unit.commit is independent of front-end result capture. A reserved slot does not wait for software ready. stop closes new software operations but continues accepting older TMA bind/producer_done, TC, service, and ordering traffic. drained requires no held or outstanding work. Synchronous reset clears ownership and fault. Duplicate or unknown identities raise fault. Verify same-edge same-address new commit and INIT, retirement of old commits under the gate, independent barriers for different issuers, producer updates with a full software output, and the phase guard. [Patent architecture reference](https://patents.google.com/patent/US20230289242A1/en)
 
-### 请求与响应边沿
+### Request and response edges
 
-软件/绑定在沿 g 占槽，最早 g+1 发布 release 或 service。沿 r 收到 unit.service_rsp 后最早 r+1 交付对应软件或 producer 结果；结果受阻时槽保持，由其他类继续请求。
+A software command or binding occupies its slot at g and may present release or service at g+1. After accepting unit.service_rsp at r, the corresponding software or producer result can transfer at r+1. Hold a stalled result in its slot while other classes continue requesting service.
 
 <a id="command"></a>
 
-### 命令、绑定及对象服务
+### Commands, bindings, and object service
 
-[PTX 支持清单](../../proposals/supported_ptx.md)定义软件可发的变体，[对象](blackwell_mbarrier_unit.md#object)定义计数与 phase。入口仅接受已归一化的本 CTA 8 B 对齐对象地址；PTX 的 omitted/default 修饰符在前端展开。arrival 接受丢弃结果的形式，wait 按 parity 比较。响应载荷只含谓词和状态。
+The [Supported PTX list](../../proposals/supported_ptx.md) defines software-visible variants. The [object specification](blackwell_mbarrier_unit.md#object) defines counts and phase. Ingress accepts only normalized 8 B aligned addresses in this CTA. The front end expands omitted/default PTX modifiers. Arrival permits a discarded result, and wait compares parity. The response payload contains only the predicate and status.
 
-| bar_cmd_t 字段（从高到低） | bit | 用法 |
+| bar_cmd_t fields (high to low) | bit | Use |
 |---|---:|---|
-| id、op | 58、4 | async_id_t 与下表编码。 |
-| addr、count、bytes | 各 32 | 本 CTA 地址、INIT/ARRIVE count、tx 数。 |
-| parity、guard | 1、1 | TRY 的旧 phase，或 producer 最终更新携带的绑定 phase；guard 仅供内部更新。 |
-| time_hint | 32 | TRY_WAIT 可选的 suspendTimeHint，省略置 0，显式值随 wait_cmd 传递。所有取值共用 [wait 的固定预算](blackwell_mbarrier_wait.md#wait-budget)。 |
+| id, op | 58, 4 | async_id_t and the encodings below. |
+| addr, count, bytes | 32 each | CTA-local address, INIT/ARRIVE count, and transaction byte count. |
+| parity, guard | 1, 1 | Old phase for TRY or bound phase for the producer's final update. The guard is internal to updates. |
+| time_hint | 32 | Optional TRY_WAIT suspendTimeHint. Set to 0 when omitted and pass explicit values through wait_cmd. Every value uses the same [fixed wait budget](blackwell_mbarrier_wait.md#wait-budget). |
 
-`bar_cmd_t` 为 **192bit**，`bar_rsp_t={id:58,status:4,completed:1}` 为 **63bit**。未使用字段置零。未开放 opcode/修饰符在收窄前拒绝；已知身份返回一次错误。
+`bar_cmd_t` is **192 bits** and `bar_rsp_t={id:58,status:4,completed:1}` is **63 bits**. Zero unused fields. Reject unsupported opcodes/modifiers before narrowing. Return exactly one error for a known identity.
 
-| op | 来源 | 结算 |
+| op | Source | Effect |
 |---:|---|---|
-| 0 INIT | 软件 | 建立 P=E=count、T=0、phase=0。 |
-| 1 INVAL | 软件 | 等同址引用排空，更新 backing 后结束对象生命周期。 |
-| 2 ARRIVE | 软件或 TC | 软件 .release.cta 先等 release ACK 再提交 count；TC 内部固定 count=1。 |
-| 3 ARRIVE_EXPECT_TX | 软件 | 同一次提交 P−1、T+bytes；省略 sem/scope 按 PTX 默认 release/CTA。 |
-| 4 TRY_WAIT | 软件 | .parity.shared 或 .shared::cta，只比较当前对象 phase，成功观察后按默认 acquire 取得确认。 |
-| 5 FENCE_INIT | 软件 | fence.mbarrier_init.release.cluster，作用于该 issuer 已提交的本地 INIT，完成条件见下。 |
-| 6 QUERY | 内部 | 成功时返回 initialized/phase，不产生更新。 |
-| 7 COMPLETE_TX | 内部 TMA | 按绑定 phase 原子扣 bytes，成功才可能翻 phase。 |
+| 0 INIT | Software | Set P=E=count, T=0, phase=0. |
+| 1 INVAL | Software | Wait for same-address references to drain, update backing, then end object lifetime. |
+| 2 ARRIVE | Software or TC | Software .release.cta waits for release ACK before committing count. Internal TC uses count=1. |
+| 3 ARRIVE_EXPECT_TX | Software | Commit P−1 and T+bytes atomically. Omitted sem/scope use the PTX release/CTA defaults. |
+| 4 TRY_WAIT | Software | .parity.shared or .shared::cta compares only the current object phase, then obtains default acquire acknowledgment after a successful observation. |
+| 5 FENCE_INIT | Software | fence.mbarrier_init.release.cluster orders local INITs already committed by this issuer. See completion conditions below. |
+| 6 QUERY | Internal | On success return initialized/phase without updating the object. |
+| 7 COMPLETE_TX | Internal TMA | Atomically deduct bytes under the bound phase. Only success may flip the phase. |
 
-`bar_service_req_t={route2,slot5,cmd192}` 为 199bit；`bar_service_rsp_t={route2,slot5,rsp63,phase1,initialized1}` 为 72bit。route=0 软件、1 wait probe、2 TC、3 TMA。每个请求预留对应返回位置。仅成功 QUERY 的 phase、initialized 有效。
+`bar_service_req_t={route2,slot5,cmd192}` is 199 bits and `bar_service_rsp_t={route2,slot5,rsp63,phase1,initialized1}` is 72 bits. route=0 selects software, 1 wait probe, 2 TC, and 3 TMA. Each request reserves the corresponding result position. Only a successful QUERY provides valid phase and initialized.
 
-对象 change 事件及 backing 请求分别见 [unit](blackwell_mbarrier_unit.md#change-type) 和 [backing](blackwell_mbarrier_backing.md#backing-types)。
+See [unit](blackwell_mbarrier_unit.md#change-type) for object change events and [backing](blackwell_mbarrier_backing.md#backing-types) for backing requests.
 
-#### 绑定与 TC arrival
+#### Bindings and TC arrivals
 
-`bar_bind_t={id58,addr32}` 为 90bit。frontend 以 op_done_t 确认成功绑定。`bar_producer_done_t={id58,bytes32,status4}` 为 94bit，正常执行中 status=OK。每次绑定恰有一次 COMPLETE_TX(bytes) 及一次匹配确认；TMA 收到 producer_rsp 后才发布 full。TC 独立使用 `tc_bar_req_t={id58,addr32}`（90bit），按 commit id 对应一次 ARRIVE(1)。
+`bar_bind_t={id58,addr32}` is 90 bits. The front end acknowledges a successful binding with op_done_t. `bar_producer_done_t={id58,bytes32,status4}` is 94 bits, with status=OK during normal execution. Each binding has exactly one COMPLETE_TX(bytes) and one matching acknowledgment. TMA publishes full only after receiving producer_rsp. TC separately uses `tc_bar_req_t={id58,addr32}` (90 bits) for one ARRIVE(1) per commit ID.
 
-#### 排序
+#### Ordering
 
-普通软件 release、成功 wait acquire、init fence 均使用公共 [ordering](../top/blackwell_async_subsystem_top.md#ordering)。FENCE_INIT 无对象地址或非零 count，按同 issuer 软件接受顺序等待所有更早的 INIT 提交，随后产生 `kind=MBARRIER_INIT_RELEASE(5),scope=CLUSTER(3),from=generic,to=generic,addr=0,bytes=0`。外部 matching ACK 必须证明当前线程在本 CTA SMEM 上此前 INIT 对 cluster 参与者的初始化可见性；支持环境的 cluster 仅有本 CTA，仍保留这个独立排序动作。仅表中实际 opcode 进入硬件；不需要为未出现的 token、DROP、PENDING_COUNT 或普通 cp.async 延迟 arrival 保存状态。[PTX mbarrier](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier) · [PTX fence](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-membar)
+Ordinary software release, successful wait acquire, and init fence all use the common [ordering](../top/blackwell_async_subsystem_top.md#ordering). FENCE_INIT has no object address or nonzero count. In software acceptance order for its issuer, it waits for every earlier INIT to commit, then generates `kind=MBARRIER_INIT_RELEASE(5),scope=CLUSTER(3),from=generic,to=generic,addr=0,bytes=0`. The matching external ACK must establish visibility of the current thread's preceding INITs in this CTA's SMEM to cluster participants. The supported cluster contains only this CTA, but the ordering transaction remains distinct. Only the opcodes in the table enter hardware. Unused token, DROP, PENDING_COUNT, and deferred arrival for ordinary cp.async require no state. [PTX mbarrier](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier) · [PTX fence](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-membar)

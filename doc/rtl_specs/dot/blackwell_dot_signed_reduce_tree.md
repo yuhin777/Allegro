@@ -2,15 +2,15 @@
 
 ## Description
 
-组合平衡树对父级提供的有符号定点项求和。参数为 `TERM_N≥1, TERM_W≥1, SUM_W≥TERM_W`。
+This balanced combinational tree sums the signed fixed-point terms supplied by its parent. Parameters are `TERM_N≥1, TERM_W≥1, SUM_W≥TERM_W`.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| term[TERM_N] | 入 | 每项 signed[TERM_W] | 父级定点通路 | 组合，项 0 位于低索引 |
-| sum | 出 | signed[SUM_W] | 父级结果级 | 组合，无时钟或握手 |
+| term[TERM_N] | Input | signed[TERM_W] per term | Parent fixed-point data path | Combinational, term 0 at the lowest index |
+| sum | Output | signed[SUM_W] | Parent result stage | Combinational, no clock or handshake |
 
 ## Functionality
 
-各项先符号扩展到 SUM_W，再在该位宽内逐层相加。通用无溢出选择`SUM_W=TERM_W+ceil(log2 TERM_N)`；dot允许根据有效幅值证明缩小位宽，证明和参数由父模块规格给出。若数学和超出SUM_W，输出取二进制低SUM_W位；产品合法输入必须用断言证明不会进入该情况，不通过此行为实现饱和。
+Sign-extend every term to SUM_W, then add in that width at each level. A general overflow-free choice is `SUM_W=TERM_W+ceil(log2 TERM_N)`. A dot parent may prove a narrower bound from valid magnitudes and must specify its proof and parameters. If the mathematical sum exceeds SUM_W, the output is its low SUM_W two's-complement bits. Assert that legal product inputs cannot reach this case. This wraparound does not implement saturation.
 
-输入顺序为低索引对相邻项；N=1直连符号扩展，奇数项补 0，共 ceil(log2 TERM_N) 层。无中间FP舍入、无内部寄存。验证奇数N、交错正负极值、零和、输出溢出定义，并与任意精度整数golden比较。
+Pair adjacent terms starting at the low index. N=1 directly sign-extends. Pad an odd entry with zero. There are ceil(log2 TERM_N) levels, with no intermediate FP rounding or internal registers. Verify odd N, alternating signed extrema, zero sums, and the specified overflow behavior against an arbitrary-precision integer reference.

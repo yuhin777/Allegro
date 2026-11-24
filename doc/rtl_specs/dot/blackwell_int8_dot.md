@@ -2,51 +2,51 @@
 
 ## Description
 
-32项S8/U8完整整数dot加S32 C；A/B signedness独立。64份组成每核整数阵列。逻辑K=32，全部项一次归约。
+Computes one complete 32-term S8/U8 integer dot plus S32 C, with independent A/B signedness. Each core's integer array has 64 copies. Logical K=32 and all terms participate in a single reduction.
 
-| 信号 / 通道 | 方向 | 类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| req | 入 | a[32],b[32] 各项 signed9，c32,saturate1，共609bit | TC dot array | req.fire 捕获 S0；元素 k=0 占低 9bit |
-| rsp | 出 | result32,overflow1；33bit | TC dot array | rsp.fire 交付结果 |
+| req | Input | a[32],b[32] each contain signed9 elements, plus c32 and saturate1, 609 bits total | TC dot array | req.fire captures S0. Element k=0 occupies the low 9 bits |
+| rsp | Output | result32,overflow1, 33bit | TC dot array | rsp.fire delivers the result |
 
 ```mermaid
 flowchart LR
-  I[行列广播的 signed9] --> M[32个9x9乘法]
-  M --> S0[S0: 32个signed18乘积]
-  S0 --> T[平衡树归约至signed22]
+  I["Row/column broadcast of signed9"] --> M["32 multipliers, 9×9"]
+  M --> S0["S0: 32 signed18 products"]
+  S0 --> T["Balanced reduction to signed22"]
   T --> S1[S1: psum / C / saturate]
-  S1 --> A[扩展加C / overflow / clamp]
+  S1 --> A["Widen, add C, detect overflow, clamp"]
   A --> S2[S2: result / R_DOT]
 ```
 
 ## Functionality
 
-遵循 [公共协议](../top/blackwell_async_subsystem_top.md#common-protocol)。overflow是最终无限精度整数结果超出S32范围的指示，不因saturate关闭而消失。
+Follow the [common protocol](../top/blackwell_async_subsystem_top.md#common-protocol). overflow indicates that the infinite-precision final integer result exceeds the S32 range. It is reported even when saturation is disabled.
 
-### 扩展操作数、归约与饱和
+### Operand extension, reduction, and saturation
 
-阵列按行、列各自的 dtype 将 S8 符号扩展、U8 零扩展至 signed9。叶模块将对应两项相乘，得到 signed18。32项先符号扩展到22bit再归约。C符号扩展为33bit，与psum相加；有效值范围保证33bit足够。饱和开启时限制到[−2^31,2^31−1]，关闭时取低32bit；只在最终结果处饱和。
+The array uses each row and column dtype to sign-extend S8 or zero-extend U8 to signed9. The leaf multiplies corresponding values to produce signed18. Sign-extend all 32 products to 22 bits before reduction. Extend C to signed33 and add psum. Valid ranges guarantee 33 bits suffice. When saturation is enabled, clamp to [−2^31,2^31−1]. Otherwise return the low 32 bits. Saturate only the final result.
 
-| 级 | payload bit | 内容 |
+| Stage | payload bit | Contents |
 |---|---:|---|
 | S0 | 609 | 32×signed18,C32,saturate1 |
 | S1 | 55 | psum22,C32,saturate1 |
 | S2 | 33 | result32,overflow1 |
 
-合计697bit/dot、5576B/核，valid另3bit/dot。S2 是结果寄存级。
+Total 697 bits/dot or 5576 B/core, plus three valid bits/dot. S2 is the result register.
 
-取 A 的低两个 byte 为 0xff、0x01，B 为 0x02、0x03，其余项为零，C=4。A 为 S8、B 为 U8 时结果是 5；仅把 A 改为 U8 后结果是 517。
+Set the two low bytes of A to 0xff, 0x01, and of B to 0x02, 0x03. Set all other terms to zero and C=4. With S8 A and U8 B the result is 5. Changing only A to U8 gives 517.
 
-### 结果传输与停顿
+### Result transfer and stalls
 
-输入fire l捕获S0，R_DOT在l+2后可见，最早l+3传输；P=3、II=1。三个独立弹性级，无额外R_DOT寄存；下游停顿不得覆盖任何级。复位清valid。
+Input fire at l captures S0. R_DOT is visible after l+2 and first transfers at l+3. P=3 and II=1. Three independent elastic stages include R_DOT. A downstream stall must not overwrite any stage. Reset clears valid.
 
-测试四种signedness组合、0xff在signed/unsigned解释上的差别、±极限C、正负overflow、饱和与wrap、抵消及随机背压。golden用至少64bit有符号整数求和，最终再施加S32规则；不能用逐项S32 wrap或逐项饱和。
+Test all four signedness combinations, signed/unsigned interpretations of 0xff, both extreme C values, positive/negative overflow, saturation and wrap, cancellation, and random backpressure. The reference sums in at least 64 signed bits and applies S32 rules only at the end. Per-term S32 wrap or saturation is incorrect.
 
-审核起点：[现有实现](../../../rtl/dot/int8_dot_prod.sv)，周期以本规格的实际边沿为准。
+Implementation reference: [existing implementation](../../../rtl/dot/int8_dot_prod.sv). Use the actual edges in this specification for timing.
 
 ## Submodules
 
-| 子模块 | 每个 dot 的实例数 | 连接与控制 |
+| Submodule | Instances per dot | Connections and control |
 | --- | --- | --- |
-| [pipeline_reg](../base/blackwell_pipeline_reg.md) | 3 | S0 捕获乘积，S1 捕获部分和，S2 捕获含 overflow 的结果。 |
+| [pipeline_reg](../base/blackwell_pipeline_reg.md) | 3 | S0 captures products, S1 the partial sum, and S2 the result including overflow. |

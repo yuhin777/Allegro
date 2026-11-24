@@ -2,79 +2,79 @@
 
 ## Description
 
-每后端一个 loader，为 miss 的普通/WS MMA 从 SMEM 读 B，将一个八列块装配成 256 B，再向四核分别交付。两个槽可同时属于相邻命令。地址/格式由 [engine 描述符](blackwell_tc_mma_engine.md#matrix-descriptor)定义，读取权、分区及 collector 身份属于 [engine](blackwell_tc_mma_engine.md#b-residency)。
+One loader per backend reads B from SMEM on ordinary or WS MMA misses, assembles a 256 B eight-column block, and delivers it independently to four cores. Two slots may belong to adjacent commands. The [engine descriptors](blackwell_tc_mma_engine.md#matrix-descriptor) define addressing and format. The [engine](blackwell_tc_mma_engine.md#b-residency) owns read permission, partitions, and collector identity.
 
 <a id="types"></a>
 
-| 信号 / 通道 | 方向、类型 / 位宽 | 对端 | 握手或采样条件 |
+| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- |
-| load / result | 入 [b_load_t](#types)={id58,b_desc64,b_type4,kind3,transpose_b1,n_code2}，132 bit / 出 [b_result_t](#types)={id58,status4}，62 bit | MMA engine | 每个 load 恰有一次 result。两个流描述符位置支持跨命令预读；结果在 engine 的同 id 记录有预留空间。 |
-| data[4] | 出 [b_data_t](#types)={id58,block5,data2048}，2111 bit | 四个 core | 同一列序 payload 对四核独立握手，线序见下文。engine 分别给 core 送 b_select；尚未绑定的目的可反压。 |
-| sm_rd_req[8] / sm_rd_rsp[8] | 出 / 入 [SMEM atom](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | 原逻辑地址，按组索引，tag.client=6。按 (id,block,piece,part) 匹配返回。 |
-| live[3] | 入，每项 61 bit | MMA engine | 按 [engine](blackwell_tc_mma_engine.md#engine-ports) 的完整 id 与 rec 匹配。 |
-| clk、rst_n、epoch_i / drained_o、fault_o | epoch_i 入 u16，时钟、复位为输入 bit，状态为输出 bit | MMA engine、顶层 | drained 包含描述符、已展示请求、两个槽及 held 结果。 |
+| load / result | Input [b_load_t](#types)={id58,b_desc64,b_type4,kind3,transpose_b1,n_code2}, 132 bits / output [b_result_t](#types)={id58,status4}, 62 bits | MMA engine | One result per load. Two stream descriptor positions support cross-command prefetch. The engine's same-ID record reserves result space. |
+| data[4] | Output [b_data_t](#types)={id58,block5,data2048}, 2111 bits | Four cores | Independently handshake the same column-ordered payload to all four cores. See wire order below. The engine sends b_select separately to each core. An unbound destination can apply backpressure. |
+| sm_rd_req[8] / sm_rd_rsp[8] | Output / input [SMEM atom](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | Original logical address indexed by group, tag.client=6. Match returns by (id,block,piece,part). |
+| live[3] | Input, 61 bits per entry | MMA engine | Match the full ID and rec from [engine](blackwell_tc_mma_engine.md#engine-ports). |
+| clk, rst_n, epoch_i / drained_o, fault_o | epoch_i input u16, clock and reset bit inputs, status bit outputs | MMA engine, top level | drained covers descriptors, presented requests, both slots, and held results. |
 
-时钟、复位及通道的采样约定见[顶层公共协议](../top/blackwell_async_subsystem_top.md#common-protocol)。
+The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
 ```mermaid
 flowchart LR
- L[load / 按序分配 id 和块号] --> E[整 atom 或通用 masked 枚举]
- E --> SM[client6 / 八组独立 R_BREQ]
- SM --> R[每组返回 16 B / 按 tag 匹配]
- R --> S[两个 256 B 槽 / 各 16 个逻辑行]
- S --> M[选择最老完整块]
- M --> X[K 和通用直通 / N-major 转置]
- X --> C[共享列序 payload / 四核分别握手]
- C --> F[末目的交付 / result]
+ L["Load / allocate ID and block number in order"] --> E["Full-atom or generic masked enumeration"]
+ E --> SM["Client6 / eight independent R_BREQ groups"]
+ SM --> R["16 B return per group / tag match"]
+ R --> S["Two 256 B slots / 16 logical rows each"]
+ S --> M["Select oldest complete block"]
+ M --> X["K and generic pass through / N-major transpose"]
+ X --> C["Shared column-ordered payload / independent four-core handshakes"]
+ C --> F["Last destination delivery / result"]
 ```
 
 ## Functionality
 
-### 装配槽与控制字段
+### Assembly slots and control fields
 
-每槽的 256 B payload 按 16 个逻辑行索引，每行含四个 32-bit 段。两槽共 4,096 bit，分发直接读槽。每槽保存 id、块号 j、2-bit 模式、各行 required/sent/completed（各至多 16 个 part）、16 个行有效位、4-bit delivered 和阶段。分配时清有效位与进度，模式保持到槽释放。物理 SMEM 为 32-bit bank；四个相邻 bank 合成一组，一次返回一个 16 B atom。
+Index each 256 B slot by 16 logical rows, each containing four 32-bit segments. The two slots total 4,096 bits and distribution reads them directly. Each stores ID, block index j, 2-bit mode, per-row required/sent/completed (up to 16 parts each), 16 row-valid bits, four delivered bits, and stage. Allocation clears valid and progress. Hold mode until release. Physical SMEM banks are 32 bits wide. Four adjacent banks form a group returning one 16 B atom.
 
 <a id="assembly"></a>
 
-### 请求与装配
+### Requests and assembly
 
-预检和 pin 成功后，按接受序为 (id,j) 预留空槽。前条末块取得槽后，后条即可为首块申请另一槽。以 `addr(n,k)` 表示 [engine](blackwell_tc_mma_engine.md#matrix-descriptor) 按该条 descriptor、major 和 swizzle 算出的 FP16/BF16 元素首字节。c、u 为 0…7，h 为 0/1。对合法 `kind::f16` 且 B 为 FP16/BF16 的 load（含 WS miss），按 B 的 major 选择前两种模式，其余合法 load 走通用模式。
+After successful precheck and pin, reserve free slots for (id,j) in acceptance order. Once the earlier command's last block has a slot, the next command can request the other slot for its first block. Let `addr(n,k)` denote the first byte of an FP16/BF16 element computed by [engine](blackwell_tc_mma_engine.md#matrix-descriptor) from the descriptor, major order, and swizzle. c and u range over 0…7 and h over 0/1. For legal `kind::f16` loads with FP16/BF16 B, including WS misses, the B major order selects one of the first two modes. All other legal loads use generic mode.
 
-| 槽模式 | 枚举一行的源与 token | 成功返回的写入 |
+| Slot mode | Source and token for one row | Write on successful return |
 |---|---|---|
-| 0，K-major 整 atom | 行 `p=2c+h`，地址 `addr(8j+c,8h)`，连续八个 K 元素 | `part=0`，写 W[p] 四段 |
-| 1，N-major 整 atom（描述符的 MN-major B） | 行 `p=2u+h`，地址 `addr(8j,8h+u)`，同一 K 的八个连续列元素 | `part=0`，写 W[p] 四段 |
-| 2，通用 masked | 目的行 `p=2c+h` 表示列 c 的低/高 16 B。按源 atom 地址升序编 part，片内去重，跨片允许重读 | 仅更新 part 的 bit/byte 使能范围 |
+| 0, K-major full atom | Row `p=2c+h`, address `addr(8j+c,8h)`, eight consecutive K elements | `part=0`, write all four segments of W[p] |
+| 1, N-major full atom (descriptor MN-major B) | Row `p=2u+h`, address `addr(8j,8h+u)`, eight consecutive columns at a common K | `part=0`, write all four segments of W[p] |
+| 2, generic masked | Destination row `p=2c+h` holds the low/high 16 B of column c. Number parts by ascending source atom address. Deduplicate within a piece. Rereads across pieces are allowed | Update only the part's enabled bits/bytes |
 
-整 atom 模式每行只有 part 0，`byte_mask=0xffff`。两种起址都在元素连续维的八元素边界上，允许的换位保持 atom 内低四位。因此整块发 16 笔请求，各行只请求一次。以实际地址的 `(addr>>4)&7` 路由；一般合法 stride 可造成同组竞争或不同行源地址重合，各 token 独立结算。模式 3 保留。
+Each row in full-atom mode has only part 0, `byte_mask=0xffff`. Both starting address forms fall on an eight-element boundary of the contiguous dimension and allowed swizzles preserve the low four address bits within the atom. Issue 16 requests per block, one per row. Route by `(addr>>4)&7` of the actual address. General legal strides can cause group contention or coincident source addresses across rows. Settle each token independently. Mode 3 is reserved.
 
-各组优先较老槽，再按 h、p、part 升序选尚未发出的请求。`token={kind3=0,block5=j,piece4=p,part4}`。在进入 fabric 的 `rd_req.fire` 沿置 sent；已展示未接受的选择保持。匹配 `rd_rsp.fire` 时置 completed 并归还该组的读 credit。整 atom 成功返回时，`W[p].seg[d]=rsp.data[32*d+:32]`，d=0…3，四段共用该笔写使能。八组可在同沿写入两槽中最多八个不同的逻辑行；各组独立接受，错拍时只更新实际握手的行。
+Each group prioritizes the older slot, then unsent requests by ascending h, p, part. `token={kind3=0,block5=j,piece4=p,part4}`. Set sent on the `rd_req.fire` edge entering the fabric. Hold a presented selection until accepted. On matching `rd_rsp.fire` set completed and return the group's read credit. For a successful full-atom return, `W[p].seg[d]=rsp.data[32*d+:32]` for d=0…3, with the four segments sharing one write enable. Eight groups can write up to eight distinct logical rows across both slots on one edge. Each group accepts independently. With skew, update only rows that actually handshake.
 
-通用模式按描述符提取 FP4/FP6 或复制整 byte，含最低源 bit 的 part 补零 padding 高位。每笔执行 `(old & ~bit_en) | (patch & bit_en)`，每 byte 的使能取其 bit_en 的 OR。同槽同行同沿只写一笔；多组返回该行的不同 part 时轮询，按实际 ret_fire 转动指针。未选的返回保持在 fabric。每行所有 required part 成功后才置有效。negate 在 dot 消费时处理。
+Generic mode extracts FP4/FP6 or copies whole bytes according to the descriptor. The part containing the lowest source bit zeroes the high padding bits. Apply `(old & ~bit_en) | (patch & bit_en)` per transaction. Each byte enable is the OR of its bit_en. Write at most one part to a given slot and row per edge. Round-robin among groups returning different parts to that row, advancing the cursor only on actual ret_fire. Unselected returns remain in the fabric. Mark a row valid only after all required parts succeed. Apply negate at dot consumption.
 
 <a id="delivery"></a>
 
-### 列序输出与生命周期
+### Column-ordered output and slot lifetime
 
-取最老完整槽，令 `W[p][l]` 为该行自低位起的第 l 个 16-bit 元素。对两种整 atom 模式，输出端 `data[256*c+16*(8*h+u)+:16]` 按下式接线：
+Select the oldest complete slot. Let `W[p][l]` be the l-th 16-bit element of its row, counted from the low bits. For the two full-atom modes wire output `data[256*c+16*(8*h+u)+:16]` as follows.
 
 ```text
 K-major  = W[2*c+h][u]
 N-major  = W[2*u+h][c]
 ```
 
-通用模式直接输出 `data[256*c+128*h+:128]=W[2*c+h]`。两槽共用一次模式选择和出槽重排，四核看到相同的八列、每列 32 B 的块。core 以 id、块号和旧块消费水位决定 ready。槽完整条件为 16 行均有效、全部源责任结清且无错误。最后 ret_fire 后，最早下一沿可交付；无额外转置流水级。
+Generic mode directly outputs `data[256*c+128*h+:128]=W[2*c+h]`. Both slots share one mode selection and output reorder. All four cores see the same eight columns, 32 B each. Each core derives ready from ID, block number, and the old block's consumption watermark. A slot is complete when all 16 rows are valid, all source obligations are settled, and no error occurred. Delivery can occur on the edge after the last ret_fire. There is no additional transpose stage.
 
-每个目的只在 data.fire 置 delivered；慢核暂停时保持同一槽的身份、模式和 payload，已收核不再展示。最后一个目的核接受的同沿可为后继块预留此槽，先按旧 id 结算 delivered/result，再写新 owner 并清新进度；本沿只交付沿前旧 payload，新 owner 的返回才可写入新数据。须确保旧末块 result 已有按 id 的预留位置。两槽都无法释放时反压新块。
+Set a destination's delivered bit only on data.fire. While a slow core stalls, hold slot identity, mode, and payload and exclude cores that already accepted. On the final destination's acceptance edge, the slot can be reserved for a successor block. First settle delivered/result under the old ID, then install the new owner and clear its progress. Only pre-edge old payload is delivered on that edge. Only returns belonging to the new owner may write its new data. The old last block must already have result space reserved by ID. Backpressure new blocks when neither slot can be freed.
 
-非 OK、未知或重复返回触发 fault，不写入装配槽或发布成功块。正常 stop 排空已接受的责任，复位清控制有效位。
+A non-OK, unknown, or duplicate return raises fault without writing the slot or publishing a successful block. Normal stop drains accepted obligations. Reset clears control valid bits.
 
 <a id="service"></a>
 
-### 供数窗口与验收
+### Supply window and acceptance
 
-core 每 4 拍消费一块，平均需求 64 B/拍。若每半块的八笔分别落在八组且各组均可 grant，两个 B grant 沿即可读完 256 B。每块共 16 笔读、64 次 32-bit bank 读。设块 j 的低半块在 g=4j 获得 grant，高半块在 g+1 获得 grant。两半分别在 g−1、g 进入 R_BREQ，g+2、g+3 返回写槽，四核均 ready 时 g+4 交付。相邻块交替占两槽；块 1 首半在第 3 沿进入 R_BREQ，同沿块 0 后半写槽。其他布局或争用从实际 [SMEM grant](../smem/blackwell_smem_fabric.md) 起算。
+A core consumes a block every four cycles, averaging 64 B/cycle. When the eight requests for each half hit distinct grantable groups, two B grant edges read 256 B. Each block takes 16 requests and 64 physical 32-bit bank reads. Suppose the low half of block j receives grant at g=4j and the high half at g+1. They enter R_BREQ at g−1 and g, return to the slot at g+2 and g+3, and deliver to four ready cores at g+4. Adjacent blocks alternate slots. The first half of block 1 enters R_BREQ at edge 3 as the second half of block 0 writes its slot. For other layouts or contention, count from actual [SMEM grant](../smem/blackwell_smem_fabric.md).
 
-- 对两种 major、FP16 和 BF16 以非均匀 16-bit 原始码逐元素比对，跨 N64/128/256、swizzle 相位、panel 及命令边界核对地址、16 个 token 和列序。混排 K、N、通用块，检查反压时只使用最老槽的模式。
-- 暂停一个返回组，再单独暂停一个 core，检查源 credit 归还沿、held payload、各目的恰好一次及槽复用。对末返回注错、WS hit/miss、停机排空分别核对结果。
-- 通用格式覆盖低位 packing、padding、同一目的行多个 part 同拍到达及一般布局的 bank 冲突，逐字节比对四核数据。
+- Compare nonuniform raw 16-bit values element by element for both major orders and both FP16 and BF16. Check addresses, all 16 tokens, and column order across N64/128/256, swizzle phases, panel boundaries, and instruction boundaries. Interleave K-major, N-major, and generic blocks and verify that backpressure preserves the oldest slot's mode selection.
+- Stall one return group and separately stall a core. Verify source credit return edges, held payload, exactly-once delivery to each destination, and slot reuse. Check errors on the final return, WS hit/miss, and shutdown drain.
+- For generic formats cover low-bit packing, padding, multiple parts arriving for one destination row on one edge, and general-layout bank conflicts. Compare all four cores' data byte by byte.
