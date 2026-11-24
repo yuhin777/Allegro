@@ -95,9 +95,9 @@ Ingress precheck may reject illegal commands with UNSUPPORTED/INVALID/RANGE befo
 
 #### Configuration and resource accounting
 
-The physical configuration has four cores, TMEM of 128×128×128 bits, and SMEM of 32×1824×32 bits. Each module specification owns its resource depths, state widths, and timing. Parent modules reference and aggregate them. Multiply per-instance capacity by instance count. Broadcast views do not add a second copy of storage.
+The physical configuration has four cores, TMEM of 128×128×128 bits, and SMEM of 32×1824×32 bits. Multiply per-instance capacity by instance count. Broadcast views do not add a second copy of storage.
 
-Count data bytes, control bits such as valid/tag/credit, and macro read outputs separately. List each added FIFO, payload register, and format pipeline. An adapter's storage counts toward capacity. Backpressure when a finite table fills. Never overwrite a live entry to improve throughput.
+Count data bytes, control bits such as valid/tag/credit, and macro read outputs separately. Capacity includes FIFOs, payload registers, pipeline registers, and adapter storage. Backpressure when a finite table fills. Never overwrite a live entry to improve throughput.
 
 In port tables `T[N]` denotes N channels or a bus of T entries. Specify whether handshakes are independent. Compute `bits(T)` from the owning module's fields. Low-index elements occupy low bits, and ascending byte addresses map from low to high payload bits. Pack structures from high to low in field-table order unless the owner specifies explicit bit/byte encoding.
 

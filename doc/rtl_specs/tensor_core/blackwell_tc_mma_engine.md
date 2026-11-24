@@ -123,7 +123,7 @@ else:
 
 `start` is the submatrix origin in canonical unswizzled coordinates. Compute intermediate differences for `start−base` in extended signed precision, with floor toward negative infinity. A recovered pattern<0 is RANGE. Add subblock delta **before** XOR. Do not compute `start+swizzle(o)`. The project's position-dependent swizzle is equivalent to applying the corresponding XOR to absolute `start+o`. The absolute coordinate already includes base phase. Do not apply it twice. This order agrees with address addition followed by swizzle in [NVIDIA CuTe swizzle pointer](https://github.com/NVIDIA/cutlass/blob/main/include/cute/pointer_swizzle.hpp). Keep both base and start in collector identity.
 
-TMA's [SMEM panel layout](../tma/blackwell_tma_setup.md#tensor-map) applies the same absolute-coordinate swizzle. With 128 B swizzle, stage=0, K-major, SBO=1024, start=32, and n=2/k_local=0, the result is `swizzle(32+256)=256`. The old value 320 is incorrect. For a nonzero phase with stage=128, base=128, and start=160, the same element gives `swizzle(416)=400`. Compute the byte address before SMEM's 4 B interleaved bank mapping. Matrix swizzle and physical bank routing are separate operations.
+TMA's [SMEM panel layout](../tma/blackwell_tma_setup.md#tensor-map) applies the same absolute-coordinate swizzle. With 128 B swizzle, stage=0, K-major, SBO=1024, start=32, and n=2/k_local=0, the result is `swizzle(32+256)=256`. For a nonzero phase with stage=128, base=128, and start=160, the same element gives `swizzle(416)=400`. Compute the byte address before SMEM's 4 B interleaved bank mapping. Matrix swizzle and physical bank routing are separate operations.
 
 #### Effective fields and major order
 

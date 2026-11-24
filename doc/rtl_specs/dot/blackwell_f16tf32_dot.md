@@ -57,11 +57,11 @@ Total data storage is 1796 bits/dot or 14368 B for 64 dots. Five valid bits per 
 
 The row/column decoders represent finite values as `sign*sig11*2^(e−10)`. For FP16 normals, sig=1024+frac and e=exp−15. For subnormals, sig=frac and e=−14. BF16 uses sig=(128+frac)<<3 or subnormal frac<<3, with e=exp−127 or −126 respectively. TF32 takes the upper 10 bits of the FP32 fraction with the FP32 exponent. NaN detection uses all 23 fraction bits. A zero exponent and zero upper 10 fraction bits classify a finite TF32 as zero. Fill A and B terms 8…15 with +0 in TF32 mode.
 
-1. First compute `C_eff=C*2^(-scale_input_d)` for C. Adjust the exponent for normals. When entering the subnormal range, shift the unsigned significand right and truncate. For an original subnormal, shift the fraction directly. Preserve Inf, NaN, and zero. This preprocessing follows the existing algorithm in an FP32 container.
+1. First compute `C_eff=C*2^(-scale_input_d)` for C. Adjust the exponent for normals. When entering the subnormal range, shift the unsigned significand right and truncate. For an original subnormal, shift the fraction directly. Preserve Inf, NaN, and zero. Prescale C in an FP32 container.
 2. An exact 11×11 multiplication produces sig22. Sign-extend both e values to 9 bits before adding. Decode C to sig24 and eC, with normal value sig24×2^(eC−23). Select emax only from nonzero finite products and C. If all are zero, use −256 and force the result to +0.
 3. Use product magnitude `sig22<<5` and C magnitude `sig24<<2`. Right-shift each by emax−e. Shifts of 32 or more yield zero. Apply the sign to produce signed33. S2/S3 retain emax. Do not compute base_exp in 9 bits.
 4. Sum the 17 terms in signed33, including at most 16 products, without intermediate FP32 rounding. Pad odd reduction-tree entries with zero. Bounds on valid input magnitudes guarantee no overflow.
-5. Before S4, sign-extend emax to 10 bits, then compute `base_exp=sext10(emax)−25` for FP32 packing. For the product of minimum normal BF16 inputs, emax=−252 and base_exp=−277. Subtracting in 9 bits before extension overflows and must be corrected in the existing implementation. S3→S4 captures only the final 32-bit encoding. Resolve NaN/Inf by operand class and exclude specials from finite emax.
+5. Before S4, sign-extend emax to 10 bits, then compute `base_exp=sext10(emax)−25` for FP32 packing. For the product of minimum normal BF16 inputs, emax=−252 and base_exp=−277. Subtracting in 9 bits before extension overflows. S3→S4 captures only the final 32-bit encoding. Resolve NaN/Inf by operand class and exclude specials from finite emax.
 
 Put FP16 A=2 and B=3 only at k=1, with C=1 and scale_input_d=0. With the array applying negate_a, the request's A at that index must be −2 and the leaf result −5 (0xc0a00000).
 
@@ -71,7 +71,7 @@ Input fire at l captures S0. Without stalls S4 is visible after l+4 and can tran
 
 Verify all FP16/BF16 input combinations, TF32 NaNs identifiable only in the low 13 bits, maximum/minimum normals, subnormals, exact cancellation, conflicting Inf signs, and C prescale underflow. The bit-exact reference must reproduce the specified fixed-point order. Per-term host floating-point addition is insufficient. Randomly stall continuous requests and check for loss, duplication, and correct edge-by-edge pairing of S4 results with input tags.
 
-See the [f16tf32_dot_prod.sv](../../../rtl/dot/f16tf32_dot_prod.sv) for the existing arithmetic implementation.
+RTL: [f16tf32_dot_prod.sv](../../../rtl/dot/f16tf32_dot_prod.sv).
 
 ## Submodules
 

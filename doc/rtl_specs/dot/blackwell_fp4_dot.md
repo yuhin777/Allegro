@@ -61,7 +61,7 @@ With all A and B values equal to 1, SA=(1,2,4,8), all SB values equal to 1, and 
 
 P=5. Edge l captures S0, R_DOT is visible after l+4, and output may transfer on the next edge. II=1. Each elastic stage holds independently. Reset clears valid. Verify every FP4 input encoding, both valid modes, UE4M3 zero/subnormal/NaN and ignored high bit, UE8M0 boundaries, group cancellation, and large exponent differences with C. Compare each sigma and gamma with an integer reference to locate rounding differences.
 
-Implementation reference: [existing implementation](../../../rtl/dot/fp4_dot_prod.sv).
+RTL: [fp4_dot_prod.sv](../../../rtl/dot/fp4_dot_prod.sv).
 
 ## Submodules
 

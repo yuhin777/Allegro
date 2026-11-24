@@ -2,4 +2,4 @@
 
 The [blackwell_f4f6f8_dot](../rtl_specs/dot/blackwell_f4f6f8_dot.md) specification defines the arithmetic, interfaces, pipeline registers, backpressure, and verification requirements.
 
-See [Dot arithmetic rules](../rtl_specs/tensor_core/blackwell_tc_dot_array.md#numeric-routing) for shared formats and rounding rules and [blackwell_tc_dot_array](../rtl_specs/tensor_core/blackwell_tc_dot_array.md) for 64-lane integration. The module specification owns the algorithm and cycle table.
+See [Dot arithmetic rules](../rtl_specs/tensor_core/blackwell_tc_dot_array.md#numeric-routing) for shared formats and rounding rules and [blackwell_tc_dot_array](../rtl_specs/tensor_core/blackwell_tc_dot_array.md) for 64-lane integration.
