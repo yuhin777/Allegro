@@ -208,9 +208,6 @@ module blackwell_tc_dot_array
     assert property (@(posedge clk) disable iff (!rst_n) lane_valid[f] == {64{valid[P]}});
 `endif
   end
-  // Native unscaled FP8 includes zero terms when selecting the common exponent.
-  logic native_fp8;
-  assign native_fp8 = cmd_i.kind == 2 && cmd_i.a_type <= 4 && cmd_i.b_type <= 4;
   for (genvar n = 0; n < 64; n++) begin : g_cell
     localparam int R = n / 8, C = n % 8;
     wide_req_t wr;
@@ -218,7 +215,7 @@ module blackwell_tc_dot_array
     fp4_req_t  fr;
     int_req_t  ir;
     assign wr = {aw[R], bw[C], operand_payload.c[n], cmd_i.scale_input_d};
-    assign lr = {al[R], bl[C], operand_payload.c[n], am[R], bm[C], native_fp8};
+    assign lr = {al[R], bl[C], operand_payload.c[n], am[R], bm[C]};
     assign fr = {af[R], bf[C], operand_payload.c[n], asf[R], bsf[C]};
     assign ir = {ai[R], bi[C], operand_payload.c[n], cmd_i.int_sat};
     for (genvar p = 0; p < FP_PATHS; p++) begin : g_fp_lane

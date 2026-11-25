@@ -4,7 +4,8 @@ set -euo pipefail
 project=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-# External golden transactions use the same raw-bit layout as reference.py.
+# External golden transactions use the raw-bit layout of reference.py. Supply
+# MMA-Sim accumulation cases with matching decode, zero-term and packing rules.
 # Keep the directed throughput and isolated latency windows at the end.
 if [[ -n ${MMA_SIM_VECTORS:-} ]]; then
     cat -- "$MMA_SIM_VECTORS" > "$work/vectors.txt"

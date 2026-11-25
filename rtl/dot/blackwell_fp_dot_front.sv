@@ -7,18 +7,20 @@ module blackwell_wide_dot_front
   output wide_shifts_t d1
 );
   accum_t c;
+  // Below every finite wide product exponent (minimum -252).
+  localparam logic signed [8:0] EMPTY_EXP = 9'sh100;
   logic [15:0][8:0] exps;
+  logic [15:0] eligible;
   logic [2:0] classes;
   always_comb begin
     c = accum_decode(req.c, req.shift);
-    d0.c = {c.sign, c.sig, c.e};
+    d0.c = {c.sign, c.sig, c.cls == FINITE ? c.e : EMPTY_EXP};
     classes = flags(c.cls, c.sign);
     for (int k = 0; k < 16; k++) begin
       d0.prod[k].sign = req.a[k].sign ^ req.b[k].sign;
       d0.prod[k].sig = req.a[k].sig * req.b[k].sig;
-      // A zero operand contributes exponent -126 to the alignment decision.
-      d0.prod[k].e = (req.a[k].cls == ZERO ? -9'sd126 : 9'($signed(req.a[k].e))) +
-          (req.b[k].cls == ZERO ? -9'sd126 : 9'($signed(req.b[k].e)));
+      d0.prod[k].e = 9'($signed(req.a[k].e)) + 9'($signed(req.b[k].e));
+      eligible[k] = req.a[k].cls == FINITE && req.b[k].cls == FINITE;
       exps[k] = d0.prod[k].e;
       classes |= product_flags(req.a[k].cls, req.b[k].cls, d0.prod[k].sign);
     end
@@ -27,9 +29,10 @@ module blackwell_wide_dot_front
   for (genvar g = 0; g < 4; g++) begin : g_group_max
     blackwell_dot_emax_tree #(
       .TERM_N(4),
-      .EXP_W (9)
+      .EXP_W(9),
+      .DEFAULT_EXP(EMPTY_EXP)
     ) group_max (
-      .term_vld_i('1),
+      .term_vld_i(eligible[4*g+:4]),
       .term_exp_flat_i(exps[4*g+:4]),
       .emax_o(d0.group_max[g]),
       .emax_vld_o()
@@ -80,15 +83,14 @@ module blackwell_low_dot_front
     d0.c_exp = 10'($signed(c.e)) - 10'(scale);
     d0.c_sign = c.sign;
     d0.c_sig = c.sig;
-    d0.c_valid = c.cls == FINITE || req.include_zero_exponents;
+    d0.c_valid = c.cls == FINITE;
     classes = flags(c.cls, c.sign) | {req.sa.nan || req.sb.nan, 2'b0};
     for (int k = 0; k < 32; k++) begin
       d0.prod[k].sig = req.a[k].sig * req.b[k].sig;
       d0.prod[k].sign = req.a[k].sign ^ req.b[k].sign;
       d0.prod[k].e = 6'($signed(req.a[k].e)) + 6'($signed(req.b[k].e));
-      exponents[k] = (req.a[k].cls == ZERO ? -9'sd126 : 9'($signed(req.a[k].e))) +
-          (req.b[k].cls == ZERO ? -9'sd126 : 9'($signed(req.b[k].e)));
-      eligible[k] = req.include_zero_exponents || (req.a[k].cls == FINITE && req.b[k].cls == FINITE);
+      exponents[k] = 9'($signed(d0.prod[k].e));
+      eligible[k] = req.a[k].cls == FINITE && req.b[k].cls == FINITE;
       classes |= product_flags(req.a[k].cls, req.b[k].cls, d0.prod[k].sign);
     end
     d0.special = special_code(classes);

@@ -6,7 +6,7 @@ Computes a complete 32-term low-precision dot with any A/B combination of E4M3/E
 
 | Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| req | Input | a[32],b[32] each contain `{class2,sign1,sig4,e:s5}` elements, plus c32 and one `{nan1,e:s8}` each for scale_a/scale_b, followed by include_zero_exponents (1 bit), 819 bits total | TC dot array | req.fire captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and bit order |
+| req | Input | a[32],b[32] each contain `{class2,sign1,sig4,e:s5}` elements, plus c32 and one `{nan1,e:s8}` each for scale_a/scale_b, 818 bits total | TC dot array | req.fire captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and bit order |
 | rsp | Output | result32, 32bit | TC dot array | rsp.fire delivers the result |
 
 ```mermaid
@@ -55,9 +55,9 @@ The independent K32 path stores 1,800 bits/cell or 14,400 B/core. The default co
 
 ### Products, scaling, reduction, and packing
 
-Decode all formats to `sign*sig4*2^(e−3)`. Let p be the source fraction width. For normals use sig4=((1<<p)+frac)<<(3−p), and for subnormals sig4=frac<<(3−p), adding zero low bits. For FP4 and FP6 subnormals, normalize sig4 until its high bit is set and decrease e by the same shift count, matching exponent extraction from their FP32 model representation. FP8 keeps the source subnormal exponent. The leaf multiplies the two unsigned sig4 values. Both S0 and S1 register the raw unsigned product8. Sign-extend both e values to 6 bits before adding them.
+Decode all formats to `sign*sig4*2^(e−3)`. Let p be the source fraction width. For normals use sig4=((1<<p)+frac)<<(3−p), and for subnormals sig4=frac<<(3−p), adding zero low bits. For FP4 and FP6 subnormals, normalize sig4 until its high bit is set and decrease e by the same shift count. FP8 keeps the source subnormal exponent. The leaf multiplies the two unsigned sig4 values. Both S0 and S1 register the raw unsigned product8. Sign-extend both e values to 6 bits before adding them.
 
-With MX disabled, each row and column decoder sends `{nan=0,e=0}`. When enabled, decode 0…254 to e=byte−127 and 0xff to `{nan=1,e=0}`. The leaf sums both scale exponents in signed9 to obtain E (−254…254). Either nan bit produces NaN. Convert the C exponent to `eC−E` and retain its unsigned 24-bit significand through S1. For unscaled FP8 × FP8, the array asserts include_zero_exponents. Select emax across all products and C, using −126 for each zero operand and zero C. For MX and FP4/FP6 combinations, select only nonzero products and nonzero C. An all-zero sum returns +0.
+With MX disabled, each row and column decoder sends `{nan=0,e=0}`. When enabled, decode 0…254 to e=byte−127 and 0xff to `{nan=1,e=0}`. The leaf sums both scale exponents in signed9 to obtain E (−254…254). Either nan bit produces NaN. Convert the C exponent to `eC−E` and retain its unsigned 24-bit significand through S1. For every dtype pair and either MX setting, only nonzero finite products and nonzero finite C contribute to emax. A group containing only zero products has an invalid maximum. An all-zero sum returns +0.
 
 S0 compares eligible exponent sums in four groups of eight. S1 compares valid groups with eligible C in the product exponent domain. Use a signed10 relative exponent for C. Subtract at full width before encoding each distance as min(distance,27) for a contributing magnitude. A zero magnitude contributes zero for every shift encoding. S1 also computes base_exp=emax−25+E.
 
@@ -69,7 +69,7 @@ For E2M1 0x3×0x2 with every other term and C zero, the result must be 0x3fc0000
 
 P=6. Edge l captures S0. S5 is visible after l+5 and the earliest output transfer is l+6. II=1. Each of the six elastic stages holds independently. Reset clears valid. Adjacent inputs may change dtype and MX mode. S0 captures the microtile's products, special classifications, and scale exponent. Later stages use only the in-flight fields.
 
-Verify all 25 dtype combinations, finite extrema/zero/subnormal/NaN as applicable, E5M2 Inf, UE8M0 0/254/255, and signed cancellation. Compare MX against a reference using exactly the same fixed-point alignment. Check truncation for large exponent differences between scaled finite products and C. Assert correct behavior under uniform backpressure across 64 lanes and fault injection with partial ready.
+Verify all 25 dtype combinations, finite extrema/zero/subnormal/NaN as applicable, E5M2 Inf, UE8M0 0/254/255, and signed cancellation. Compare MX against a reference using exactly the same fixed-point alignment. With E5M2 A all zero, B[0]=0x7b, and FP32 C=0x00000001, verify that both unscaled and unit-scaled MX return C. Check truncation for large exponent differences between scaled finite products and C. Assert correct behavior under uniform backpressure across 64 lanes and fault injection with partial ready.
 
 RTL: [blackwell_f4f6f8_dot.sv](../../../rtl/dot/blackwell_f4f6f8_dot.sv).
 

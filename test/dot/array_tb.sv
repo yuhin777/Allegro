@@ -22,7 +22,7 @@ module array_tb;
             wide_req_t
         ) != 740 || $bits(
             low_req_t
-        ) != 819 || $bits(
+        ) != 818 || $bits(
             fp4_req_t
         ) != 784 || $bits(
             int_req_t

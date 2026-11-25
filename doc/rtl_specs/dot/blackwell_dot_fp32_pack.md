@@ -22,7 +22,7 @@ sum=0 produces +0. For other finite values let s be the sign, a the exact absolu
 - e<−149 gives signed zero, or +0 when CANONICAL_ZERO=1.
 - When special_valid=1, return special_result in preference to the finite result.
 
-All floating-point dot families use CANONICAL_ZERO=1, matching MMA-Sim truncation to an integer significand at the FP32 subnormal boundary. Exact cancellation always produces +0.
+The wide and K32 paths use CANONICAL_ZERO=1. The native K64 FP4 path uses CANONICAL_ZERO=0 and preserves the sign when a nonzero reduction sum underflows to zero. Exact cancellation produces +0 in every family.
 
 The parent captures the result at its final stage without an extra pipeline stage. Verify that sum=3 and base_exp=0 give 0x40400000. Also check negative powers of two, the most negative sum, normal/subnormal boundaries, e=−149/−150, e=127/128, and special-result priority.
 

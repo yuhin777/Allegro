@@ -58,6 +58,7 @@ module blackwell_fp4_dot
   assign d0.c = {c.sign, c.sig, 10'($signed(c.e)) - 10'sd6};
   assign d0.special = special_code(flags(c.cls, c.sign) | {|nan_scale, 2'b0});
   logic [4:0][9:0] exps;
+  logic [4:0] eligible;
   for (genvar h = 0; h < 4; h++) begin : g_group
     logic [15:0][8:0] products;
     for (genvar l = 0; l < 16; l++) begin : g_product
@@ -84,6 +85,7 @@ module blackwell_fp4_dot
         d1.gamma[h].mag = abs_sigma * q0.scale[h],
         d1.gamma[h].e = q0.exp[h];
     assign exps[h] = d1.gamma[h].e;
+    assign eligible[h] = (|q0.sigma[h]) && (|q0.scale[h]);
     // 16 * 12^2 * 15^2 < 2^19, so the scaled group magnitude fits in 19 bits.
     blackwell_dot_align_fixed_rz #(
       .MAG_W(46),
@@ -99,11 +101,12 @@ module blackwell_fp4_dot
   end
   assign d1.special = q0.special, d1.c = q0.c;
   assign exps[4] = q0.c.e;
+  assign eligible[4] = |q0.c.sig;
   blackwell_dot_emax_tree #(
     .TERM_N(5),
     .EXP_W (10)
   ) select_emax (
-    .term_vld_i('1),
+    .term_vld_i(eligible),
     .term_exp_flat_i(exps),
     .emax_o(d1.emax),
     .emax_vld_o()
@@ -130,7 +133,8 @@ module blackwell_fp4_dot
   );
   assign d3.special = q2.special, d3.base = q2.base;
   blackwell_dot_fp32_pack #(
-    .SUM_W(49)
+    .SUM_W(49),
+    .CANONICAL_ZERO(1'b0)
   ) pack_result (
     .sum(q3.sum),
     .base_exp(q3.base),

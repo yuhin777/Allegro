@@ -39,7 +39,6 @@ package blackwell_dot_pkg;
     low_t [31:0] a, b;
     logic [31:0] c;
     mx_t sa, sb;
-    logic include_zero_exponents;
   } low_req_t;
   typedef struct packed {
     nibble_t [63:0] a, b;
@@ -133,7 +132,7 @@ package blackwell_dot_pkg;
     wide_t v;
     logic [7:0] ef;
     logic [9:0] frac;
-    logic special;
+    logic special, nan_fraction;
     v = '0;
     case (dtype)
       0: begin
@@ -141,6 +140,7 @@ package blackwell_dot_pkg;
         frac = raw[9:0];
         v.sign = raw[15] ^ negate;
         special = &ef[4:0];
+        nan_fraction = |frac;
         v.e = ef == 0 ? -8'sd14 : ef - 8'd15;
       end
       1: begin
@@ -148,6 +148,7 @@ package blackwell_dot_pkg;
         frac = {raw[6:0], 3'b0};
         v.sign = raw[15] ^ negate;
         special = &ef;
+        nan_fraction = |frac;
         v.e = ef == 0 ? -8'sd126 : ef - 8'd127;
       end
       default: begin
@@ -155,11 +156,12 @@ package blackwell_dot_pkg;
         frac = raw[22:13];
         v.sign = raw[31] ^ negate;
         special = &ef;
+        nan_fraction = |raw[22:0];
         v.e = ef == 0 ? -8'sd126 : ef - 8'd127;
       end
     endcase
     v.sig = {|ef, frac};
-    v.cls = special ? ((|frac) ? NAN : INF) : (v.sig == 0 ? ZERO : FINITE);
+    v.cls = special ? (nan_fraction ? NAN : INF) : (v.sig == 0 ? ZERO : FINITE);
     if (v.cls != FINITE) begin
       v.e = '0;
       v.sig = '0;

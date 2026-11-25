@@ -20,11 +20,11 @@ def decode(bits, dtype, negate=False):
     exp = bits >> fw & ((1 << ew) - 1)
     frac = bits & ((1 << fw) - 1)
     sign = bool((bits >> (fw + ew)) & 1) ^ negate
+    if dtype in (0, 1, 2, 4) and exp == (1 << ew) - 1:
+        return ('nan' if frac else 'inf', sign, 0, 0)
     if dtype == 2:
         frac >>= 13
         fw = 10
-    if dtype in (0, 1, 2, 4) and exp == (1 << ew) - 1:
-        return ('nan' if frac else 'inf', sign, 0, 0)
     if dtype == 3 and exp == 15 and frac == 7:
         return ('nan', sign, 0, 0)
     sig = ((1 << fw) if exp else 0) | frac
@@ -58,8 +58,8 @@ def pack(integer, exponent, canonical=True):
     return sign | ((e+127) << 23) | (frac & 0x7fffff)
 
 
-def align(terms, correction, canonical=True, include_zeros=False):
-    active = [(mag, exp) for mag, exp in terms if mag or include_zeros]
+def align(terms, correction, canonical=True):
+    active = [(mag, exp) for mag, exp in terms if mag]
     if not active:
         return 0
     max_exp = max(exp for _, exp in active)
@@ -132,7 +132,7 @@ class Vector:
                     flags.add('nan')
                 terms.append((sigma * am * bm << 27, ae + be))
             terms.append((csign * cmag << 12, cexp - 6))
-            result = align(terms, -29, include_zeros=True)
+            result = align(terms, -29, canonical=False)
         else:
             wide = self.kind <= 1
             kmax = 8 if self.kind == 1 else (16 if wide else 32)
@@ -151,8 +151,7 @@ class Vector:
                     flags.add(an ^ bn)
                 terms.append(((-1 if an ^ bn else 1) * am * bm << (5 if wide else 19), ae+be))
             terms.append((csign * cmag << 2, cexp-scale))
-            native_fp8 = self.kind == 2 and self.ta <= 4 and self.tb <= 4
-            result = align(terms, scale-25, include_zeros=wide or native_fp8)
+            result = align(terms, scale-25)
         if 'nan' in flags or len(flags)>1:
             return QNAN
         if flags:
@@ -172,21 +171,39 @@ def vectors():
     yield Vector(5, 7, 7, int('2'*64,16), int('2'*64,16), 0xbf800000, 0x7f7f, 0x7f7f)
     yield Vector(6, 7, 7, int('2'*64,16), int('2'*64,16), 0xbf800000, 0x50484038, 0x38383838, ue4=True)
     yield Vector(0, 1, 1, 0x80, 0x80)
-    # MMA-Sim Blackwell edge cases: these expectations are fixed model outputs.
+    # Fixed raw-bit cases for both array configurations. Check the integer
+    # oracle against explicit expected results before using it as the scoreboard.
+    scale_one = 0x38383838
     for vector, expected in [
-        (Vector(1, 2, 2, 0x7f800001, 0x3f800000), PINF),
+        (Vector(1, 2, 2, 0x7f800001, 0x3f800000), QNAN),
+        (Vector(1, 2, 2, 0x3f800000, 0xff800001), QNAN),
         (Vector(1, 2, 2, 0x7f802000, 0x3f800000), QNAN),
-        (Vector(0, 1, 1, 0x3080, 0x7f003f80), 0),
-        (Vector(0, 1, 1, 0x3080, 0x3f80), 0x30800000),
-        (Vector(1, 2, 2, 0x30800000, 0x7f0000003f800000), 0),
-        (Vector(1, 2, 2, 0x30800000, 0x3f800000), 0x30800000),
-        (Vector(2, 4, 4, 0, 0x7b, 1), 0),
+        (Vector(1, 2, 2, PINF, 0x3f800000), PINF),
+        (Vector(1, 2, 2, PINF, 0), QNAN),
+        # Zero times a large finite operand leaves C and other products intact.
+        (Vector(0, 1, 1, 0, 0x7f00, c=0x2b800000), 0x2b800000),
+        (Vector(0, 1, 1, 0x3080, 0x7f003f80), 0x30800000),
+        (Vector(1, 2, 2, 0x30800000, 0x7f0000003f800000), 0x30800000),
+        (Vector(2, 4, 4, 0, 0x7b, 1), 1),
+        (Vector(4, 4, 4, 0, 0x7b, 0x80000001, sa=127, sb=127), 0x80000001),
+        # With +1 and -1 present, 2^-25 survives alignment; 2^-26 truncates.
+        (Vector(0, 1, 1, 0x3300bf803f80, 0x3f803f803f80), 0x33000000),
+        (Vector(0, 1, 1, 0x3280bf803f80, 0x3f803f803f80), 0),
         (Vector(2, 3, 7, 0x38, 1, 0xb2800000), 0x3effffff),
-        (Vector(5, 7, 7, 0xa, 2, sa=0x3434, sb=0x3434), 0),
-        (Vector(6, 7, 7, c=1, sa=0x38383838, sb=0x38383838, ue4=True), 0),
-        (Vector(6, 7, 7, c=0x80000001, sa=0x38383838, sb=0x38383838, ue4=True), 0),
+        (Vector(6, 7, 7, c=1, sa=scale_one, sb=scale_one, ue4=True), 1),
+        (Vector(6, 7, 7, c=0x80000001, sa=scale_one, sb=scale_one, ue4=True), 0x80000001),
+        # Group 0 sums to zero at huge scales. Group 2 contributes exactly one.
+        (Vector(5, 7, 7, (2 << 128) | 0xa2, (2 << 128) | 0x22,
+                sa=0x7ffe, sb=0x7ffe), 0x3f800000),
+        # A zero scale nulls a nonzero group, leaving the smallest nonzero C.
+        (Vector(6, 7, 7, 2, 2, c=1, sa=0, sb=scale_one, ue4=True), 1),
+        # A negative nonzero K64 result packs to -0 at -2^-150, and to
+        # the smallest negative subnormal at -2^-149. Cancellation gives +0.
+        (Vector(5, 7, 7, 0xa, 2, sa=0x3434, sb=0x3434), 0x80000000),
+        (Vector(5, 7, 7, 0xa, 2, sa=0x3434, sb=0x3535), 0x80000001),
+        (Vector(5, 7, 7, 0xa2, 0x22, sa=0x3434, sb=0x3434), 0),
     ]:
-        assert vector.value() == expected
+        assert vector.value() == expected, (vector, hex(vector.value()), hex(expected))
         yield vector
     yield Vector(2, 3, 3, 0x3f, 0x3f, 0x49800000, na=True)
     for sat, ta, tb, a, b, c in itertools.product((False,True), (8,9), (8,9), (0xff,0x80), (0xff,0x7f), (0x7fffffff,0x80000000)):
