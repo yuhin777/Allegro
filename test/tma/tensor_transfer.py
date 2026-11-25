@@ -1,6 +1,7 @@
 """Exercise both TMA directions, byte strobes, OOB and asymmetric tensor strides."""
 from collections import deque
 from struct import pack_into
+from random import Random
 import cocotb
 from cocotb.triggers import Timer
 
@@ -12,13 +13,13 @@ def packed(*fields):
     return n
 
 
-def descriptor(base, dim, strides):
+def descriptor(base, dim, strides, box=(128, 3, 2, 1)):
     raw = bytearray(128)
     raw[:4] = bytes((0x10, 3, 6, 3))
     pack_into("<Q", raw, 4, base)
     pack_into("<5I", raw, 12, *(d - 1 for d in dim), 0)
     pack_into("<5Q", raw, 32, 0, *strides, 0)
-    pack_into("<5H", raw, 72, 128, 3, 2, 1, 0)
+    pack_into("<5H", raw, 72, *box, 0)
     raw[82:86] = bytes([1] * 4)
     return raw
 
@@ -230,6 +231,45 @@ async def panel_first_oob_roundtrip(dut):
     assert await f.result(store) == 1536
     assert f.mem == expected
     assert f.map_reads == [0, 128]
+
+
+@cocotb.test()
+async def signed_origin_and_outer_carries(dut):
+    class StalledFabric(Fabric):
+        async def edge(self, probe=None, allow_fault=False):
+            self.d.gmem_req_ready.value = rng.randrange(4) != 0
+            return await super().edge(probe, allow_fault)
+
+    rng = Random(0xB1AC)
+    f = StalledFabric(dut)
+    await f.reset()
+    box = (256, 3, 2, 2)
+    dims = (238, 2, 2, 2)
+    strides = (0x820, 0x270, 0x140)
+    origin = (-11, -1, 0, -1)
+    base = 0x400
+    f.mem[0:128] = descriptor(base, dims, strides, box)
+    for k in range(base, 0x2000):
+        f.mem[k] = rng.randrange(256)
+    await f.result(await f.bar(0, 1))
+    total = 2 * box[0] * box[1] * box[2] * box[3]
+    await f.result(await f.bar(3, nbytes=total))
+    assert await f.result(await f.tma(0, 0, origin)) == total
+    assert await f.result(await f.bar(4)) == 1
+    expected = {}
+    for w in range(box[3]):
+        for z in range(box[2]):
+            for y in range(box[1]):
+                row = (w * box[2] + z) * box[1] + y
+                for b in range(2 * box[0]):
+                    u = (origin[0] + b // 2, origin[1] + y, origin[2] + z, origin[3] + w)
+                    addr = base + 2 * u[0] + sum(i * s for i, s in zip(u[1:], strides)) + b % 2
+                    panel_row = (b // 128) * (box[1] * box[2] * box[3]) + row
+                    x = 0xf0 + 128 * panel_row + b % 128
+                    expected[x ^ (((x >> 7) & 7) << 4)] = (
+                        f.mem[addr] if all(0 <= i < d for i, d in zip(u, dims)) else 0
+                    )
+    await f.check_smem(expected)
 
 
 @cocotb.test()

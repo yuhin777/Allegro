@@ -72,7 +72,8 @@ package blackwell_tma_pkg;
     ticket_t ticket;
     logic [63:0] total_bytes;
     logic [15:0] inner_bytes;
-    logic [63:0] iteration_count;
+    logic [63:0] gmem_origin;
+    logic [24:0] row_count;
   } tma_context_t;
   typedef struct packed {
     tma_issue_t issue;

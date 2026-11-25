@@ -5,7 +5,9 @@ module blackwell_async_subsystem_top
   import blackwell_smem_pkg::*;
   import blackwell_tma_pkg::*;
   import blackwell_mbarrier_pkg::*;
-(
+#(
+  parameter bit SHARE_FP_DOT_ADDER_TREE = 1
+) (
   input logic clk,
   input logic rst_n,
   input logic lsu_quiescent,
@@ -242,7 +244,8 @@ module blackwell_async_subsystem_top
   );
   for (genvar i = 0; i < 4; i++) begin : cores
     blackwell_tc_mma_core #(
-      .CORE(i)
+      .CORE(i),
+      .SHARE_FP_DOT_ADDER_TREE(SHARE_FP_DOT_ADDER_TREE)
     ) core (
       .epoch_i(epoch),
       .halt_i(fault),

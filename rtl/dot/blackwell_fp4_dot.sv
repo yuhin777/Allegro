@@ -19,8 +19,7 @@ module blackwell_fp4_dot
     logic signed [9:0] e;
   } c_t;
   typedef struct packed {
-    logic special;
-    logic [31:0] value;
+    logic [1:0] special;
     logic [3:0][12:0] sigma;
     logic [3:0][7:0] scale;
     logic [3:0][9:0] exp;
@@ -28,27 +27,24 @@ module blackwell_fp4_dot
   } grouped_t;
   typedef struct packed {
     logic sign;
-    logic [19:0] mag;
+    logic [18:0] mag;
     logic signed [9:0] e;
   } gamma_t;
   typedef struct packed {
-    logic special;
-    logic [31:0] value;
+    logic [1:0] special;
     gamma_t [3:0] gamma;
     c_t c;
     logic signed [9:0] emax;
   } gamma_stage_t;
   typedef struct packed {
-    logic special;
-    logic [31:0] value;
-    logic [4:0][46:0] terms;
+    logic [1:0] special;
+    logic [3:0][46:0] gamma;
+    logic signed [36:0] c;
     logic signed [9:0] base;
   } aligned_t;
   typedef struct packed {
-    logic special;
-    logic [31:0] value;
-    logic sign;
-    logic [48:0] mag;
+    logic [1:0] special;
+    logic signed [48:0] sum;
     logic signed [9:0] base;
   } sum_t;
   grouped_t d0, q0;
@@ -60,10 +56,8 @@ module blackwell_fp4_dot
   accum_t c;
   assign c = accum_decode(req.c, 0);
   assign d0.c = {c.sign, c.sig, 10'($signed(c.e)) - 10'sd6};
-  assign d0.special = (|nan_scale) || c.cls == INF || c.cls == NAN;
-  assign d0.value = (|nan_scale) || c.cls == NAN ? QNAN : (c.sign ? NINF : PINF);
+  assign d0.special = special_code(flags(c.cls, c.sign) | {|nan_scale, 2'b0});
   logic [4:0][9:0] exps;
-  logic [4:0] nonzero;
   for (genvar h = 0; h < 4; h++) begin : g_group
     logic [15:0][8:0] products;
     for (genvar l = 0; l < 16; l++) begin : g_product
@@ -75,7 +69,8 @@ module blackwell_fp4_dot
     blackwell_dot_signed_reduce_tree #(
       .TERM_N(16),
       .TERM_W(9),
-      .SUM_W (13)
+      .SUM_W(13),
+      .CARRY_SAVE(1'b1)
     ) group_sum (
       .term_flat_i(products),
       .sum_o(d0.sigma[h])
@@ -88,69 +83,59 @@ module blackwell_fp4_dot
     assign d1.gamma[h].sign = q0.sigma[h][12],
         d1.gamma[h].mag = abs_sigma * q0.scale[h],
         d1.gamma[h].e = q0.exp[h];
-    assign exps[h] = d1.gamma[h].e, nonzero[h] = |d1.gamma[h].mag;
-    // 16 * 12^2 * 15^2 < 2^19, so bit 19 is zero for every legal input.
+    assign exps[h] = d1.gamma[h].e;
+    // 16 * 12^2 * 15^2 < 2^19, so the scaled group magnitude fits in 19 bits.
     blackwell_dot_align_fixed_rz #(
       .MAG_W(46),
       .EXP_W(10)
     ) align_gamma (
       .term_valid(valid[2] && (|q1.gamma[h].mag)),
       .term_sign(q1.gamma[h].sign),
-      .term_mag({q1.gamma[h].mag[18:0], 27'b0}),
+      .term_mag({q1.gamma[h].mag, 27'b0}),
       .term_exp(q1.gamma[h].e),
       .emax(q1.emax),
-      .term(d2.terms[h])
+      .term(d2.gamma[h])
     );
   end
-  assign d1.special = q0.special, d1.value = q0.value, d1.c = q0.c;
-  assign exps[4] = q0.c.e, nonzero[4] = |q0.c.sig;
+  assign d1.special = q0.special, d1.c = q0.c;
+  assign exps[4] = q0.c.e;
   blackwell_dot_emax_tree #(
     .TERM_N(5),
     .EXP_W (10)
   ) select_emax (
-    .term_vld_i(nonzero),
+    .term_vld_i('1),
     .term_exp_flat_i(exps),
     .emax_o(d1.emax),
     .emax_vld_o()
   );
   blackwell_dot_align_fixed_rz #(
-    .MAG_W(46),
+    .MAG_W(36),
     .EXP_W(10)
   ) align_c (
     .term_valid(valid[2] && (|q1.c.sig)),
     .term_sign(q1.c.sign),
-    .term_mag({10'b0, q1.c.sig, 12'b0}),
+    .term_mag({q1.c.sig, 12'b0}),
     .term_exp(q1.c.e),
     .emax(q1.emax),
-    .term(d2.terms[4])
+    .term(d2.c)
   );
-  assign d2.special = q1.special, d2.value = q1.value, d2.base = q1.emax - 10'sd29;
-  logic signed [48:0] total;
+  assign d2.special = q1.special, d2.base = q1.emax - 10'sd29;
   blackwell_dot_signed_reduce_tree #(
     .TERM_N(5),
     .TERM_W(47),
     .SUM_W (49)
   ) reduce_sum (
-    .term_flat_i(q2.terms),
-    .sum_o(total)
+    .term_flat_i({47'($signed(q2.c)), q2.gamma}),
+    .sum_o(d3.sum)
   );
-  assign d3.special = q2.special,
-      d3.value = q2.value,
-      d3.base = q2.base,
-      d3.sign = total[48],
-      d3.mag = total[48] ? $unsigned(
-          -total
-      ) : $unsigned(
-          total
-      );
+  assign d3.special = q2.special, d3.base = q2.base;
   blackwell_dot_fp32_pack #(
-    .SUM_W(49),
-    .CANONICAL_ZERO(0)
+    .SUM_W(49)
   ) pack_result (
-    .sum(q3.sign ? -$signed(q3.mag) : $signed(q3.mag)),
+    .sum(q3.sum),
     .base_exp(q3.base),
-    .special_valid(q3.special),
-    .special_result(q3.value),
+    .special_valid(|q3.special),
+    .special_result(special_value(q3.special)),
     .result(d4)
   );
   assign valid[0] = req_valid, req_ready = ready[0], rsp_valid = valid[5], ready[5] = rsp_ready;
@@ -216,7 +201,17 @@ module blackwell_fp4_dot
   );
 `ifndef SYNTHESIS
   initial
-    if ($bits(q0) != 192 || $bits(q1) != 202 || $bits(q2) != 278 || $bits(q3) != 93)
+    if ($bits(
+            q0
+        ) != 161 || $bits(
+            q1
+        ) != 167 || $bits(
+            q2
+        ) != 237 || $bits(
+            q3
+        ) != 61 || $bits(
+            d4
+        ) != 32)
       $fatal(1, "fp4 pipeline storage width");
 `endif
 endmodule

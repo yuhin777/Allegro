@@ -7,6 +7,9 @@ rtl/dot/blackwell_dot_align_fixed_rz.sv
 rtl/dot/blackwell_dot_emax_tree.sv
 rtl/dot/blackwell_dot_signed_reduce_tree.sv
 rtl/dot/blackwell_dot_fp32_pack.sv
+rtl/dot/blackwell_fp_dot_front.sv
+rtl/dot/blackwell_fp_dot_control.sv
+rtl/dot/blackwell_fp_dot_lane.sv
 rtl/dot/blackwell_f16tf32_dot.sv
 rtl/dot/blackwell_f4f6f8_dot.sv
 rtl/dot/blackwell_fp4_dot.sv

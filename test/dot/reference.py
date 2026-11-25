@@ -20,16 +20,23 @@ def decode(bits, dtype, negate=False):
     exp = bits >> fw & ((1 << ew) - 1)
     frac = bits & ((1 << fw) - 1)
     sign = bool((bits >> (fw + ew)) & 1) ^ negate
+    if dtype == 2:
+        frac >>= 13
+        fw = 10
     if dtype in (0, 1, 2, 4) and exp == (1 << ew) - 1:
         return ('nan' if frac else 'inf', sign, 0, 0)
     if dtype == 3 and exp == 15 and frac == 7:
         return ('nan', sign, 0, 0)
-    if dtype == 2:
-        frac >>= 13
-        fw = 10
     sig = ((1 << fw) if exp else 0) | frac
     sig <<= (10 if dtype <= 2 else 3) - fw
-    return ('finite' if sig else 'zero', sign, sig, max(1, exp) - bias)
+    exponent = max(1, exp) - bias
+    if not sig:
+        return ('zero', sign, 0, -126)
+    if dtype >= 5 and not exp:
+        shift = 4 - sig.bit_length()
+        sig <<= shift
+        exponent -= shift
+    return ('finite', sign, sig, exponent)
 
 
 def pack(integer, exponent, canonical=True):
@@ -51,8 +58,8 @@ def pack(integer, exponent, canonical=True):
     return sign | ((e+127) << 23) | (frac & 0x7fffff)
 
 
-def align(terms, correction, canonical=True):
-    active = [(mag, exp) for mag, exp in terms if mag]
+def align(terms, correction, canonical=True, include_zeros=False):
+    active = [(mag, exp) for mag, exp in terms if mag or include_zeros]
     if not active:
         return 0
     max_exp = max(exp for _, exp in active)
@@ -62,8 +69,10 @@ def align(terms, correction, canonical=True):
 
 def scale4(byte, ue4):
     if ue4:
+        if byte & 127 == 0:
+            return False, 0, -129
         return (byte & 127) == 127, (byte & 7) + (8 if byte & 0x78 else 0), max(1, (byte >> 3) & 15)-10
-    return byte == 255, 8, byte-130
+    return (False, 4, -129) if byte == 0 else (byte == 255, 8, byte-130)
 
 
 @dataclass
@@ -123,7 +132,7 @@ class Vector:
                     flags.add('nan')
                 terms.append((sigma * am * bm << 27, ae + be))
             terms.append((csign * cmag << 12, cexp - 6))
-            result = align(terms, -29, canonical=False)
+            result = align(terms, -29, include_zeros=True)
         else:
             wide = self.kind <= 1
             kmax = 8 if self.kind == 1 else (16 if wide else 32)
@@ -142,7 +151,8 @@ class Vector:
                     flags.add(an ^ bn)
                 terms.append(((-1 if an ^ bn else 1) * am * bm << (5 if wide else 19), ae+be))
             terms.append((csign * cmag << 2, cexp-scale))
-            result = align(terms, scale-25)
+            native_fp8 = self.kind == 2 and self.ta <= 4 and self.tb <= 4
+            result = align(terms, scale-25, include_zeros=wide or native_fp8)
         if 'nan' in flags or len(flags)>1:
             return QNAN
         if flags:
@@ -162,7 +172,22 @@ def vectors():
     yield Vector(5, 7, 7, int('2'*64,16), int('2'*64,16), 0xbf800000, 0x7f7f, 0x7f7f)
     yield Vector(6, 7, 7, int('2'*64,16), int('2'*64,16), 0xbf800000, 0x50484038, 0x38383838, ue4=True)
     yield Vector(0, 1, 1, 0x80, 0x80)
-    yield Vector(1, 2, 2, 0x7f800001, 0x3f800000)
+    # MMA-Sim Blackwell edge cases: these expectations are fixed model outputs.
+    for vector, expected in [
+        (Vector(1, 2, 2, 0x7f800001, 0x3f800000), PINF),
+        (Vector(1, 2, 2, 0x7f802000, 0x3f800000), QNAN),
+        (Vector(0, 1, 1, 0x3080, 0x7f003f80), 0),
+        (Vector(0, 1, 1, 0x3080, 0x3f80), 0x30800000),
+        (Vector(1, 2, 2, 0x30800000, 0x7f0000003f800000), 0),
+        (Vector(1, 2, 2, 0x30800000, 0x3f800000), 0x30800000),
+        (Vector(2, 4, 4, 0, 0x7b, 1), 0),
+        (Vector(2, 3, 7, 0x38, 1, 0xb2800000), 0x3effffff),
+        (Vector(5, 7, 7, 0xa, 2, sa=0x3434, sb=0x3434), 0),
+        (Vector(6, 7, 7, c=1, sa=0x38383838, sb=0x38383838, ue4=True), 0),
+        (Vector(6, 7, 7, c=0x80000001, sa=0x38383838, sb=0x38383838, ue4=True), 0),
+    ]:
+        assert vector.value() == expected
+        yield vector
     yield Vector(2, 3, 3, 0x3f, 0x3f, 0x49800000, na=True)
     for sat, ta, tb, a, b, c in itertools.product((False,True), (8,9), (8,9), (0xff,0x80), (0xff,0x7f), (0x7fffffff,0x80000000)):
         yield Vector(3, ta, tb, int(f'{a:02x}'*32,16), int(f'{b:02x}'*32,16), c, sat=sat)
@@ -178,6 +203,18 @@ def vectors():
                 if kind==3: v.sat=bool(rep%2)
                 if kind==6: v.ue4=bool(rep%2)
                 yield v
+    # Maximum E2M1 magnitude and scale significand exercise bit 18 of gamma
+    # and both signs of the signed49 reduction. With zero groups, C alone
+    # exercises the full signed37 aligned accumulator.
+    for negative in (False, True):
+        lanes = int('7' * 64, 16)
+        yield Vector(6, 7, 7, lanes, lanes, sa=0x3f3f3f3f, sb=0x3f3f3f3f,
+                     ue4=True, na=negative)
+        yield Vector(6, 7, 7, c=0xbfffffff if negative else 0x3fffffff,
+                     sa=0x38383838, sb=0x38383838, ue4=True)
+    # A scale NaN wins even when C alone would select an infinity.
+    for c in (PINF, NINF):
+        yield Vector(6, 7, 7, c=c, sa=0x7f383838, sb=0x38383838, ue4=True)
     # Scale endpoints and slow subnormal alignment/both signs of underflow.
     for dtype in range(3,8):
         for sf in (0,1,127,254,255):
@@ -188,6 +225,33 @@ def vectors():
     for c in (1,0x80000001,0x007fffff,0x00800001,0x03801235,0x7f800000,0xff800000):
         for shift in (0,1,3,15):
             yield Vector(0,0,0,c=c,shift=shift)
+
+    # Cancel the unit product with C so a bad shift or premature pair sum
+    # remains visible. Move the unit product across the four exponent groups.
+    for distance in (0, 25, 26, 27, 31, 32):
+        for group, negative in itertools.product(range(4), (False, True)):
+            lane = 4 * group
+            small = ((127 - distance) << 7) | 0x7f | (negative << 15)
+            a = (0x3f80 | (small << 16)) << (16 * lane)
+            b = (0x3f80 | (0x3fff << 16)) << (16 * lane)
+            yield Vector(0, 1, 1, a, b, c=0xbf800000)
+    # Opposite BF16 products at exponent 254 cancel. The third product
+    # has exponent -252, giving the maximum alignment distance of 506.
+    for sign in (0, 0x8000):
+        a = 0x7f00 | (0xff00 << 16) | ((0x00ff | sign) << 32)
+        b = 0x7f00 | (0x7f00 << 16) | (0x00ff << 32)
+        yield Vector(0, 1, 1, a, b)
+    # Near-two FP16 inputs exercise the full pair and final adder widths.
+    for negative in (False, True):
+        lanes = int('3fff' * 16, 16)
+        yield Vector(0, 0, 0, lanes, lanes, c=0xbfffffff if negative else 0x3fffffff, na=negative)
+
+    # The bench drains before this 96-request window, then requires one issue per clock.
+    for i in range(96):
+        if (i < 48 and i % 2 == 0) or (i >= 48 and i % 12 == 0):
+            yield Vector(2, 3, 4, a=0x38, b=0x3c, c=0x3f800000)
+        else:
+            yield Vector(0, 0, 1, a=0x3c00, b=0x3f80, c=0xbf800000)
 
     # The testbench issues these last four separately to measure exact latency.
     yield Vector(3, 8, 9, 0x1ff, 0x302, 4)

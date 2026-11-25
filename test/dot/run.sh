@@ -4,8 +4,13 @@ set -euo pipefail
 project=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# External golden transactions use the same raw-bit layout as reference.py.
+# Keep the directed throughput and isolated latency windows at the end.
+if [[ -n ${MMA_SIM_VECTORS:-} ]]; then
+    cat -- "$MMA_SIM_VECTORS" > "$work/vectors.txt"
+fi
 cd "$work"
-python3 "$project/test/dot/reference.py" > vectors.txt
+python3 "$project/test/dot/reference.py" >> vectors.txt
 mapfile -t sources < "$project/test/dot/rtl.f"
 sources=("${sources[@]/#/$project/}")
 # Debian's split install places the compiler under /usr/bin and its include
@@ -16,8 +21,6 @@ if [[ -z ${VERILATOR_ROOT:-} && -d /usr/share/verilator && ! -x /usr/share/veril
     ln -s "$(command -v verilator_bin)" verilator/verilator_bin
     export VERILATOR_ROOT="$work/verilator"
 fi
-verilator --hierarchical --cc --timing --assert --build --Mdir model -j "${JOBS:-4}" \
-    --top-module array_tb "$project/test/dot/hierarchy.vlt" "${sources[@]}" "$project/test/dot/array_tb.sv"
 # Link the top harness after building each arithmetic family once.
 cat > driver.cpp <<'CPP'
 #include "Varray_tb.h"
@@ -36,9 +39,22 @@ int main(int argc, char** argv) {
 }
 CPP
 verilator_root=$(verilator -V | sed -n 's/^ *VERILATOR_ROOT *= *//p' | head -1)
-"${CXX:-c++}" -std=c++17 -pthread -I model -I "${VERILATOR_ROOT:-$verilator_root}/include" -I "${VERILATOR_ROOT:-$verilator_root}/include/vltstd" \
-    driver.cpp -Wl,--start-group model/libVarray_tb.a model/libverilated.a -Wl,--end-group -o dot-test
-./dot-test
+for shared in 1 0; do
+    echo "SHARE_FP_DOT_ADDER_TREE=$shared"
+    verilator --xml-only --xml-output "array-$shared.xml" --top-module blackwell_tc_dot_array \
+        -GSHARE_FP_DOT_ADDER_TREE="1'b$shared" "${sources[@]}"
+    python3 "$project/test/dot/check_topology.py" "array-$shared.xml" "$shared"
+    mode_flags=()
+    if [[ $shared == 0 ]]; then mode_flags+=(+define+TEST_INDEPENDENT_FP_TREES); fi
+    verilator --hierarchical --cc --timing --assert --build "${mode_flags[@]}" --Mdir "model-$shared" -j "${JOBS:-4}" \
+        --top-module array_tb "$project/test/dot/hierarchy.vlt" "${sources[@]}" "$project/test/dot/array_tb.sv"
+    "${CXX:-c++}" -std=c++17 -pthread -I "model-$shared" -I "${VERILATOR_ROOT:-$verilator_root}/include" -I "${VERILATOR_ROOT:-$verilator_root}/include/vltstd" \
+        driver.cpp -Wl,--start-group "model-$shared/libVarray_tb.a" "model-$shared/libverilated.a" -Wl,--end-group -o dot-test
+    ./dot-test
+done
 verilator --binary --assert -j "${JOBS:-4}" --Mdir primitives --top-module primitive_tb \
     "${sources[@]}" "$project/test/dot/primitive_tb.sv"
 primitives/Vprimitive_tb
+verilator --binary --timing --assert -j "${JOBS:-4}" --Mdir int8 --top-module int8_tb \
+    "${sources[@]}" "$project/test/dot/int8_tb.sv"
+int8/Vint8_tb

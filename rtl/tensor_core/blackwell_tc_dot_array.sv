@@ -43,7 +43,9 @@ endmodule
 
 module blackwell_tc_dot_array
   import blackwell_dot_pkg::*;
-(
+#(
+  parameter bit SHARE_FP_DOT_ADDER_TREE = 1
+) (
   input logic clk,
   input logic rst_n,
   input blackwell_tc_pkg::mma_cmd_t cmd_i,
@@ -78,7 +80,7 @@ module blackwell_tc_dot_array
   assign empty_o = !fifo_valid;
   blackwell_fifo #(
     .WIDTH(2),
-    .DEPTH(19)
+    .DEPTH(SHARE_FP_DOT_ADDER_TREE ? 16 : 19)
   ) order (
     .clk,
     .rst_n,
@@ -129,10 +131,60 @@ module blackwell_tc_dot_array
       .fp4_scale(bsf[g])
     );
   end
-  // Within each family every lane and the tag pipeline start empty, receive
-  // identical input valid/retire signals, and have identical stage count.
-  for (genvar f = 0; f < 4; f++) begin : g_tags
-    localparam int P = (f == 1 ? 6 : (f == 3 ? 3 : 5));
+  localparam int FP_PATHS = SHARE_FP_DOT_ADDER_TREE ? 1 : 2;
+  logic [6:0] fp_advance [FP_PATHS];
+  logic [3:0] fp_low_mode[FP_PATHS];
+  logic fp_low[FP_PATHS], spill_write[FP_PATHS], spill_valid[FP_PATHS];
+  for (genvar p = 0; p < FP_PATHS; p++) begin : g_fp_control
+    localparam bit WIDE = p == 0;
+    localparam bit LOW  = SHARE_FP_DOT_ADDER_TREE || p == 1;
+    logic fp_ready, fp_valid, wide_valid, low_valid;
+    logic [75:0] common_tag[4], wide_tag, spill_tag, low_sum_tag, low_pack_tag;
+    assign fp_valid = (WIDE && issue[0]) || (LOW && issue[1]);
+    assign fp_low[p] = LOW && (!WIDE || selected[1]);
+    blackwell_fp_dot_control #(
+      .HAS_WIDE(WIDE),
+      .HAS_LOW(LOW),
+      .WIDE_SPILL(WIDE)
+    ) control (
+      .clk,
+      .rst_n,
+      .req_low(fp_low[p]),
+      .req_valid(fp_valid),
+      .req_ready(fp_ready),
+      .allow_spill(SHARE_FP_DOT_ADDER_TREE || (retire[1] && family_valid[1])),
+      .wide_ready(retire[0]),
+      .low_ready(retire[1]),
+      .wide_valid,
+      .low_valid,
+      .advance(fp_advance[p]),
+      .low_mode(fp_low_mode[p]),
+      .spill_write(spill_write[p]),
+      .spill_valid(spill_valid[p])
+    );
+    always_ff @(posedge clk) begin
+      if (fp_advance[p][0]) common_tag[0] <= operand_payload.tag;
+      for (int s = 1; s < 4; s++) if (fp_advance[p][s]) common_tag[s] <= common_tag[s-1];
+    end
+    if (WIDE) begin : g_wide
+      always_ff @(posedge clk) begin
+        if (fp_advance[p][4]) wide_tag <= common_tag[3];
+        if (spill_write[p]) spill_tag <= wide_tag;
+      end
+      assign tags[0] = spill_valid[p] ? spill_tag : wide_tag;
+      assign family_ready[0] = fp_ready, family_valid[0] = wide_valid;
+    end
+    if (LOW) begin : g_low
+      always_ff @(posedge clk) begin
+        if (fp_advance[p][5]) low_sum_tag <= common_tag[3];
+        if (fp_advance[p][6]) low_pack_tag <= low_sum_tag;
+      end
+      assign tags[1] = low_pack_tag;
+      assign family_ready[1] = fp_ready, family_valid[1] = low_valid;
+    end
+  end
+  for (genvar f = 2; f < 4; f++) begin : g_tags
+    localparam int P = (f == 3 ? 3 : 5);
     logic [P:0] valid, ready;
     logic [75:0] tag[0:P];
     assign valid[0] = issue[f], ready[P] = retire[f], tag[0] = operand_payload.tag;
@@ -156,6 +208,9 @@ module blackwell_tc_dot_array
     assert property (@(posedge clk) disable iff (!rst_n) lane_valid[f] == {64{valid[P]}});
 `endif
   end
+  // Native unscaled FP8 includes zero terms when selecting the common exponent.
+  logic native_fp8;
+  assign native_fp8 = cmd_i.kind == 2 && cmd_i.a_type <= 4 && cmd_i.b_type <= 4;
   for (genvar n = 0; n < 64; n++) begin : g_cell
     localparam int R = n / 8, C = n % 8;
     wide_req_t wr;
@@ -163,29 +218,32 @@ module blackwell_tc_dot_array
     fp4_req_t  fr;
     int_req_t  ir;
     assign wr = {aw[R], bw[C], operand_payload.c[n], cmd_i.scale_input_d};
-    assign lr = {al[R], bl[C], operand_payload.c[n], am[R], bm[C]};
+    assign lr = {al[R], bl[C], operand_payload.c[n], am[R], bm[C], native_fp8};
     assign fr = {af[R], bf[C], operand_payload.c[n], asf[R], bsf[C]};
     assign ir = {ai[R], bi[C], operand_payload.c[n], cmd_i.int_sat};
-    blackwell_f16tf32_dot wide_lane (
-      .clk,
-      .rst_n,
-      .req_valid(issue[0]),
-      .req_ready(lane_ready[0][n]),
-      .req_payload(wr),
-      .rsp_ready(retire[0]),
-      .rsp_valid(lane_valid[0][n]),
-      .rsp_payload(cells[0][n])
-    );
-    blackwell_f4f6f8_dot low_lane (
-      .clk,
-      .rst_n,
-      .req_valid(issue[1]),
-      .req_ready(lane_ready[1][n]),
-      .req_payload(lr),
-      .rsp_ready(retire[1]),
-      .rsp_valid(lane_valid[1][n]),
-      .rsp_payload(cells[1][n])
-    );
+    for (genvar p = 0; p < FP_PATHS; p++) begin : g_fp_lane
+      localparam bit WIDE = p == 0;
+      localparam bit LOW  = SHARE_FP_DOT_ADDER_TREE || p == 1;
+      logic [31:0] wide_result, low_result;
+      blackwell_fp_dot_lane #(
+        .HAS_WIDE(WIDE),
+        .HAS_LOW(LOW),
+        .WIDE_SPILL(WIDE)
+      ) lane (
+        .clk,
+        .advance(fp_advance[p]),
+        .low_mode(fp_low_mode[p]),
+        .req_low(fp_low[p]),
+        .spill_write(spill_write[p]),
+        .spill_valid(spill_valid[p]),
+        .wide_req(wr),
+        .low_req(lr),
+        .wide_result,
+        .low_result
+      );
+      if (WIDE) assign cells[0][n] = wide_result;
+      if (LOW) assign cells[1][n] = low_result;
+    end
     blackwell_fp4_dot fp4_lane (
       .clk,
       .rst_n,

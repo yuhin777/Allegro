@@ -8,7 +8,7 @@ Setup accepts linear or tiled copies from the TMA unit and builds immutable, ran
 | --- | --- | --- | --- |
 | request / result | Input [tma_setup_req_t](#context) (1507 bits) / output [tma_setup_rsp_t](#context) (74 bits) | TMA unit | Reserve a free slot and result position at acceptance. Hold result until consumed. |
 | arm / walk_start / slot_release | Each input [tma_context_ref_t](#context) (6 bits) | TMA unit | The unit moves a checked and admitted slot from READY to ARMED, relays walk_start from the first S0.fire, and forwards the walker's release from its final S0.fire unchanged. |
-| ctx[2] / slot_state[2] / slot_ticket[2] / span[2] | Output per slot: [context](#context) 983 bits, five-state enum, ticket u5, [access spans](#copy-span) | TMA unit, walker | The unit copies long-lived fields in READY. The walker selects only a pre-edge ARMED slot or one already enumerating. The release edge still reads old values. |
+| ctx[2] / slot_state[2] / slot_ticket[2] / span[2] | Output per slot: [context](#context) 1,008 bits, five-state enum, ticket u5, [access spans](#copy-span) | TMA unit, walker | The unit copies long-lived fields in READY. The walker selects only a pre-edge ARMED slot or one already enumerating. The release edge still reads old values. |
 | drained / fault | Output bit / bit | TMA unit | Both slots empty and no computation/result / runtime fault cleared only by reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
@@ -26,7 +26,7 @@ flowchart LR
 
 ### Allocate and release setup slots
 
-Each of two 983-bit slots has state FREE/BUILD/READY/ARMED/WALK, ticket, and span. They share a four-stage multiplier and one held result. The first segment entering S0 sets WALK. A single-segment command can release directly from ARMED. Release when the last segment or empty-enumeration marker enters S0. A new build for the same slot can be accepted on the release edge. Read old context before initializing the new owner. Stages beyond S0 have no references to the slot.
+Each of two 1,008-bit slots has state FREE/BUILD/READY/ARMED/WALK, ticket, and span. They share a four-stage multiplier and one held result. The first segment entering S0 sets WALK. A single-segment command can release directly from ARMED. Release when the last segment or empty-enumeration marker enters S0. A new build for the same slot can be accepted on the release edge. Read old context before initializing the new owner. Stages beyond S0 have no references to the slot.
 
 <a id="copy-span"></a>
 ### Determine access spans
@@ -38,7 +38,7 @@ CHECK produces an empty flag and inclusive span per address space. For SMEM reta
 1. DECODE checks ID, opcode, and project map rank/box/step/dtype/swizzle. Only a successful demand descriptor reaches setup. For linear check 16 B alignment, full half-open SMEM/GMEM ranges, and the load byte limit, including addition carry.
 2. For tiled copies compute `elements=product(box)`, `total=2*elements`, and `inner=2*box[0]` in widened arithmetic. In each dimension intersect coord…coord+box−1 with 0…dim−1. Only if all intersections are nonempty, use the actual maximum in-bounds coordinate in each dimension with its positive stride to compute the highest GMEM address and check u64. A completely OOB tile can produce a zero source normally. Its virtual addresses cannot cause a range failure.
 3. Check the logically swizzled addresses of all actual SMEM atoms in the tile. Without swizzle compare the final byte. With swizzle compute the last actual byte's unswizzled address using the project panel/row layout. XOR stays within each byte's 128 B sector, so checking that the highest accessed sector fits 228 KiB suffices because capacity is a multiple of 128 B. Do not require higher-dimensional strides to be monotonic.
-4. Write total/inner/elements and decoded parameters into the slot. The linear path takes three fixed cycles for decode/check/result. Tensor setup shares one four-stage, II=1 multiplier. Each edge can start one product whose operands are ready. Each next box product depends on the preceding result. Independent low/high address stride terms can use intervening cycles. Each stage carries slot, destination accumulator, and dimension. A product returns to its slot four edges after issue. Keep the original slot until all products return and CHECK finishes. Round-robin between the two BUILD slots. Within a slot prefer a ready box chain, then dimension and low/high endpoint order. Actual launch of the last required product and CHECK/result handshakes determine latency. The walker compares and carries by dimension, so no quotient or remainder is precomputed or transferred.
+4. Write total bytes, inner bytes, row count, virtual GMEM origin, and decoded parameters into the slot. The linear path takes three fixed cycles for decode/check/result. Tensor setup shares one four-stage, II=1 multiplier. Each edge can start one product whose operands are ready. Each next box product depends on the preceding result. Independent low/high address stride terms can use intervening cycles. Each stage carries slot, destination accumulator, and dimension. A product returns to its slot four edges after issue. Keep the original slot until all products return and CHECK finishes. Round-robin between the two BUILD slots. Within a slot prefer a ready box chain, then dimension and low/high endpoint order. Actual launch of the last required product and CHECK/result handshakes determine latency. The low-endpoint multiply uses the original signed outer coordinate. Add its low 64 product bits to the virtual origin, and contribute the full product to the checked lower endpoint only when the coordinate is nonnegative. This shares all three products and preserves the multiplier issue schedule. CHECK derives the number of panel sectors as one to four times the row count using shifts and addition.
 
 ### Errors and resource release
 
@@ -104,7 +104,7 @@ Test nonzero swizzle base, partial/full OOB at edges, 128 B GMEM line crossings,
 ### Context and setup types
 
 `tensor_decoded_t={base:64,dim[4]:u33,stride[1..3]:u40,box[4]:u9,swizzle:2,l2promotion:2}` is **356 bits**. FP16, unit step, no interleave, and 16 B atoms have already been statically validated. Linear uses an all-zero map.
-`tma_context_t={cmd:tma_cmd_t,map:tensor_decoded_t,ticket:5,total_bytes:64,inner_bytes:16,iteration_count:64}` is **983 bits**. For tensor, iteration_count is the number of tile elements to iterate. For linear it is the number of bytes. inner_bytes is the logical byte length of a row, zero for linear.
+`tma_context_t={cmd:tma_cmd_t,map:tensor_decoded_t,ticket:5,total_bytes:64,inner_bytes:16,gmem_origin:64,row_count:25}` is **1,008 bits**. For tensor, row_count is the product of the three outer box extents (up to 2²⁴). gmem_origin holds the low 64 bits of the address at the signed tile origin, including negative coordinates. The checked in-bounds span governs legal accesses. For linear, gmem_origin is the command address, and row_count and inner_bytes are zero.
 
 | Type | Fields |
 |---|---|

@@ -26,7 +26,9 @@ module tmem_a_tb;
     return 8'((lane * 137 + word_num * 103 + byte_num * 51) ^ ((lane + 13) * (word_num + 7)) ^
               (byte_num * lane));
   endfunction
-  logic fill;
+  logic fill, uniform_service, inject_wrong_lane;
+  logic saw_cross_partition_conflict;
+  tmem_rd_rsp_t wrong_lane_payload;
   logic [6:0] fill_word;
   logic [3:0] partition_fault;
   int cycle;
@@ -41,12 +43,17 @@ module tmem_a_tb;
       localparam int L = 32 * p + b;
       // Independent grant stalls exercise held atom identity, including an
       // unaligned piece spanning two words. Return backpressure is real.
-      wire service = (cycle + L) % 5 != 0;
+      wire service = uniform_service || (cycle + L) % 5 != 0;
       assign read_valid[b] = tm_valid[L] && service;
       assign tm_ready[L] = read_ready[b] && service;
       assign rq[b] = tm_req[L];
-      assign tm_ret_valid[L] = ret_valid[b];
-      assign tm_ret[L] = rs[b];
+      if (L == 127) begin
+        assign tm_ret_valid[L] = ret_valid[b] || inject_wrong_lane;
+        assign tm_ret[L] = inject_wrong_lane ? wrong_lane_payload : rs[b];
+      end else begin
+        assign tm_ret_valid[L] = ret_valid[b];
+        assign tm_ret[L] = rs[b];
+      end
       assign ret_ready[b] = tm_ret_ready[L];
       assign wq[b].tag = '{
               id: '{epoch: 16'd2, issuer: 10'd0, seq: 32'd1},
@@ -83,6 +90,24 @@ module tmem_a_tb;
       .fault_o(partition_fault[p])
     );
     always @(posedge clk) if (fill && !(&write_ready)) $fatal(1, "initialization lost a frame");
+  end
+
+  // Compare each legal return with the first physical lane for its destination.
+  always @(posedge clk) begin
+    bit [4095:0] prior;
+    prior = '0;
+    if (rst_n && !inject_wrong_lane)
+      for (int l = 0; l < 128; l++) begin
+        logic [11:0] key;
+        key = tm_ret[l].tag.token[15:4];
+        if (tm_ret_valid[l]) begin
+          if (tm_ret_ready[l] != !prior[key]) $fatal(1, "bad return grant, lane %0d", l);
+          prior[key] = 1;
+          if (l >= 15 && l / 32 != (l - 15) / 32 && tm_ret_valid[l-15] &&
+              tm_ret[l-15].tag.token[15:4] == key)
+            saw_cross_partition_conflict = 1;
+        end
+      end
   end
 
   function automatic int container_width();
@@ -167,7 +192,7 @@ module tmem_a_tb;
     cmd.a_from_tmem = 1;
     cmd.transpose_a = transpose;
     cmd.a_ref = {32'b0, 16'(lane0), 16'(column)};
-    cmd.scale_a = 405;
+    cmd.scale_a = vec == 0 ? 0 : 405;
     cmd.scale_a_id = 2'(scale_id);
     cmd.scale_vec = 2'(vec);
     cmd.scale_type = vec == 3;
@@ -226,7 +251,26 @@ module tmem_a_tb;
     exercise(4, 5, 1, 12, 8, 1, 2, 1);
     exercise(5, 7, 3, 0, 9, 2, 2);
     exercise(6, 7, 1, 0, 10, 3, 0);
-    if (fault_o || partition_fault != 0) $fatal;
+    uniform_service = 1;
+    exercise(2, 3, 4, 95, 11, 0, 0, 1);
+    if (!saw_cross_partition_conflict || fault_o || partition_fault != 0) $fatal;
+
+    // Duplicate a genuine outstanding response on a distant, incorrect lane.
+    cmd.transpose_a = 0;
+    cmd.a_ref = 0;
+    cmd.id.seq++;
+    seen = '0;
+    active_i = 1;
+    bind_i = 1;
+    @(negedge clk);
+    bind_i = 0;
+    while (!tm_ret_valid[32*CORE]) @(negedge clk);
+    wrong_lane_payload = tm_ret[32*CORE];
+    inject_wrong_lane = 1;
+    do @(posedge clk); while (!tm_ret_ready[127]);
+    @(negedge clk);
+    inject_wrong_lane = 0;
+    if (!fault_o) $fatal(1, "wrong-lane response did not raise fault");
     $display("PASS TMEM A FP16/BF16/TF32, E2M1 extraction, FP6, native FP4 and 1X/2X/4X scale A");
     $finish;
   end

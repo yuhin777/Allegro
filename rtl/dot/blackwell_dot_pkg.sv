@@ -39,6 +39,7 @@ package blackwell_dot_pkg;
     low_t [31:0] a, b;
     logic [31:0] c;
     mx_t sa, sb;
+    logic include_zero_exponents;
   } low_req_t;
   typedef struct packed {
     nibble_t [63:0] a, b;
@@ -66,13 +67,73 @@ package blackwell_dot_pkg;
     logic [23:0] sig;
     logic signed [8:0] e;
   } accum_t;
+  typedef struct packed {
+    logic sign;
+    logic [21:0] sig;
+    logic signed [8:0] e;
+  } wide_product_t;
+  typedef struct packed {
+    logic sign;
+    logic [23:0] sig;
+    logic signed [8:0] e;
+  } wide_c_t;
+  typedef struct packed {
+    logic [1:0] special;
+    wide_product_t [15:0] prod;
+    logic [3:0][8:0] group_max;
+    wide_c_t c;
+  } wide_products_t;
+  typedef struct packed {
+    logic [1:0] special;
+    logic [15:0] prod_sign;
+    logic [15:0][21:0] prod_sig;
+    logic [15:0][4:0] prod_shift;
+    logic c_sign;
+    logic [23:0] c_sig;
+    logic [4:0] c_shift;
+    logic signed [8:0] emax;
+  } wide_shifts_t;
+
+  typedef struct packed {
+    logic sign;
+    logic [7:0] sig;
+    logic signed [5:0] e;
+  } low_product_t;
+  typedef struct packed {
+    low_product_t [31:0] prod;
+    logic [3:0][8:0] group_max;
+    logic [3:0] group_valid;
+    logic c_sign, c_valid;
+    logic [23:0] c_sig;
+    logic signed [9:0] c_exp;
+    logic signed [8:0] scale;
+    logic [1:0] special;
+  } low_products_t;
+  typedef struct packed {
+    logic [31:0] prod_sign;
+    logic [31:0][7:0] prod_sig;
+    logic [31:0][4:0] prod_shift;
+    logic c_sign;
+    logic [23:0] c_sig;
+    logic [4:0] c_shift;
+    logic signed [9:0] base;
+    logic [1:0] special;
+  } low_shifts_t;
+
+  function automatic logic [4:0] alignment_shift(logic signed [9:0] emax,
+                                                 logic signed [9:0] exponent);
+    logic signed [10:0] distance;
+    distance = 11'(emax) - 11'(exponent);
+    return distance >= 11'sd27 ? 5'd27 : distance[4:0];
+  endfunction
+
   localparam logic [31:0] QNAN = 32'h7fffffff, PINF = 32'h7f800000, NINF = 32'hff800000;
 
   function automatic wide_t wide_decode(logic [31:0] raw, logic [3:0] dtype, logic negate);
     wide_t v;
     logic [7:0] ef;
     logic [9:0] frac;
-    logic special, nan;
+    logic special;
     v = '0;
     case (dtype)
       0: begin
@@ -80,7 +141,6 @@ package blackwell_dot_pkg;
         frac = raw[9:0];
         v.sign = raw[15] ^ negate;
         special = &ef[4:0];
-        nan = |frac;
         v.e = ef == 0 ? -8'sd14 : ef - 8'd15;
       end
       1: begin
@@ -88,7 +148,6 @@ package blackwell_dot_pkg;
         frac = {raw[6:0], 3'b0};
         v.sign = raw[15] ^ negate;
         special = &ef;
-        nan = |frac;
         v.e = ef == 0 ? -8'sd126 : ef - 8'd127;
       end
       default: begin
@@ -96,12 +155,11 @@ package blackwell_dot_pkg;
         frac = raw[22:13];
         v.sign = raw[31] ^ negate;
         special = &ef;
-        nan = |raw[22:0];
         v.e = ef == 0 ? -8'sd126 : ef - 8'd127;
       end
     endcase
     v.sig = {|ef, frac};
-    v.cls = special ? (nan ? NAN : INF) : (v.sig == 0 ? ZERO : FINITE);
+    v.cls = special ? ((|frac) ? NAN : INF) : (v.sig == 0 ? ZERO : FINITE);
     if (v.cls != FINITE) begin
       v.e = '0;
       v.sig = '0;
@@ -151,6 +209,19 @@ package blackwell_dot_pkg;
     v.sig = {|ef, frac};
     v.e = 5'((ef == 0 ? 5'd1 : ef) - bias);
     v.cls = v.sig == 0 ? ZERO : FINITE;
+    // MMA-Sim expands FP4/FP6 inputs to FP32 before extracting exponents.
+    if (dtype >= 5 && ef == 0 && frac != 0) begin
+      if (frac[2]) begin
+        v.sig = v.sig << 1;
+        v.e -= 5'sd1;
+      end else if (frac[1]) begin
+        v.sig = v.sig << 2;
+        v.e -= 5'sd2;
+      end else begin
+        v.sig = v.sig << 3;
+        v.e -= 5'sd3;
+      end
+    end
     if (dtype == 3 && raw[6:0] == 7'h7f) v.cls = NAN;
     if (dtype == 4 && (&ef)) v.cls = (|frac) ? NAN : INF;
     if (v.cls != FINITE) begin
@@ -187,8 +258,8 @@ package blackwell_dot_pkg;
       v.e = raw[6:3] != 0 ? 9'({1'b0, raw[6:3]}) - 9'sd10 : (v.sig == 0 ? -9'sd129 : -9'sd9);
     end else begin
       v.nan = &raw;
-      v.sig = 8;
-      v.e = $signed({1'b0, raw}) - 9'sd130;
+      v.sig = raw == 0 ? 4 : 8;
+      v.e = raw == 0 ? -9'sd129 : $signed({1'b0, raw}) - 9'sd130;
     end
     return v;
   endfunction
@@ -207,7 +278,7 @@ package blackwell_dot_pkg;
     v.cls = (&ef) ? ((|raw[22:0]) ? NAN : INF) : (v.sig == 0 ? ZERO : FINITE);
     if (v.cls != FINITE) begin
       v.sig = 0;
-      v.e = 0;
+      v.e = -9'sd126;
     end
     return v;
   endfunction

@@ -43,7 +43,7 @@ module blackwell_tma_setup
   logic [25:0] last_sector[2];  // Up to 4 panels of 256^3 rows.
   localparam logic [3:0] ClipSectorProduct = 4'd10;
   logic [5:0] launched[2], completed[2];
-  logic [2:0][32:0] lows[2], highs[2];
+  logic [2:0][32:0] highs[2];
   logic [63:0] rows[2], elements[2];
   logic [75:0] low_addr[2], high_addr[2];
   logic compute_rr, found, chosen, publication, publication_slot, free_slot;
@@ -126,7 +126,7 @@ module blackwell_tma_setup
             found = 1;
             chosen = s;
             task_id = 4'(4 + n);
-            mul_a = n % 2 == 0 ? 64'(lows[s][n/2]) : 64'(highs[s][n/2]);
+            mul_a = n % 2 == 0 ? 64'($signed(ctx[s].cmd.coord[n/2+1])) : 64'(highs[s][n/2]);
             mul_b = ctx[s].map.stride[n/2];
           end
         end
@@ -194,12 +194,13 @@ module blackwell_tma_setup
                 addr_lo += 76'(first[32:0]) << 1;
                 addr_hi += 76'(last[32:0]) << 1;
               end else begin
-                lows[i][d-1] <= first[32:0];
                 highs[i][d-1] <= last[32:0];
               end
               if (ctx[i].cmd.opcode == STORE_TENSOR && $signed(ctx[i].cmd.coord[d]) < 0) fault <= 1;
             end
             clipped_store[i] <= ctx[i].cmd.opcode == STORE_TENSOR && clipped && !empty_tile;
+            // Low endpoint products also seed the modulo-64 virtual origin.
+            ctx[i].gmem_origin <= ctx[i].map.base_addr + (64'($signed(ctx[i].cmd.coord[0])) << 1);
             low_addr[i] <= addr_lo;
             high_addr[i] <= addr_hi;
             span[i].gmem_empty <= empty_tile;
@@ -221,18 +222,25 @@ module blackwell_tma_setup
         end
         if (stage[i] == CHECK) begin
           logic [64:0] glast, slast;
-          logic [63:0] total, inner, final_panel, final_within;
+          logic [63:0] total, inner, final_within;
+          logic [26:0] sectors;
           logic linear, empty_g, empty_s, valid_geometry;
           linear = ctx[i].cmd.opcode == LOAD_LINEAR;
           total = linear ? 64'(ctx[i].cmd.bytes) : elements[i] << 1;
           inner = 64'(ctx[i].map.box[0]) << 1;
-          final_panel = (inner - 1) >> 7;
+          // A legal FP16 row occupies one to four 128-byte panels.
+          case (2'((inner - 1) >> 7))
+            2'd0: sectors = 27'(rows[i]);
+            2'd1: sectors = 27'(rows[i]) << 1;
+            2'd2: sectors = (27'(rows[i]) << 1) + 27'(rows[i]);
+            default: sectors = 27'(rows[i]) << 2;
+          endcase
           final_within = (inner - 1) & 127;
           empty_g = linear ? total == 0 : span[i].gmem_empty;
           empty_s = total == 0 || (ctx[i].cmd.opcode == STORE_TENSOR && empty_g);
           slast = 65'(ctx[i].cmd.smem_addr) +
               (linear ? 65'(total) -
-               1 : ((65'(final_panel) * 65'(rows[i]) + 65'(rows[i]) - 1) << 7) + 65'(final_within));
+               1 : ((65'(sectors) - 1) << 7) + 65'(final_within));
           if (!linear && clipped_store[i])
             slast = 65'(ctx[i].cmd.smem_addr) + (65'(last_sector[i]) << 7) +
                 65'({last_local[i][0][5:0], 1'b1});
@@ -246,7 +254,8 @@ module blackwell_tma_setup
           if (!valid_geometry) fault <= 1;
           ctx[i].total_bytes <= total;
           ctx[i].inner_bytes <= linear ? '0 : inner[15:0];
-          ctx[i].iteration_count <= linear ? total : elements[i];
+          ctx[i].row_count <= linear ? '0 : rows[i][24:0];
+          if (linear) ctx[i].gmem_origin <= ctx[i].cmd.global_addr;
           span[i].smem_empty <= empty_s;
           span[i].gmem_empty <= empty_g;
           span[i].smem_low <= ctx[i].cmd.smem_addr[17:7];
@@ -285,7 +294,12 @@ module blackwell_tma_setup
           product_step[s] <= n + 4'd1;
         end else begin
           if (n[0]) high_addr[s] <= high_addr[s] + pipe[3].value;
-          else low_addr[s] <= low_addr[s] + pipe[3].value;
+          else begin
+            // Negative starts clip to zero for the checked span. Their signed
+            // stride contributions still belong to the virtual walker origin.
+            ctx[s].gmem_origin <= ctx[s].gmem_origin + pipe[3].value[63:0];
+            if (!ctx[s].cmd.coord[(int'(n)-4)/2+1][31]) low_addr[s] <= low_addr[s] + pipe[3].value;
+          end
           completed[s][3'(n-4'd4)] <= 1;
         end
       end

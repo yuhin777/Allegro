@@ -1,4 +1,9 @@
 module array_tb;
+`ifdef TEST_INDEPENDENT_FP_TREES
+  localparam bit SHARE_FP_DOT_ADDER_TREE = 0;
+`else
+  localparam bit SHARE_FP_DOT_ADDER_TREE = 1;
+`endif
   import blackwell_dot_pkg::*;
   import blackwell_tc_pkg::*;
   bit clk;
@@ -7,13 +12,17 @@ module array_tb;
   mma_cmd_t cmd_i;
   operand_t operand_payload;
   result_t  result_payload;
-  blackwell_tc_dot_array dut (.*);
+  blackwell_tc_dot_array #(.SHARE_FP_DOT_ADDER_TREE(SHARE_FP_DOT_ADDER_TREE)) dut (.*);
+  assert property (@(posedge clk) disable iff (!rst_n)
+      result_valid && !result_ready |=> result_valid && $stable(
+      result_payload
+  ));
   initial begin : storage_contract
     if ($bits(
             wide_req_t
         ) != 740 || $bits(
             low_req_t
-        ) != 818 || $bits(
+        ) != 819 || $bits(
             fp4_req_t
         ) != 784 || $bits(
             int_req_t
@@ -100,8 +109,9 @@ module array_tb;
       rng = {rng[30:0], rng[31] ^ rng[21] ^ rng[1] ^ rng[0]};
       // First three arrivals deliberately invert natural finish order.
       result_ready = (cycle >= 12) && (rng[2] || rng[5]);
-      if (sent >= samples.size() - 4) result_ready = 1;
+      if (sent >= samples.size() - 100) result_ready = 1;
       operand_valid = sent < samples.size() && (sent < samples.size() - 4 || received == sent);
+      if (sent == samples.size() - 100 && received != sent) operand_valid = 0;
       cmd_i = '0;
       operand_payload = '0;
       if (operand_valid) begin
@@ -128,6 +138,8 @@ module array_tb;
         operand_payload.c[n] = entry.asymmetric ? 100 * (n / 8) + n % 8 : entry.c;
       end
       @(posedge clk);
+      if(sent>=samples.size()-100 && sent<samples.size()-4 && operand_valid && !operand_ready)
+        $fatal(1, "mixed floating point stream lost II=1 at %0d", sent);
       if (operand_valid && operand_ready) begin
         accepted_at.push_back(cycle);
         sent++;
@@ -162,13 +174,21 @@ module array_tb;
     end
     if (!empty_o || sent != received) $fatal(1, "drain failed");
     result_ready = 0;
-    for (int f = 0; f < 4; f++) begin
-      cmd_i.kind = (f == 0 ? 0 : (f == 1 ? 2 : (f == 2 ? 5 : 3)));
+    // Block retirement and fill both floating-point tails, the common/front
+    // slots and the two other families before applying synchronous reset.
+    for (int slot = 0; slot < (SHARE_FP_DOT_ADDER_TREE ? 16 : 19); slot++) begin
+      if (SHARE_FP_DOT_ADDER_TREE && slot < 8)
+        cmd_i.kind = (slot < 2 || slot == 4 || slot == 6) ? 0 : 2;
+      else if (!SHARE_FP_DOT_ADDER_TREE && slot < 11) cmd_i.kind = slot < 5 ? 0 : 2;
+      else cmd_i.kind = slot < (SHARE_FP_DOT_ADDER_TREE ? 13 : 16) ? 5 : 3;
       operand_valid = 1;
       @(posedge clk);
-      if (!operand_ready) $fatal(1, "unexpected issue stall");
+      if (!operand_ready) $fatal(1, "premature backpressure at blocked slot %0d", slot);
       @(negedge clk);
     end
+    @(posedge clk);
+    if (operand_ready) $fatal(1, "array accepted beyond its order capacity");
+    @(negedge clk);
     operand_valid = 0;
     rst_n = 0;
     #1;

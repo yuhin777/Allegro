@@ -13,28 +13,34 @@ module blackwell_int8_dot
   int_req_t req;
   assign req = req_payload;
   typedef struct packed {
-    logic [31:0][17:0] prod;
+    logic [15:0][17:0] pairs;
     logic [31:0] c;
     logic sat;
-  } products_t;
+  } pairs_t;
   typedef struct packed {
     logic signed [21:0] psum;
     logic signed [31:0] c;
     logic sat;
   } partial_t;
-  products_t d0, q0;
+  pairs_t d0, q0;
   partial_t d1, q1;
   logic [32:0] d2;
-  for (genvar k = 0; k < 32; k++) begin : g_product
-    assign d0.prod[k] = $signed(req.a[k]) * $signed(req.b[k]);
+  // S8/U8 decode bounds each product to [-32640, 65025].
+  for (genvar p = 0; p < 16; p++) begin : g_pair
+    logic signed [16:0] product[2];
+    for (genvar i = 0; i < 2; i++) begin : g_product
+      localparam int K = 2 * p + i;
+      assign product[i] = $signed(req.a[K]) * $signed(req.b[K]);
+    end
+    assign d0.pairs[p] = 18'(product[0]) + 18'(product[1]);
   end
   assign d0.c = req.c, d0.sat = req.saturate;
   blackwell_dot_signed_reduce_tree #(
-    .TERM_N(32),
+    .TERM_N(16),
     .TERM_W(18),
     .SUM_W (22)
   ) reduce_terms (
-    .term_flat_i(q0.prod),
+    .term_flat_i(q0.pairs),
     .sum_o(d1.psum)
   );
   assign d1.c = q0.c, d1.sat = q0.sat;
@@ -84,6 +90,8 @@ module blackwell_int8_dot
     .out_payload(rsp_payload)
   );
 `ifndef SYNTHESIS
-  initial if ($bits(q0) != 609 || $bits(q1) != 55) $fatal(1, "int8 pipeline storage width");
+  initial
+    if ($bits(q0) != 321 || $bits(q1) != 55 || $bits(d2) != 33)
+      $fatal(1, "int8 pipeline storage width");
 `endif
 endmodule

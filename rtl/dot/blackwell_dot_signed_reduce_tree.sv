@@ -1,54 +1,53 @@
 module blackwell_dot_signed_reduce_tree #(
   parameter int TERM_W = 33,
   parameter int TERM_N = 17,
-  parameter int SUM_W  = TERM_W
+  parameter int SUM_W = TERM_W,
+  parameter bit CARRY_SAVE = 0
 ) (
   input logic [TERM_N*TERM_W-1:0] term_flat_i,
   output logic signed [SUM_W-1:0] sum_o
 );
 
-  localparam int LEVELS = (TERM_N <= 1) ? 0 : $clog2(TERM_N);
-  localparam int PAD_N  = (1 << LEVELS);
-
-  logic signed [SUM_W-1:0] level0_sum[0:PAD_N-1];
-
-  genvar init_idx;
-  generate
-    for (init_idx = 0; init_idx < PAD_N; init_idx = init_idx + 1) begin : gen_init
-      if (init_idx < TERM_N) begin : gen_real_term
-        assign level0_sum[init_idx] = SUM_W'($signed(term_flat_i[init_idx*TERM_W+:TERM_W]));
-      end else begin : gen_pad_term
-        assign level0_sum[init_idx] = '0;
-      end
+  function automatic int operands_at_level(int level);
+    int count;
+    count = TERM_N;
+    repeat (level) begin
+      if (CARRY_SAVE && count > 2) count -= count / 3;
+      else count = (count + 1) / 2;
     end
-  endgenerate
+    return count;
+  endfunction
 
-  genvar level_idx;
-  genvar node_idx;
-  generate
-    for (level_idx = 0; level_idx < LEVELS; level_idx = level_idx + 1) begin : gen_level
-      localparam int NEXT_N = PAD_N >> (level_idx + 1);
-      logic signed [SUM_W-1:0] level_sum[0:NEXT_N-1];
-
-      for (
-          node_idx = 0; node_idx < (PAD_N >> (level_idx + 1)); node_idx = node_idx + 1
-      ) begin : gen_node
-        if (level_idx == 0) begin : gen_from_level0
-          assign level_sum[node_idx] = level0_sum[node_idx*2] + level0_sum[node_idx*2+1];
-        end else begin : gen_from_prev_level
-          assign level_sum[node_idx] = gen_level[level_idx-1].level_sum[node_idx*2] +
-              gen_level[level_idx-1].level_sum[node_idx*2+1];
+  for (genvar level = 0; level == 0 || operands_at_level(level - 1) > 1; level++) begin : g_level
+    localparam int COUNT = operands_at_level(level);
+    logic [SUM_W-1:0] terms[COUNT];
+    if (level == 0) begin : g_input
+      for (genvar i = 0; i < COUNT; i++) begin : g_extend
+        assign terms[i] = SUM_W'($signed(term_flat_i[i*TERM_W+:TERM_W]));
+      end
+    end else begin : g_reduce
+      localparam int PREV = operands_at_level(level - 1);
+      if (CARRY_SAVE && PREV > 2) begin : g_compress
+        for (genvar i = 0; i < PREV / 3; i++) begin : g_triple
+          logic [SUM_W-1:0] a, b, c, ab;
+          assign a = g_level[level-1].terms[3*i];
+          assign b = g_level[level-1].terms[3*i+1];
+          assign c = g_level[level-1].terms[3*i+2];
+          assign ab = a ^ b;
+          assign terms[2*i] = ab ^ c;
+          assign terms[2*i+1] = ((a & b) | (ab & c)) << 1;
+        end
+        for (genvar i = 0; i < PREV % 3; i++) begin : g_pass
+          assign terms[2*(PREV/3)+i] = g_level[level-1].terms[3*(PREV/3)+i];
+        end
+      end else begin : g_binary
+        for (genvar i = 0; i < COUNT; i++) begin : g_pair
+          if (2 * i + 1 < PREV)
+            assign terms[i] = g_level[level-1].terms[2*i] + g_level[level-1].terms[2*i+1];
+          else assign terms[i] = g_level[level-1].terms[2*i];
         end
       end
     end
-  endgenerate
-
-  generate
-    if (LEVELS == 0) begin : gen_sum_level0
-      assign sum_o = level0_sum[0];
-    end else begin : gen_sum_tree
-      assign sum_o = gen_level[LEVELS-1].level_sum[0];
-    end
-  endgenerate
-
+    if (COUNT == 1) assign sum_o = terms[0];
+  end
 endmodule

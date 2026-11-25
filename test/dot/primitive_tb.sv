@@ -78,6 +78,26 @@ module primitive_tb;
     .sum_o(one)
   );
 
+  logic signed [6:0] compressed;
+  logic signed [3:0] compressed_wrapped;
+  blackwell_dot_signed_reduce_tree #(
+    .TERM_N(5),
+    .TERM_W(4),
+    .SUM_W(7),
+    .CARRY_SAVE(1)
+  ) compressor_dut (
+    .term_flat_i(ints),
+    .sum_o(compressed)
+  );
+  blackwell_dot_signed_reduce_tree #(
+    .TERM_N(5),
+    .TERM_W(4),
+    .CARRY_SAVE(1)
+  ) compressor_wrap_dut (
+    .term_flat_i(ints),
+    .sum_o(compressed_wrapped)
+  );
+
   task automatic check_pack(logic signed [32:0] value, int base, logic [31:0] poszero, signedzero);
     sum = value;
     base_exp = 10'(base);
@@ -143,6 +163,17 @@ module primitive_tb;
     ints = {4'd7, 4'h8, 4'd7, 4'h8, 4'h8};
     #1;
     if (reduced != -10 || wrapped != 6 || one != -8) $fatal;
+    for (int pattern = 0; pattern < (1 << $bits(ints)); pattern++) begin
+      int expected;
+      expected = 0;
+      ints = 20'(pattern);
+      for (int i = 0; i < 5; i++) expected += int'($signed(ints[i]));
+      #1;
+      if (compressed !== 7'(expected) || compressed_wrapped !== 4'(expected) ||
+          reduced !== compressed || wrapped !== compressed_wrapped)
+        $fatal(1, "reduce pattern %h expected %0d", ints, expected);
+    end
+    $display("PASS exhaustive binary and carry-save reduction for five signed nibbles");
     $display("PASS combinational pack, exponent, signed reduction and RZ alignment boundaries");
     $finish;
   end

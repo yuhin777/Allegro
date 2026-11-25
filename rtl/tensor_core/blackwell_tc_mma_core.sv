@@ -6,7 +6,8 @@ module blackwell_tc_mma_core
   import blackwell_dot_pkg::operand_t;
   import blackwell_dot_pkg::result_t;
 #(
-  parameter int CORE = 0
+  parameter int CORE = 0,
+  parameter bit SHARE_FP_DOT_ADDER_TREE = 1
 ) (
   input logic clk,
   input logic rst_n,
@@ -104,7 +105,9 @@ module blackwell_tc_mma_core
   wire tile_tag_t operand_tag = operand_payload.tag;
   logic result_match, b_can_load, oldest_bank;
   wire mma_cmd_t dot_command = command[op_rec];
-  blackwell_tc_dot_array dot (
+  blackwell_tc_dot_array #(
+    .SHARE_FP_DOT_ADDER_TREE(SHARE_FP_DOT_ADDER_TREE)
+  ) dot (
     .clk,
     .rst_n,
     .cmd_i(dot_command),

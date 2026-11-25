@@ -116,6 +116,9 @@ module blackwell_tc_a_context
       end
     end
   end
+  // A transposed 16-byte piece spans at most 16 adjacent TMEM lanes.
+  // A nontransposed piece uses one lane, and a scale token uses a lane pair.
+  localparam int MAX_RETURN_DISTANCE = 15;
   wire enabled = active_i && !halt_i;
   always_comb begin
     a_ready = {4{active_i && !bind_i}};
@@ -176,7 +179,7 @@ module blackwell_tc_a_context
           tm_req[l].byte_mask[4*(scale_col%4)+int'(cmd.scale_a_id)+g] = 1;
       end
       tm_ret_ready[l] = 1;
-      for (int k = 0; k < l; k++)
+      for (int k = (l > MAX_RETURN_DISTANCE ? l - MAX_RETURN_DISTANCE : 0); k < l; k++)
       if (tm_ret_valid[k] && tm_ret[k].tag.token[15:4] == tm_ret[l].tag.token[15:4])
         tm_ret_ready[l] = 0;
     end

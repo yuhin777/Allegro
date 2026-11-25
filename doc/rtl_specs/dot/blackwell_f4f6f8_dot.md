@@ -6,20 +6,17 @@ Computes a complete 32-term low-precision dot with any A/B combination of E4M3/E
 
 | Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
 | --- | --- | --- | --- | --- |
-| req | Input | a[32],b[32] each contain `{class2,sign1,sig4,e:s5}` elements, plus c32 and one `{nan1,e:s8}` each for scale_a/scale_b, 818 bits total | TC dot array | req.fire captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and bit order |
+| req | Input | a[32],b[32] each contain `{class2,sign1,sig4,e:s5}` elements, plus c32 and one `{nan1,e:s8}` each for scale_a/scale_b, followed by include_zero_exponents (1 bit), 819 bits total | TC dot array | req.fire captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and bit order |
 | rsp | Output | result32, 32bit | TC dot array | rsp.fire delivers the result |
 
 ```mermaid
 flowchart LR
-  I["Row/column decode and 32 products"] --> S0["S0: products and scale"]
-  S0 --> E["Map C into the product exponent domain and select emax"]
-  E --> S1[S1]
-  S1 --> AL["RZ alignment"]
-  AL --> S2["S2: 33 terms"]
-  S2 --> R["Four eight-term reductions"]
-  R --> S3["S3: four partial sums and C"]
+  I["Low row/column decode"] --> S0["S0: products, four group maxima and scaled C exponent"]
+  S0 --> S1["S1: global maximum and bounded distances"]
+  S1 --> S2["S2: truncate, sign, add 16 pairs"]
+  S2 --> S3["S3: four group sums and C"]
   S3 --> S4["S4: total sum"]
-  S4 --> S5[S5: FP32 / R_DOT]
+  S4 --> S5["S5: FP32 result"]
 ```
 
 ## Functionality
@@ -47,22 +44,24 @@ The bit-exact reference uses integer significands and the truncation points spec
 
 | Stage | bit/dot | Contents |
 |---|---:|---|
-| S0 | 605 | special33, 32 sets of sign1/product8/exp6/zero1, product emax valid1+exp10, C sign1/mag27/exp10/zero1, scale exponent10 |
-| S1 | 605 | special33, 32 sets of sign1/product8/exp6/zero1, C sign1/mag27/domain_exp10/zero1, scale_exp10, emax10+valid1 |
-| S2 | 967 | special33, 32×signed28, C signed28, base_exp10 |
-| S3 | 208 | special33, 5×signed33 partial sums, base_exp10 |
-| S4 | 76 | special33, sum33, base_exp10 |
-| S5 | 32 | result32 |
+| S0 | 567 | 32 × (sign1, sig8, exp6), four (valid1, max9) records, C(sign1, valid1, sig24, relative_exp10), scale9, special2 |
+| S1 | 490 | 32 × (sign1, sig8, distance5), C(sign1, sig24, distance5), base10, special2 |
+| S2 | 503 | 16 × signed29 pair sums, signed27 C, base10, special2 |
+| S3 | 163 | Four signed31 group sums, signed27 C, base10, special2 |
+| S4 | 45 | signed33 sum, base10, special2 |
+| S5 | 32 | FP32 result |
 
-Total 2493 bits/dot or 19944 B/64 dots, plus six valid bits/dot. The array holds the tags. S5 is R_DOT with no additional result buffer.
+The independent K32 path stores 1,800 bits/cell or 14,400 B/core. The default configuration overlays S0…S3 with the wide path. Data, tags, valid bits and the wide completion buffer are accounted for in the [array storage contract](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage).
 
 ### Products, scaling, reduction, and packing
 
-Decode all formats to `sign*sig4*2^(e−3)`. Let p be the source fraction width. For normals use sig4=((1<<p)+frac)<<(3−p), and for subnormals sig4=frac<<(3−p), adding zero low bits. Preserve subnormal magnitudes without flushing to zero. The leaf multiplies the two unsigned sig4 values. Both S0 and S1 register the raw unsigned product8. Sign-extend both e values to 6 bits before adding them.
+Decode all formats to `sign*sig4*2^(e−3)`. Let p be the source fraction width. For normals use sig4=((1<<p)+frac)<<(3−p), and for subnormals sig4=frac<<(3−p), adding zero low bits. For FP4 and FP6 subnormals, normalize sig4 until its high bit is set and decrease e by the same shift count, matching exponent extraction from their FP32 model representation. FP8 keeps the source subnormal exponent. The leaf multiplies the two unsigned sig4 values. Both S0 and S1 register the raw unsigned product8. Sign-extend both e values to 6 bits before adding them.
 
-With MX disabled, each row and column decoder sends `{nan=0,e=0}`. When enabled, decode 0…254 to e=byte−127 and 0xff to `{nan=1,e=0}`. The leaf extends both e values to signed10 and sums them to obtain E. Either nan bit produces NaN. Convert the C exponent to `eC−E` and set C mag27=`sig24<<2`. Select emax from nonzero product exponents and the exponent of nonzero C. If all are zero, set valid=0 and return +0.
+With MX disabled, each row and column decoder sends `{nan=0,e=0}`. When enabled, decode 0…254 to e=byte−127 and 0xff to `{nan=1,e=0}`. The leaf sums both scale exponents in signed9 to obtain E (−254…254). Either nan bit produces NaN. Convert the C exponent to `eC−E` and retain its unsigned 24-bit significand through S1. For unscaled FP8 × FP8, the array asserts include_zero_exponents. Select emax across all products and C, using −126 for each zero operand and zero C. For MX and FP4/FP6 combinations, select only nonzero products and nonzero C. An all-zero sum returns +0.
 
-The S1→S2 combinational wiring forms unsigned mag27 using `{product8,19'b0}` and feeds it to the aligner alongside the S1 C mag27. Align all magnitudes to emax by right-shifting and truncating before applying signs. Set base_exp=`emax−25+E`. Reduce the 32 signed28 terms in four groups of eight to signed33 partial sums. The fifth partial sum is sign-extended C. Reduce those five terms on the next cycle. Use sufficient width and prove no overflow for valid inputs. Accumulating 32 terms in 28 bits is insufficient.
+S0 compares eligible exponent sums in four groups of eight. S1 compares valid groups with eligible C in the product exponent domain. Use a signed10 relative exponent for C. Subtract at full width before encoding each distance as min(distance,27) for a contributing magnitude. A zero magnitude contributes zero for every shift encoding. S1 also computes base_exp=emax−25+E.
+
+S2 aligns product8 shifted left by 19 and C sig24 shifted left by two. Truncate each unsigned magnitude before applying its sign and adding adjacent products. A magnitude is bounded by 225 × 2^19. Signed29 holds two aligned products, signed31 holds eight, and signed33 holds 32 plus signed27 C. S3 adds four pairs per group using carry-save compression followed by one carry-propagating addition. S4 adds the four groups and C. S5 resolves the carried 2-bit special code and packs the sum toward zero. In shared mode the lower eight pair adders and lower two group trees also serve wide requests. The K32 final adder is dedicated to S4.
 
 For E2M1 0x3×0x2 with every other term and C zero, the result must be 0x3fc00000. For E4M3 0x3f×0x3f, both sig4 values are 15 and product8 must be 225 in S0/S1. Disable MX and set C=2^20 with all remaining products zero. The difference between emax and the product exponent is 20 and the aligned magnitude is 112. Flipping one input sign yields −112. Stalling and resuming S1 must preserve the term.
 
@@ -78,8 +77,8 @@ RTL: [blackwell_f4f6f8_dot.sv](../../../rtl/dot/blackwell_f4f6f8_dot.sv).
 
 | Submodule | Instances per dot | Connections and control |
 | --- | --- | --- |
-| [dot_emax_tree](blackwell_dot_emax_tree.md) | 2 | S0 compares 32 products. S1 incorporates C converted to the product domain. |
-| [dot_align_fixed_rz](blackwell_dot_align_fixed_rz.md) | 33 | Align the 32 products and C separately and capture them in S2. |
-| [dot_signed_reduce_tree](blackwell_dot_signed_reduce_tree.md) | 5 | Four eight-term trees produce partial sums. A final tree reduces those sums and C. |
-| [dot_fp32_pack](blackwell_dot_fp32_pack.md) | 1 | The S4 sum and exponent produce the S5 result. |
-| [pipeline_reg](../base/blackwell_pipeline_reg.md) | 6 | One stage each for S0…S5. Each holds the captured fields listed in the table. |
+| [Exponent maximum](blackwell_dot_emax_tree.md) | 4 local + 1 global | S0 compares eight exponents per group. S1 combines groups and C. |
+| [Signed reduction](blackwell_dot_signed_reduce_tree.md) | 16 pairs + 4 groups + 1 tail | S2 pairs aligned terms, S3 captures signed31 group sums, S4 includes C. |
+| [FP32 pack](blackwell_dot_fp32_pack.md) | 1 | S5 captures the result. |
+
+The [low front end](../../../rtl/dot/blackwell_fp_dot_front.sv) and the [configurable lane](../../../rtl/dot/blackwell_fp_dot_lane.sv) implement these stages.
