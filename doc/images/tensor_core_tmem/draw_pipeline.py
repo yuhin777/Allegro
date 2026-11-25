@@ -124,7 +124,7 @@ chain(859, [('R_OP issue and refill', ['Admit first microtile by ID', '8 rows ×
             ('R_DOT → two D slots', ['1 KiB per slot, selected by result tag', 'Release data slot on last write acceptance']),
             ('TMEM R_W', ['128 banks × 128 bits', 'Accept at w, write at w+1']),
             ('Write ACK at w+2', ['Settle the original ID and block j', 'Release dependency after all required writes succeed'])], 'purple')
-txt(90, 1031, 'Families accept independently and deliver in issue order through the head family. Settle trailing writes and the pin against the original instruction ID.', 23, C['muted'])
+txt(90, 1031, 'Wide and K32 share the input stages by default. Results retire in issue order. Trailing writes and the pin retain the original instruction ID.', 23, C['muted'])
 
 lane(52, 1090, 2136, 280, 'Completion and synchronization', C['orangefill'], C['orange'])
 chain(1164, [('Final op_load / dot', ['Last operands copied into R_OP', 'Issued microtiles retain their identities']),

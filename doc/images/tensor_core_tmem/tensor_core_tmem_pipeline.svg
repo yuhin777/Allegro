@@ -86,7 +86,7 @@
 <text x="1947.5" y="946" font-size="14" fill="#52677c" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Release dependency after all required writes succeed</text>
 <polyline points="1705,930 1766,930" fill="none" stroke="#6843aa" stroke-width="3"/>
 <polygon points="1766,930 1753.0,924.0 1753.0,936.0" fill="#6843aa"/>
-<text x="90" y="1031" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Families accept independently and deliver in issue order through the head family. Settle trailing writes and the pin against the original instruction ID.</text>
+<text x="90" y="1031" font-size="23" fill="#52677c" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Wide and K32 share the input stages by default. Results retire in issue order. Trailing writes and the pin retain the original instruction ID.</text>
 <rect x="52" y="1090" width="2136" height="280" rx="18" fill="#fff2e6"/>
 <text x="76" y="1122" font-size="26" fill="#b7671e" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS,Hiragino Sans GB,sans-serif">Completion and synchronization</text>
 <rect x="90" y="1164" width="355" height="142" rx="10" fill="#fff2e6" stroke="#b7671e" stroke-width="2"/>

@@ -16,11 +16,12 @@ The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-p
 ```mermaid
 flowchart LR
     OP[R_OP] --> AD["Combinational decode of eight A rows and eight B columns"]
-    AD --> F[F16 TF32 ×64]
-    AD --> L["Low precision ×64"]
+    AD --> FP["Wide and K32 S0…S3 (shared or independent)"]
+    FP --> W["Wide S4 with one spill slot"]
+    FP --> K["K32 S4 and S5"]
     AD --> M[FP4 ×64]
     AD --> I[INT8 ×64]
-    F & L & M & I --> D["Native final stage R_DOT / microtile identity"]
+    W & K & M & I --> D["Completed microtile and tag"]
     OP --> Q["Family IDs in issue order"]
     Q --> SEL["Select head family"]
     D --> SEL --> SLOT["Core-selected D slot"]
@@ -36,48 +37,33 @@ Before combinational decode, noninteger negate flips the sign bit of the raw ele
 
 Row/column decode and operand isolation between R_OP and S0 are combinational and share the operand handshake. Each family's row and column broadcast gates its A, B, and scale inputs to S0. Drive decoded values only when `operand.valid` and `cmd_i.kind` selects that family. Otherwise clamp the inputs to zero. Selection is independent of ready, so the selected family sees the same microtile throughout backpressure. All 64 selected lanes capture S0 only on `operand.fire`. In-flight microtiles and tags advance with the existing per-stage valid/ready.
 
-The elaboration parameter `SHARE_FP_DOT_ADDER_TREE` defaults to 1 and passes from the subsystem top through each MMA core. Shared mode accepts wide and K32 requests into one elastic S0…S3 path per array. One registered family bit follows each of the four tags. S2 has 16 signed29 pair adders per cell and S3 has four signed31 four-input trees. Wide uses their low half. Wide completes the final addition before S3 and packs in S4. K32 completes its final addition in S4 and packs in S5. The wide S4 output has a bypassable one-entry spill slot. Its oldest entry retires first. Under continuous output ready this absorbs a low-to-wide completion collision. Under sustained stalls only available slots accept new data.
-
-```mermaid
-flowchart LR
-  W[Wide products] --> U[Shared S0/S1 storage]
-  K[K32 products] --> U
-  U --> P[S2 pairs] --> G[S3 groups]
-  G --> A[Wide S4 and spill]
-  G --> B[K32 S4 sum and S5 pack]
-```
-
-With parameter 0 each family has its own S0…S3 slots, pair adders, group trees and tail. Both modes use the same arithmetic and ordered result interface. Isolated wide and K32 results transfer at issue+5 and issue+6 respectively. Each mode accepts consecutive wide/K32 requests every cycle with the result sink continuously ready and the array initially empty. The output carries 64×32-bit cells and one tag.
-
-```mermaid
-flowchart LR
-  W[Wide S0/S1] --> WP[8 wide pairs] --> WG[2 wide groups and final sum] --> WO[Wide S4 and spill]
-  K[K32 S0/S1] --> KP[16 K32 pairs] --> KG[4 K32 groups] --> KO[K32 S4 and S5]
-```
-
 ### Floating-point storage
+
+The top-level [`SHARE_FP_DOT_ADDER_TREE`](../top/blackwell_async_subsystem_top.md) selects how wide (F16/TF32) and K32 use S0…S3. In shared mode a family bit travels with each tag and selects the tail at S3. Wide uses the lower half of the K32 pair adders and group trees. In independent mode each of these two families has its own front stages and adders.
 
 | Per core, 64 cells | Shared | Independent |
 |---|---:|---:|
-| FP data in S0…S3, bits per cell | 584 + 490 + 503 + 163 | 584 + 489 + 270 + 44 and 567 + 490 + 503 + 163 |
-| FP tail data, bits per cell | Wide 32 + spill 32, K32 45 + 32 | Same |
-| Total FP data | 15,048 B | 26,008 B |
-| All four families, data | 23,584 B | 34,544 B |
-| FP tags (one 76-bit tag per physical slot) | 608 bits | 912 bits |
-| FP occupancy and mode control | 8 valid + 4 mode bits | 12 valid bits, mode fixed per path |
-| Issue-order payload | 16 × 2 bits | 19 × 2 bits |
+| Wide and K32 data in S0…S3, bits per cell | 584 + 490 + 503 + 163 | 584 + 489 + 270 + 44 (wide), 567 + 490 + 503 + 163 (K32) |
+| Tail data, bits per cell | Wide 32 + spill 32, K32 45 + 32 | Same |
+| Wide and K32 data registers | 15,048 B | 26,008 B |
+| Data registers across all four families | 23,584 B | 34,544 B |
+| Wide and K32 tags (76 bits per slot) | 608 bits | 912 bits |
+| Wide and K32 stage control | 8 valid + 4 mode bits | 12 valid bits |
+| Issue-order FIFO capacity (2-bit family ID per microtile) | 16 entries | 19 entries |
 
-Totals exclude order pointers/count and the separate K64/INT8 tag and valid chains. Both configurations bypass the wide spill on an isolated wide result. In independent mode an empty spill accepts a blocked wide completion when an older K32 result takes the port. This permits consecutive wide issues after that collision. The 19-entry order FIFO limits total accepted work even with the spill occupied. Shared mode can fill the spill during downstream stalls as well.
+The data totals exclude tags, control and FIFO storage. The FIFO bounds total accepted work, including any microtile in the spill slot.
 
 ### Issue order, result selection, and backpressure
 
-Input fire at l captures the selected family's first stage. Its native last stage is visible after l+P−1 at the earliest. In independent mode each family holds independently. Shared mode couples the wide and K32 front stages and uses the registered S3 mode to select the ready tail. Input ready requires only space in all 64 selected lanes and the order record. The issue FIFO stores family IDs only and has depth 16 in shared mode (4 common + 2 wide + 2 K32 + 5 FP4 + 3 INT8 slots), or 19 in independent mode. Enqueue on dot issue. The head selects the sole result port. Only the corresponding family's final stage can dequeue on result.fire. Different families may issue on adjacent edges. Even if a shorter pipeline finishes first, deliver in issue order. empty_o indicates drain. Reset clears all stages and the FIFO together.
+On `operand.fire`, all 64 selected lanes capture S0 and the [issue-order FIFO](../base/blackwell_fifo.md) records the family. Admission requires space in both the selected path and the FIFO. With the array initially empty and the result sink continuously ready, either configuration accepts a stream of wide and K32 microtiles at one per cycle. For an isolated microtile issued at edge l, the result becomes visible after l+Ldot and can transfer at l+P, using the timing in the submodule table.
 
-result.ready depends on whether the selected (slot,generation,row) can capture. If D stalls, retain that microtile in the final stage. Empty stages may still absorb inputs until backpressure reaches R_OP. Synchronous reset clears valid and preserves payload.
+If an older K32 result takes the output when a wide result completes, the wide result can enter its one-entry spill slot. Shared mode also permits spilling during downstream stalls. An isolated wide result bypasses the slot. The oldest wide result is always selected first.
+
+The FIFO head selects the output family. Only `result.fire` retires that microtile and removes its FIFO entry. The core asserts `result.ready` when the destination slot, generation and row can accept the result. While `result.valid && !result.ready`, the output tag and all 64 cells stay stable. Empty stages can continue accepting work until backpressure reaches R_OP. Synchronous reset clears stage and FIFO validity and preserves stage payloads. `empty_o` indicates drain.
 
 ### Acceptance
 
-On the RTX 5080 verification host, run `test/dot/run.sh` to elaborate both configurations, check instance counts and compare every returned cell with its expected word. Set `MMA_SIM_VECTORS` to a raw-bit vector file to check finite accumulation against an independent model on inputs with matching operand decoding, exponent selection, and FP32 packing. The built-in directed vectors check the module-specific rules for zero terms, TF32 NaN decoding, and signed underflow at the K64 output. The final directed windows check consecutive wide/K32 acceptance with the sink ready, each native latency after drain, and synchronous reset at full blocked capacity.
+In both configurations, check sustained wide/K32 issue with the sink ready, each family's isolated latency after drain, and synchronous reset at full blocked capacity.
 
 Compare all 33 shapes and every mode. Issue six-stage low precision, three-stage integer, and five-stage FP16/TF32 consecutively. Stall the head result while the shorter family becomes ready first. Check that queued family IDs equal the number of valid microtiles in the pipelines, results deliver in original tag order, and lifting D backpressure causes no loss or duplication. Check native edges and payload capacity for each family. Verify broadcast wiring with an asymmetric INT8 microtile. Only k=0 is nonzero, A[r,0]=r+1, B[c,0]=c+9, and C[8r+c]=100r+c. Check `(r+1)×(c+9)+100r+c` in every cell.
 
@@ -91,11 +77,9 @@ The leaves below specify each family's input encoding, fixed-point reduction, an
 
 ## Submodules
 
-Each core serves the four instruction families across 64 cells using the configuration above. One [fifo](../base/blackwell_fifo.md) records issue order (16 or 19 entries, 2 bits each).
-
-| Kind → arithmetic leaf | Combinational control | P / Ldot | Payload per core |
-|---|---|---:|---:|
-| f16, tf32 → [f16tf32_dot](../dot/blackwell_f16tf32_dot.md) | Decode rows and columns as FP16/BF16/TF32 and pass scale_input_d | 5 / 4 | 11,352 B + 256 B wide spill (independent) |
-| f8f6f4, mxf8f6f4 → [f4f6f8_dot](../dot/blackwell_f4f6f8_dot.md) | Decode dtype 3…7. In MX mode decode SA[r,0]/SB[c,0] | 6 / 5 | 14,400 B (independent) |
-| mxf4, mxf4nvf4 → [fp4_dot](../dot/blackwell_fp4_dot.md) | Decode UE8M0 2X or UE4M3 4X and distribute group scales | 5 / 4 | 5,264 B |
-| i8 → [int8_dot](../dot/blackwell_int8_dot.md) | Extend each side to signed9 according to dtype, saturate=int_sat | 3 / 2 | 3,272 B |
+| Kind → arithmetic leaf | Combinational control | P / Ldot |
+|---|---|---:|
+| f16, tf32 → [f16tf32_dot](../dot/blackwell_f16tf32_dot.md) | Decode rows and columns as FP16/BF16/TF32 and pass scale_input_d | 5 / 4 |
+| f8f6f4, mxf8f6f4 → [f4f6f8_dot](../dot/blackwell_f4f6f8_dot.md) | Decode dtype 3…7. In MX mode decode SA[r,0]/SB[c,0] | 6 / 5 |
+| mxf4, mxf4nvf4 → [fp4_dot](../dot/blackwell_fp4_dot.md) | Decode UE8M0 2X or UE4M3 4X and distribute group scales | 5 / 4 |
+| i8 → [int8_dot](../dot/blackwell_int8_dot.md) | Extend each side to signed9 according to dtype, saturate=int_sat | 3 / 2 |
