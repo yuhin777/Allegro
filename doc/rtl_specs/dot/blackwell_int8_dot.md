@@ -43,7 +43,7 @@ Input fire at l captures S0. R_DOT is visible after l+2 and first transfers at l
 
 Test all four signedness combinations, signed/unsigned interpretations of 0xff, both extreme C values, positive/negative overflow, saturation and wrap, cancellation, and random backpressure. The reference sums in at least 64 signed bits and applies S32 rules only at the end. Per-term S32 wrap or saturation is incorrect.
 
-RTL: [int8_dot_prod.sv](../../../rtl/dot/int8_dot_prod.sv).
+RTL: [blackwell_int8_dot.sv](../../../rtl/dot/blackwell_int8_dot.sv).
 
 ## Submodules
 

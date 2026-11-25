@@ -71,7 +71,7 @@ Input fire at l captures S0. Without stalls S4 is visible after l+4 and can tran
 
 Verify all FP16/BF16 input combinations, TF32 NaNs identifiable only in the low 13 bits, maximum/minimum normals, subnormals, exact cancellation, conflicting Inf signs, and C prescale underflow. The bit-exact reference must reproduce the specified fixed-point order. Per-term host floating-point addition is insufficient. Randomly stall continuous requests and check for loss, duplication, and correct edge-by-edge pairing of S4 results with input tags.
 
-RTL: [f16tf32_dot_prod.sv](../../../rtl/dot/f16tf32_dot_prod.sv).
+RTL: [blackwell_f16tf32_dot.sv](../../../rtl/dot/blackwell_f16tf32_dot.sv).
 
 ## Submodules
 

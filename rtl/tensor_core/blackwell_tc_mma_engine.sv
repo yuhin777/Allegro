@@ -1,785 +1,672 @@
-// Implements frozen A1: doc/specs/blackwell_tc_mma_engine.md
-module blackwell_tc_mma_engine
-  import blackwell_async_pkg::*;
-(
+// Ancillary issue ports can choose different records. A presented choice is
+// held independently until its consumer accepts it, including during halt.
+module blackwell_tc_record_select (
   input logic clk,
   input logic rst_n,
-  input logic cmd_vld_i,
-  input blackwell_async_pkg::mma_cmd_a1_t cmd_i,
-  input logic complete_rdy_i,
-  input logic smem_req_rdy_i,
-  input logic smem_rsp_vld_i,
-  input logic [SMEM_DATA_W-1:0] smem_rsp_data_i,
-  input logic [TENSOR_SMEM_ID_W-1:0] smem_rsp_id_i,
-  input logic [MEM_STATUS_W-1:0] smem_rsp_status_i,
-  input logic tmem_rd_rdy_i,
-  input logic tmem_rd_rsp_vld_i,
-  input logic [TMEM_DATA_W-1:0] tmem_rd_rsp_data_i,
-  input logic [STATUS_W-1:0] tmem_rd_rsp_status_i,
-  input logic tmem_wr_rdy_i,
-  input logic tmem_wr_rsp_vld_i,
-  input logic [STATUS_W-1:0] tmem_wr_rsp_status_i,
-  output logic cmd_rdy_o,
-  output logic complete_vld_o,
-  output blackwell_async_pkg::async_event_a1_t complete_o,
-  output logic smem_req_vld_o,
-  output logic [SMEM_BYTE_ADDR_W-1:0] smem_req_addr_o,
-  output logic [TENSOR_SMEM_ID_W-1:0] smem_req_id_o,
-  output logic [SMEM_MASK_W-1:0] smem_req_byte_mask_o,
-  output logic smem_rsp_rdy_o,
-  output logic tmem_rd_vld_o,
-  output logic [CTX_ID_W-1:0] tmem_rd_ctx_o,
-  output logic [EPOCH_W-1:0] tmem_rd_epoch_o,
-  output logic [TMEM_LANE_MASK_W-1:0] tmem_rd_lane_mask_o,
-  output logic [TMEM_COLUMN_BUS_W-1:0] tmem_rd_column_o,
-  output logic [ASYNC_TAG_W-1:0] tmem_rd_tag_o,
-  output logic tmem_rd_rsp_rdy_o,
-  output logic tmem_wr_vld_o,
-  output logic [CTX_ID_W-1:0] tmem_wr_ctx_o,
-  output logic [EPOCH_W-1:0] tmem_wr_epoch_o,
-  output logic [TMEM_COLUMN_BUS_W-1:0] tmem_wr_column_o,
-  output logic [TMEM_DATA_W-1:0] tmem_wr_data_o,
-  output logic [TMEM_BYTE_MASK_W-1:0] tmem_wr_byte_mask_o,
-  output logic [ASYNC_TAG_W-1:0] tmem_wr_tag_o,
-  output logic tmem_wr_rsp_rdy_o,
-  output logic idle_o
+  input logic halt,
+  input blackwell_async_pkg::mma_live_t [2:0] live,
+  input logic [2:0] eligible,
+  output logic valid,
+  output logic [1:0] rec,
+  input logic ready
 );
-
-  localparam int unsigned DOTS = 4 * 64;
-  typedef enum logic [4:0] {Idle, AddressCheck, SourceReq, SourceRsp,
-    TensorReq, TensorRsp, SparseCheck, DestProbeReq, DestProbeRsp, InitTile,
-    OldDReq, OldDRsp, OldDScatter, GatherOperands, DotIssue, DotRsp, EncodeReq, EncodeRsp,
-    WriteDReq, WriteDRsp, ShiftReq, ShiftRsp, Complete} state_t;
-  state_t state_q, state_d;
-  mma_cmd_a1_t cmd_q, cmd_d;
-  logic [STATUS_W-1:0] status_q, status_d;
-  logic source_q, source_d, fetch_fault_q, fetch_fault_d;
-  logic [8:0] row_q, row_d, tile_q, tile_d, column_q, column_d;
-  logic [7:0] element_q, element_d, chunk_q, chunk_d, dot_q, dot_d;
-  logic [2:0] tensor_q, tensor_d;
-  logic [7:0] cell_q, cell_d;
-  logic [7:0] gather_q, gather_d;
-  logic [5:0] gather_element_q, gather_element_d;
-  // One operand element is prepared per cycle from the execution memories.
-  // All 256 physical F16/TF32 dots still issue together; low precision uses
-  // its microtile index. Transaction buffers are initialized before use.
-  logic [DOTS-1:0][255:0] prepared_a_q;
-  logic [255:0] prepared_a_d, gathered_a_q;
-  logic [DOTS-1:0][255:0] prepared_b_q;
-  logic [255:0] prepared_b_d, gathered_b_q;
-  // Operand storage belongs to this execution slot. It is neither TMEM nor a
-  // collector cache. Contents are overwritten before use and not reset.
-  logic [31:0] a_q [0:127][0:127];
-  logic a_source_wr_en;
-  logic [63:0] a_source_mask, a_source_data;
-  integer a_source_cell;
-  logic [31:0] b_q [0:255][0:15];
-  logic b_source_wr_en;
-  logic [63:0] b_source_mask, b_source_data;
-  integer b_source_cell;
-  logic [31:0] meta_q [0:127][0:3];
-  logic [31:0] sfa_q [0:127][0:7];
-  logic [31:0] sfb_q [0:127][0:7];
-  logic [DOTS-1:0][31:0] acc_q, acc_d;
-  // One accepted old-D response is scattered over subsequent cycles.
-  logic [TMEM_DATA_W-1:0] old_d_word_q, old_d_word_d;
-  logic [DOTS-1:0][dot_prod_pkg::DOT_FINAL_W-1:0] final_q, final_d;
-  logic [DOTS*dot_prod_pkg::DOT_FINAL_W-1:0] f16_final;
-  dot_prod_pkg::dot_final_t low_final;
-  logic signed [63:0] int_acc_q, int_acc_d;
-  logic [4:0] collector_valid_q, collector_valid_d;
-  logic [4:0][CTX_ID_W-1:0] collector_ctx_q, collector_ctx_d;
-  logic [4:0][EPOCH_W-1:0] collector_epoch_q, collector_epoch_d;
-  integer source_bits, source_count, source_rows, container_a_bits;
-  integer row_logical, source_offset, read_bytes, collector_slot;
-  integer tensor_cells, tensor_column, tensor_base;
-  integer tile_columns, arithmetic_chunk, output_column, output_row, physical_column;
-  logic [63:0] source_address;
-  logic [TMEM_LANE_MASK_W-1:0] active_lanes;
-  logic [31:0] tensor_address;
-  logic [255:0] small_a, small_b;
-  logic [DOTS*256-1:0] f16_a, f16_b;
-  logic [DOTS*32-1:0] f16_c, f16_d;
-  logic f16_in_rdy, f16_out_vld, low_in_rdy, low_out_vld;
-  logic fp4_in_rdy, fp4_out_vld, int_in_rdy, int_out_vld;
-  logic [31:0] low_result, fp4_result, int_result, small_result;
-  logic [31:0] scale_a_vector, scale_b_vector;
-  logic [1:0] fp4_mode;
-  logic arithmetic_rdy, arithmetic_vld;
-  logic [DOTS*32-1:0] encoded_result;
-  logic encode_rdy, encode_vld;
-  logic tensor_enabled, tensor_legal, dest_legal;
-
-  function automatic int precision_bits(input logic [3:0] dtype);
-    case (dtype)
-      0,1: return 16;
-      2: return 32;
-      5,6: return 6;
-      7: return 4;
-      default: return 8;
-    endcase
-  endfunction
-  function automatic int lane_for(input mma_cmd_a1_t c, input int m, input int n,
-                                  input int alignment);
-    if (c.ws && c.m == 32) return m + 32*(n/(int'(c.n)/4));
-    if (c.ws && c.m == 64) return m + 64*(n/(int'(c.n)/2));
-    if (c.m == 64) return 32*(m/16)+m%16+alignment;
-    return m;
-  endfunction
-  function automatic int logical_row(input mma_cmd_a1_t c, input int p);
-    if (c.ws) return p % int'(c.m);
-    if (c.m == 64) return 16*(p/32)+p%16;
-    return p;
-  endfunction
-  function automatic logic column_zero(input mma_cmd_a1_t c, input int n);
-    int part, local_n, skipped, use_span, skip_span, phase;
-    part=0; local_n=0; skipped=0; use_span=0; skip_span=0; phase=0;
-    if (!c.zero_mask_enable || !c.zero_mask_desc[39]) return 1'b0;
-    part = c.m == 32 ? n/(int'(c.n)/4) : c.m == 64 ? n/(int'(c.n)/2) : 0;
-    local_n = c.m == 32 ? n%(int'(c.n)/4) : c.m == 64 ? n%(int'(c.n)/2) : n;
-    skipped = int'(c.zero_mask_desc[part*8+:8]);
-    skip_span = int'(c.zero_mask_desc[47:40])+1;
-    use_span = int'(c.zero_mask_desc[55:48])+1;
-    phase = local_n + skipped;
-    if (c.zero_mask_desc[32+part]) return phase%(skip_span+use_span) < use_span;
-    return phase%(skip_span+use_span) >= skip_span;
-  endfunction
-  function automatic logic legal_command(input mma_cmd_a1_t c);
-    int dense_k, bits_a, bits_b;
-    logic types_ok, dims_ok, scaled, desc_ok, modifiers_ok, hints_ok;
-    dense_k = c.kind == 0 ? 16 : c.kind == 1 ? 8 : c.kind >= 5 ? 64 : 32;
-    scaled = c.kind >= 4;
-    bits_a=precision_bits(c.a_type); bits_b=precision_bits(c.b_type);
-    types_ok = 1'b0;
-    case (c.kind)
-      0: types_ok = c.a_type <= 1 && c.b_type <= 1 &&
-          (c.d_type == 1 || (c.d_type == 0 && c.a_type == 0 && c.b_type == 0));
-      1: types_ok = c.a_type == 2 && c.b_type == 2 && c.d_type == 1;
-      2: types_ok = c.a_type >= 3 && c.a_type <= 7 && c.b_type >= 3 &&
-          c.b_type <= 7 && c.d_type <= 1;
-      3: types_ok = c.a_type >= 8 && c.a_type <= 9 && c.b_type >= 8 &&
-          c.b_type <= 9 && c.d_type == 2;
-      4: types_ok = c.a_type >= 3 && c.a_type <= 7 && c.b_type >= 3 &&
-          c.b_type <= 7 && c.d_type == 1 && c.scale_type == 0 && c.scale_vec == 1;
-      5: types_ok = c.a_type == 7 && c.b_type == 7 && c.d_type == 1 &&
-          c.scale_type == 0 && c.scale_vec == 2;
-      6: types_ok = c.a_type == 7 && c.b_type == 7 && c.d_type == 1 &&
-          ((c.scale_type == 0 && (c.scale_vec == 2 || c.scale_vec == 3)) ||
-           (c.scale_type == 1 && c.scale_vec == 3));
-      default: ;
-    endcase
-    dims_ok = int'(c.k) == dense_k * (c.sparse ? 2 : 1);
-    if (c.ws) dims_ok &= c.kind <= 3 && (c.m == 32 || c.m == 64 || c.m == 128) &&
-        (c.n == 64 || c.n == 128 || (!c.sparse && c.n == 256));
-    else dims_ok &= (c.m == 128 || (!scaled && c.m == 64)) &&
-        c.n >= 8 && c.n <= 256 && c.n[2:0] == 0;
-    if (c.kind == 3 && !c.ws && c.n > 32) dims_ok &= c.n[3:0] == 0;
-    desc_ok = matrix_descriptor_valid(c.b_desc) &&
-        (c.transpose_b || c.b_desc[63:61] != 1) &&
-        (c.a_from_tmem || c.transpose_a || c.a_desc[63:61] != 1) &&
-        (c.a_from_tmem || matrix_descriptor_valid(c.a_desc));
-    if (c.transpose_a && !c.a_from_tmem)
-      desc_ok &= ((bits_a == 32) == (c.a_desc[63:61] == 1));
-    if (c.transpose_b) desc_ok &=
-        ((bits_b == 32) == (c.b_desc[63:61] == 1)) && (bits_b != 8 || c.n[3:0] == 0);
-    modifiers_ok = (c.kind == 3 ? (!c.negate_a && !c.negate_b) : !c.int_sat);
-    modifiers_ok &= c.kind <= 1 && !c.ws ? 1'b1 : c.scale_input_d == 0;
-    modifiers_ok &= !c.ws || (!c.ashift && c.disable_lane_mask == 0);
-    modifiers_ok &= !scaled || (c.disable_lane_mask == 0 && c.scale_a_layout == 0 &&
-        c.sp_selector == 0 && c.scale_a[31:16] == 0 && c.scale_b[31:16] == 0);
-    if (c.kind >= 5) modifiers_ok &= !c.transpose_a && !c.transpose_b &&
-        !c.scale_a_id[0] && !c.scale_b_id[0] &&
-        (c.scale_vec != 3 || (c.scale_a_id == 0 && c.scale_b_id == 0));
-    if (!scaled) modifiers_ok &= c.scale_a == 0 && c.scale_b == 0 &&
-        c.scale_type == 0 && c.scale_vec == 0 && c.scale_a_layout == 0 &&
-        c.scale_a_id == 0 && c.scale_b_id == 0;
-    if (!c.sparse) modifiers_ok &= c.sparse_meta == 0 && c.sp_selector == 0;
-    if (c.kind >= 2) modifiers_ok &= c.sp_selector == 0;
-    else modifiers_ok &= c.sp_selector <= 1;
-    modifiers_ok &= !c.ashift || (!c.ws && !scaled && c.a_from_tmem && c.m == 128 &&
-        c.collector_op != 1 && c.collector_op != 2);
-    modifiers_ok &= c.ws || (c.ws_max_shift == 0 && c.collector_buffer == 0 &&
-        !c.zero_mask_enable && c.zero_mask_desc == 0);
-    if (c.ws && c.zero_mask_enable) modifiers_ok &= c.zero_mask_desc[63:62] == 0 &&
-        c.zero_mask_desc[38:36] == 0 && c.zero_mask_desc[61:56] <= (c.m == 32 ? 16 : 32);
-    if (!c.zero_mask_enable) modifiers_ok &= c.zero_mask_desc == 0;
-    hints_ok = c.ws || c.collector_buffer == 0;
-    return types_ok && dims_ok && desc_ok && modifiers_ok && hints_ok;
-  endfunction
-  function automatic logic [31:0] promote_half(input logic [15:0] value);
-    logic [9:0] fraction;
-    int exponent, shift;
-    shift=0;
-    fraction=value[9:0]; exponent=int'(value[14:10]);
-    if (exponent == 31) return {value[15],8'hff,fraction,13'd0};
-    if (exponent == 0) begin
-      if (fraction == 0) return {value[15],31'd0};
-      exponent=113;
-      for (shift=0;shift<10;shift++) begin
-        if (!fraction[9]) begin fraction=fraction<<1; exponent--; end
-      end
-      return {value[15],8'(exponent-1),fraction[8:0],14'd0};
-    end
-    return {value[15],8'(exponent+112),fraction,13'd0};
-  endfunction
-  // Each execution row keeps its original 4096-bit capacity as 32-bit cells.
-  // Read the adjacent cell only for a compact element that crosses a boundary.
-  function automatic logic [31:0] a_operand_bits(input int lane, input int offset,
-                                                input int needed_bits);
-    logic [63:0] words;
-    words={32'd0,a_q[lane][offset/32]};
-    if (offset%32+needed_bits>32) words[63:32]=a_q[lane][offset/32+1];
-    return 32'(words >> (offset%32));
-  endfunction
-  function automatic logic [31:0] b_operand_bits(input int lane, input int offset,
-                                                input int needed_bits);
-    logic [63:0] words;
-    words={32'd0,b_q[lane][offset/32]};
-    if (offset%32+needed_bits>32) words[63:32]=b_q[lane][offset/32+1];
-    return 32'(words >> (offset%32));
-  endfunction
-  function automatic logic [31:0] operand_value(input logic for_b, input int m,
-      input int n, input int k);
-    int stored_k, a_lane, bits, offset, group, index, meta_lane, meta_offset, pair;
-    logic [3:0] selector;
-    logic [31:0] value;
-    group=0; index=0; meta_lane=0; meta_offset=0; pair=0;
-    offset=0; selector='0;
-    stored_k=k; value='0;
-    a_lane=cmd_q.a_from_tmem ? lane_for(cmd_q,m,n,int'(cmd_q.a_tmem[31:16])) : m;
-    bits=precision_bits(for_b ? cmd_q.b_type : cmd_q.a_type);
-    if (!for_b && cmd_q.sparse) begin
-      if (cmd_q.kind <= 1) begin
-        group=k/(cmd_q.kind == 1 ? 2 : 4);
-        meta_lane=(lane_for(cmd_q,m,n,int'(cmd_q.sparse_meta[31:16]))/16)*16 +
-            m%8 + 8*(group/4);
-        meta_offset=int'(cmd_q.sp_selector)*32 + 16*((m%16)/8)+4*(group%4);
-      end else begin
-        group=k/(cmd_q.kind >= 5 ? 8 : 4);
-        meta_lane=lane_for(cmd_q,m,n,int'(cmd_q.sparse_meta[31:16]));
-        meta_offset=group*4;
-      end
-      selector=meta_q[meta_lane][meta_offset/32][meta_offset%32+:4];
-      if (cmd_q.kind == 1) begin
-        index=selector == 4'he ? 1 : 0;
-        if (k%2 != index) return '0;
-        stored_k=k/2;
-      end else if (cmd_q.kind >= 5) begin
-        pair=(k%8)/2;
-        if (pair == int'(selector[1:0])) stored_k=(k/8)*4+k%2;
-        else if (pair == int'(selector[3:2])) stored_k=(k/8)*4+2+k%2;
-        else return '0;
-      end else begin
-        if (k%4 == int'(selector[1:0])) stored_k=(k/4)*2;
-        else if (k%4 == int'(selector[3:2])) stored_k=(k/4)*2+1;
-        else return '0;
-      end
-    end
-    if (for_b) begin
-      if (column_zero(cmd_q,n)) return '0;
-      value=b_operand_bits(n,k*bits,bits);
-    end else if (cmd_q.a_from_tmem) begin
-      if (cmd_q.transpose_a) begin
-        a_lane=lane_for(cmd_q,stored_k,n,int'(cmd_q.a_tmem[31:16]));
-        stored_k=m;
-      end
-      offset=stored_k*container_a_bits;
-      value=a_operand_bits(a_lane,offset,container_a_bits);
-      if (cmd_q.a_type == 7 && cmd_q.kind < 5) value=value>>2;
-    end else value=a_operand_bits(a_lane,stored_k*bits,bits);
-    value &= bits == 32 ? 32'hffffffff : ((32'd1<<bits)-1);
-    if (for_b ? cmd_q.negate_b : cmd_q.negate_a) value ^= 32'd1<<(bits-1);
-    return value;
-  endfunction
-  function automatic logic [7:0] scale_value(input logic for_b,input int row,input int k);
-    int factors, block_k, byte_offset, column, physical_lane;
-    factors=cmd_q.scale_vec == 1 ? 1 : cmd_q.scale_vec == 2 ? 2 : 4;
-    block_k=int'(cmd_q.k)/factors;
-    if (block_k == 0) block_k=1;
-    byte_offset=(for_b ? int'(cmd_q.scale_b_id) : int'(cmd_q.scale_a_id))+k/block_k;
-    column=row/32;
-    physical_lane=row%32;
-    if (for_b) return sfb_q[physical_lane][column+byte_offset/4][(byte_offset%4)*8+:8];
-    return sfa_q[physical_lane][column+byte_offset/4][(byte_offset%4)*8+:8];
-  endfunction
-
-  assign source_bits=precision_bits(source_q ? cmd_q.b_type : cmd_q.a_type);
-  assign source_count=(!source_q && cmd_q.sparse) ? int'(cmd_q.k)/2 : int'(cmd_q.k);
-  assign source_rows=source_q ? int'(cmd_q.n) : int'(cmd_q.m);
-  assign container_a_bits=(cmd_q.a_type >= 3 && cmd_q.a_type <= 7 && cmd_q.kind < 5) ?
-      8 : precision_bits(cmd_q.a_type);
-  assign row_logical=int'(row_q)+(source_q && cmd_q.ws && cmd_q.zero_mask_enable ?
-      int'(cmd_q.zero_mask_desc[61:56]) : 0);
+  logic locked;
+  logic [1:0] saved;
   always_comb begin
-    source_offset=int'(element_q)*source_bits;
-    if (cmd_q.kind == 2 || cmd_q.kind == 4)
-      source_offset=(int'(element_q)/16)*128+(int'(element_q)%16)*source_bits;
-    if (source_q ? cmd_q.transpose_b : cmd_q.transpose_a) begin
-      // MN-major sub-byte operands pack the contiguous M/N elements in
-      // sixteen-element containers, including the specified tail padding.
-      source_offset=row_logical*source_bits;
-      if (cmd_q.kind == 2 || cmd_q.kind == 4)
-        source_offset=(row_logical/16)*128+(row_logical%16)*source_bits;
-      source_address=matrix_byte_address(source_q ? cmd_q.b_desc : cmd_q.a_desc,
-          32'(source_offset/8),32'(element_q),1'b1);
-    end else source_address=matrix_byte_address(source_q ? cmd_q.b_desc : cmd_q.a_desc,
-        32'(row_logical),32'(source_offset/8),1'b0);
-    read_bytes=((source_offset%8)+source_bits+7)/8;
-  end
-  assign collector_slot=cmd_q.ws ? int'(cmd_q.collector_buffer)+1 : 0;
-  assign tile_columns=256/(cmd_q.m == 0 ? 128 : int'(cmd_q.m));
-  assign arithmetic_chunk=cmd_q.kind == 0 ? 16 : cmd_q.kind == 1 ? 8 : cmd_q.kind >= 5 ? 64 : 32;
-  assign output_row=int'(dot_q)%(cmd_q.m == 0 ? 128 : int'(cmd_q.m));
-  assign output_column=int'(tile_q)+int'(dot_q)/(cmd_q.m == 0 ? 128 : int'(cmd_q.m));
-  always_comb begin
-    int m;
-    m=0;
-    active_lanes='0;
-    for (m=0;m<128;m++) if (m<int'(cmd_q.m))
-      active_lanes[lane_for(cmd_q,m,int'(column_q),int'(cmd_q.d_tmem[31:16]))]=1'b1;
-    tensor_address=cmd_q.a_tmem;
-    tensor_cells=(container_a_bits*(cmd_q.transpose_a ? int'(cmd_q.m) :
-        int'(cmd_q.k)/(cmd_q.sparse ? 2 : 1))+31)/32;
-    case (tensor_q)
-      1: begin
-        tensor_address=cmd_q.sparse_meta;
-        // F16/TF32 selectors address one 32-bit sub-column; all other
-        // SM100a sparse layouts occupy two columns for sixteen 4-bit groups.
-        tensor_cells=cmd_q.kind <= 1 ? int'(cmd_q.sp_selector)+1 : 2;
+    valid = locked;
+    rec = locked ? saved : 0;
+    for (int age = 2; age >= 0; age--) begin
+      if (!halt && !locked && live[age].valid && eligible[live[age].rec]) begin
+        valid = 1;
+        rec = live[age].rec;
       end
-      2: begin tensor_address=cmd_q.scale_a; tensor_cells=4; end
-      3: begin tensor_address=cmd_q.scale_b; tensor_cells=(int'(cmd_q.n)+31)/32; end
-      default: ;
-    endcase
-    tensor_column=int'(tensor_address[15:0])+int'(cell_q);
-    tensor_base=int'(tensor_address[31:16]);
-  end
-  assign cmd_rdy_o=state_q == Idle;
-  assign idle_o=state_q == Idle;
-  assign complete_vld_o=state_q == Complete;
-  assign complete_o={cmd_q.ctx,cmd_q.id,3'(CPL_TC),status_q,1'b0};
-  assign smem_req_vld_o=state_q == SourceReq;
-  assign smem_req_addr_o=SMEM_BYTE_ADDR_W'(source_address & ~64'd31);
-  assign smem_req_id_o=TENSOR_SMEM_ID_W'(int'(row_q)%128);
-  assign smem_rsp_rdy_o=state_q == SourceRsp;
-  always_comb begin
-    int byte_index;
-    byte_index=0;
-    smem_req_byte_mask_o='0;
-    for (byte_index=0;byte_index<4;byte_index++) if (byte_index<read_bytes)
-      smem_req_byte_mask_o[int'(source_address[4:0])+byte_index]=1'b1;
-  end
-
-  assign tensor_enabled=!((tensor_q == 0 && !cmd_q.a_from_tmem) ||
-      (tensor_q == 1 && !cmd_q.sparse) || ((tensor_q == 2 || tensor_q == 3) && cmd_q.kind < 4));
-  assign tensor_legal=(tensor_base == 0 || (tensor_q <= 1 && cmd_q.m == 64 && !cmd_q.ws && tensor_base == 16)) &&
-      int'(tensor_address[15:0])+tensor_cells<=512;
-  assign physical_column=cmd_q.ws && cmd_q.m == 32 ? int'(column_q)%(cmd_q.n == 0 ? 1 : int'(cmd_q.n)/4) :
-      cmd_q.ws && cmd_q.m == 64 ? int'(column_q)%(cmd_q.n == 0 ? 1 : int'(cmd_q.n)/2) : int'(column_q);
-  assign dest_legal=int'(cmd_q.d_tmem[15:0])+(cmd_q.ws && cmd_q.m == 32 ? int'(cmd_q.n)/4 : cmd_q.ws && cmd_q.m == 64 ? int'(cmd_q.n)/2 : int'(cmd_q.n))<=512;
-  assign tmem_rd_vld_o=(state_q == TensorReq && tensor_enabled && tensor_legal) ||
-      (state_q == DestProbeReq && dest_legal) || state_q == OldDReq;
-  assign tmem_rd_rsp_rdy_o=state_q == TensorRsp || state_q == DestProbeRsp || state_q == OldDRsp;
-  assign tmem_wr_vld_o=state_q == WriteDReq || state_q == ShiftReq;
-  assign tmem_wr_rsp_rdy_o=state_q == WriteDRsp || state_q == ShiftRsp;
-  assign tmem_rd_ctx_o=cmd_q.ctx;
-  assign tmem_wr_ctx_o=cmd_q.ctx;
-  assign tmem_rd_epoch_o=cmd_q.id.epoch;
-  assign tmem_wr_epoch_o=cmd_q.id.epoch;
-  assign tmem_rd_tag_o=cmd_q.id.tag;
-  assign tmem_wr_tag_o=cmd_q.id.tag;
-  always_comb begin
-    int p, m, lane, col, index;
-    p=0; m=0; lane=0; col=0; index=0;
-    tmem_rd_lane_mask_o=active_lanes;
-    tmem_rd_column_o={TMEM_LANES{16'((int'(cmd_q.d_tmem[15:0])+physical_column) & ~3)}};
-    if (state_q == TensorReq || state_q == TensorRsp) begin
-      tmem_rd_lane_mask_o='1;
-      if (tensor_q == 0 && cmd_q.m == 64 && !cmd_q.ws) begin
-        for (p=0;p<128;p++) tmem_rd_lane_mask_o[p]=(p%32>=tensor_base && p%32<tensor_base+16);
-      end
-      tmem_rd_column_o={TMEM_LANES{16'(tensor_column & ~3)}};
-    end
-    tmem_wr_column_o={TMEM_LANES{16'((int'(cmd_q.d_tmem[15:0])+physical_column) & ~3)}};
-    tmem_wr_data_o='0; tmem_wr_byte_mask_o='0;
-    for (m=0;m<128;m++) begin
-      lane=lane_for(cmd_q,m,int'(column_q),int'(cmd_q.d_tmem[31:16]));
-      col=int'(cmd_q.d_tmem[15:0])+physical_column;
-      index=(int'(column_q)-int'(tile_q))*int'(cmd_q.m)+m;
-      if (m<int'(cmd_q.m) && !cmd_q.disable_lane_mask[lane] && state_q == WriteDReq) begin
-        tmem_wr_data_o[lane*128+:128]=128'(acc_q[index]) << ((col%4)*32);
-        tmem_wr_byte_mask_o[lane*16+:16]=(cmd_q.d_type == 0 ? 16'h0003 : 16'h000f) << ((col%4)*4);
-      end
-    end
-    if (state_q == ShiftReq) begin
-      tmem_wr_column_o={TMEM_LANES{16'((int'(cmd_q.a_tmem[15:0])+int'(cell_q)) & ~3)}};
-      for (p=0;p<127;p++) begin
-        tmem_wr_data_o[p*128+:128]=128'(a_q[p+1][cell_q[6:0]]) <<
-            (((int'(cmd_q.a_tmem[15:0])+int'(cell_q))%4)*32);
-        tmem_wr_byte_mask_o[p*16+:16]=16'h000f <<
-            (((int'(cmd_q.a_tmem[15:0])+int'(cell_q))%4)*4);
-      end
-    end
-  end
-  always_comb begin
-    int block;
-    block=0;
-    f16_a=prepared_a_q; f16_b=prepared_b_q; f16_c=acc_q;
-    small_a=gathered_a_q; small_b=gathered_b_q;
-    scale_a_vector='0; scale_b_vector='0;
-    for (block=0;block<4;block++) begin
-      scale_a_vector[block*8+:8]=scale_value(1'b0,output_row,int'(chunk_q)+(cmd_q.scale_vec == 2 ? 32 : 16)*block);
-      scale_b_vector[block*8+:8]=scale_value(1'b1,output_column,int'(chunk_q)+(cmd_q.scale_vec == 2 ? 32 : 16)*block);
-    end
-    fp4_mode=cmd_q.scale_type ? 2'd0 : cmd_q.scale_vec == 2 ? 2'd1 : 2'd3;
-    arithmetic_rdy=f16_in_rdy;
-    arithmetic_vld=f16_out_vld;
-    small_result='0;
-    case (cmd_q.kind)
-      2,4: begin arithmetic_rdy=low_in_rdy; arithmetic_vld=low_out_vld; small_result=low_result; end
-      3: begin arithmetic_rdy=int_in_rdy; arithmetic_vld=int_out_vld; small_result=int_result; end
-      5,6: begin arithmetic_rdy=fp4_in_rdy; arithmetic_vld=fp4_out_vld; small_result=fp4_result; end
-      default: ;
-    endcase
-  end
-  blackwell_f16_dot_array #(.DOTS(DOTS)) u_f16 (
-    .clk(clk),.rst_n(rst_n),.in_vld_i(state_q == DotIssue && cmd_q.kind <= 1),
-    .in_rdy_o(f16_in_rdy),.tag_i(cmd_q.id.tag),.tag_o(),
-    .a_dtype_i(cmd_q.a_type == 0 ? dot_prod_pkg::DOT_F16TF32_DTYPE_FP16 :
-        cmd_q.a_type == 1 ? dot_prod_pkg::DOT_F16TF32_DTYPE_BF16 : dot_prod_pkg::DOT_F16TF32_DTYPE_TF32),
-    .b_dtype_i(cmd_q.b_type == 0 ? dot_prod_pkg::DOT_F16TF32_DTYPE_FP16 :
-        cmd_q.b_type == 1 ? dot_prod_pkg::DOT_F16TF32_DTYPE_BF16 : dot_prod_pkg::DOT_F16TF32_DTYPE_TF32),
-    .a_vec_i(f16_a),.b_vec_i(f16_b),.c_i(f16_c),
-    .scale_input_d_i(chunk_q == 0 ? cmd_q.scale_input_d : 4'd0),
-    .out_vld_o(f16_out_vld),.out_rdy_i(state_q == DotRsp && cmd_q.kind <= 1),.d_o(f16_d),.final_o(f16_final)
-  );
-  f4f6f8_dot_prod u_low (
-    .clk(clk),.rst_n(rst_n),.in_vld_i(state_q == DotIssue && (cmd_q.kind == 2 || cmd_q.kind == 4)),
-    .in_rdy_o(low_in_rdy),.a_vec_i(small_a),.b_vec_i(small_b),.c_i(acc_q[dot_q]),
-    .a_dtype_i(3'(int'(cmd_q.a_type)-3)),.b_dtype_i(3'(int'(cmd_q.b_type)-3)),
-    .mxfp8_en_i(cmd_q.kind == 4),.a_mx_scale_i(scale_value(1'b0,output_row,0)),
-    .b_mx_scale_i(scale_value(1'b1,output_column,0)),.out_vld_o(low_out_vld),
-    .out_rdy_i(state_q == DotRsp && (cmd_q.kind == 2 || cmd_q.kind == 4)),.d_o(low_result),.final_o(low_final)
-  );
-  fp4_dot_prod u_fp4 (
-    .clk(clk),.rst_n(rst_n),.in_vld_i(state_q == DotIssue && cmd_q.kind >= 5),
-    .in_rdy_o(fp4_in_rdy),.a_fp4_i(small_a),.b_fp4_i(small_b),
-    .fp4_mode_i(fp4_mode),.a_sf_i(scale_a_vector),.b_sf_i(scale_b_vector),
-    .c_fp32_i(acc_q[dot_q]),.out_vld_o(fp4_out_vld),
-    .out_rdy_i(state_q == DotRsp && cmd_q.kind >= 5),.d_fp32_o(fp4_result)
-  );
-  int8_dot_prod u_int (
-    .clk(clk),.rst_n(rst_n),.in_vld_i(state_q == DotIssue && cmd_q.kind == 3),
-    .in_rdy_o(int_in_rdy),.a_vec_i(small_a),.b_vec_i(small_b),.c_i(32'd0),
-    .a_unsigned_i(cmd_q.a_type == 9),.b_unsigned_i(cmd_q.b_type == 9),.sat_en_i(1'b0),
-    .out_vld_o(int_out_vld),.out_rdy_i(state_q == DotRsp && cmd_q.kind == 3),
-    .d_o(int_result),.overflow_o()
-  );
-  blackwell_fp16_result_provider #(.DOTS(DOTS)) u_fp16_result (
-    .clk(clk),.rst_n(rst_n),.in_vld_i(state_q == EncodeReq),.in_rdy_o(encode_rdy),
-    .result_fp16_i(1'b1),.final_i(final_q),.out_vld_o(encode_vld),
-    .out_rdy_i(state_q == EncodeRsp),.result_o(encoded_result)
-  );
-
-  always_comb begin
-    int slot, check_p, check_offset, granularity, group_count;
-    int old_p, old_index, old_col;
-    int g_dot, g_m, g_n, g_ba, g_bb;
-    logic [31:0] g_av, g_bv;
-    logic [31:0] source_value, source_mask, old_value;
-    logic selected;
-    logic [3:0] code;
-    logic signed [63:0] integer_sum;
-    g_dot=0; g_m=0; g_n=0; g_ba=0; g_bb=0; g_av='0; g_bv='0;
-    slot=0; check_p=0; check_offset=0; granularity=0; group_count=0;
-    old_p=0; old_index=0; old_col=0;
-    source_value='0; source_mask='0; old_value='0; selected=0; code='0; integer_sum='0;
-    state_d=state_q; cmd_d=cmd_q; status_d=status_q;
-    source_d=source_q; row_d=row_q; element_d=element_q;
-    tile_d=tile_q; column_d=column_q; tensor_d=tensor_q; cell_d=cell_q;
-    chunk_d=chunk_q; dot_d=dot_q; fetch_fault_d=fetch_fault_q;
-    gather_d=gather_q; gather_element_d=gather_element_q;
-    prepared_a_d=gathered_a_q; prepared_b_d=gathered_b_q;
-    a_source_wr_en=1'b0;
-    a_source_mask='0; a_source_data='0; a_source_cell=0;
-    b_source_wr_en=1'b0; b_source_mask='0; b_source_data='0; b_source_cell=0;
-    acc_d=acc_q; final_d=final_q; int_acc_d=int_acc_q; old_d_word_d=old_d_word_q;
-    collector_valid_d=collector_valid_q; collector_ctx_d=collector_ctx_q;
-    collector_epoch_d=collector_epoch_q;
-    case (state_q)
-      Idle: if (cmd_vld_i && cmd_rdy_o) begin
-        slot=cmd_i.ws ? int'(cmd_i.collector_buffer)+1 : 0;
-        cmd_d=cmd_i; status_d=ASYNC_OK; tile_d='0; column_d='0;
-        chunk_d='0; dot_d='0; cell_d='0; tensor_d='0;
-        source_d=cmd_i.a_from_tmem; row_d='0; element_d='0; fetch_fault_d=1'b0;
-        if (!legal_command(cmd_i) ||
-            ((cmd_i.collector_op == 2 || cmd_i.collector_op == 3) &&
-             (!collector_valid_q[slot] || collector_ctx_q[slot] != cmd_i.ctx ||
-              collector_epoch_q[slot] != cmd_i.id.epoch))) begin
-          status_d=8'd10; state_d=Complete;
-        end else if (cmd_i.d_tmem[31:16] != 0 && !(cmd_i.m == 64 && !cmd_i.ws && cmd_i.d_tmem[31:16] == 16)) begin
-          status_d=8'd5; state_d=Complete;
-        end else if ((cmd_i.a_from_tmem && cmd_i.a_tmem[31:16] != cmd_i.d_tmem[31:16]) ||
-                     (cmd_i.sparse && cmd_i.sparse_meta[31:16] != cmd_i.d_tmem[31:16])) begin
-          status_d=8'd5; state_d=Complete;
-        end else state_d=AddressCheck;
-      end
-      AddressCheck: begin
-        if (source_address+64'(read_bytes)>64'(SMEM_BYTES) ||
-            int'(source_address[4:0])+read_bytes>32) begin status_d=8'd16; state_d=Complete; end
-        else if (int'(element_q)+1<source_count) element_d=element_q+8'd1;
-        else if (int'(row_q)+1<source_rows) begin row_d=row_q+9'd1; element_d='0; end
-        else if (!source_q) begin source_d=1'b1; row_d='0; element_d='0; end
-        else begin
-          source_d=cmd_q.a_from_tmem; row_d='0; element_d='0;
-          state_d=SourceReq;
-        end
-      end
-      SourceReq: if (smem_req_vld_o && smem_req_rdy_i) state_d=SourceRsp;
-      SourceRsp: if (smem_rsp_vld_i && smem_rsp_rdy_o) begin
-        source_mask=source_bits == 32 ? 32'hffffffff : ((32'd1<<source_bits)-1);
-        source_value=32'(smem_rsp_data_i >> (int'(source_address[4:0])*8+source_offset%8));
-        if (smem_rsp_id_i != smem_req_id_o) fetch_fault_d=1'b1;
-        else if (smem_rsp_status_i != 0 || fetch_fault_q) begin status_d=8'd16; state_d=Complete; end
-        else begin
-          source_value &= source_mask;
-          if (source_q) begin
-            b_source_wr_en=1'b1;
-            b_source_cell=(int'(element_q)*source_bits)/32;
-            b_source_mask=64'(source_mask)<<((int'(element_q)*source_bits)%32);
-            b_source_data=64'(source_value)<<((int'(element_q)*source_bits)%32);
-          end else begin
-            a_source_wr_en=1'b1;
-            a_source_cell=(int'(element_q)*source_bits)/32;
-            a_source_mask=64'(source_mask)<<((int'(element_q)*source_bits)%32);
-            a_source_data=64'(source_value)<<((int'(element_q)*source_bits)%32);
-          end
-          if (int'(element_q)+1<source_count) begin element_d=element_q+8'd1; state_d=SourceReq; end
-          else if (int'(row_q)+1<source_rows) begin row_d=row_q+9'd1; element_d='0; state_d=SourceReq; end
-          else if (!source_q) begin source_d=1'b1; row_d='0; element_d='0; state_d=SourceReq; end
-          else begin tensor_d=0; cell_d=0; state_d=TensorReq; end
-        end
-      end
-      TensorReq: begin
-        if ((tensor_q == 0 && !cmd_q.a_from_tmem) || (tensor_q == 1 && !cmd_q.sparse) ||
-            ((tensor_q == 2 || tensor_q == 3) && cmd_q.kind < 4)) begin
-          if (tensor_q == 3) begin column_d='0; row_d='0; element_d='0; state_d=cmd_q.sparse ? SparseCheck : DestProbeReq; end
-          else begin tensor_d=tensor_q+3'd1; cell_d='0; end
-        end else if (tensor_base != 0 && !(tensor_q <= 1 && cmd_q.m == 64 && !cmd_q.ws && tensor_base == 16)) begin
-          status_d=8'd5; state_d=Complete;
-        end else if (int'(tensor_address[15:0])+tensor_cells>512) begin
-          status_d=8'd5; state_d=Complete;
-        end else if (tmem_rd_vld_o && tmem_rd_rdy_i) state_d=TensorRsp;
-      end
-      TensorRsp: if (tmem_rd_rsp_vld_i && tmem_rd_rsp_rdy_o) begin
-        if (tmem_rd_rsp_status_i != 0) begin status_d=tmem_rd_rsp_status_i; state_d=Complete; end
-        else begin
-          // Cell write ports below consume this accepted tensor response.
-          if (int'(cell_q)+1<tensor_cells) begin cell_d=cell_q+8'd1; state_d=TensorReq; end
-          else if (tensor_q == 3) begin column_d='0; row_d='0; element_d='0; state_d=cmd_q.sparse ? SparseCheck : DestProbeReq; end
-          else begin tensor_d=tensor_q+3'd1; cell_d='0; state_d=TensorReq; end
-        end
-      end
-
-      SparseCheck: begin
-        granularity=cmd_q.kind == 1 ? 2 : cmd_q.kind >= 5 ? 8 : 4;
-        group_count=int'(cmd_q.k)/granularity;
-        selected=!(cmd_q.m == 64 && !cmd_q.ws) ||
-            (int'(row_q)%32>=int'(cmd_q.sparse_meta[31:16]) &&
-             int'(row_q)%32<int'(cmd_q.sparse_meta[31:16])+16);
-        if (cmd_q.kind <= 1) begin
-          check_p=(int'(row_q)/16)*16+int'(row_q)%8+8*(int'(element_q)/4);
-          check_offset=int'(cmd_q.sp_selector)*32+16*((int'(row_q)%16)/8)+4*(int'(element_q)%4);
-        end else begin check_p=int'(row_q); check_offset=int'(element_q)*4; end
-        code=meta_q[check_p][check_offset/32][check_offset%32+:4];
-        if (selected && (cmd_q.kind == 1 ? (code != 4'he && code != 4'h4) :
-            !(code == 4'h4 || code == 4'h8 || code == 4'hc || code == 4'h9 ||
-              code == 4'hd || code == 4'h6 || code == 4'he))) begin
-          status_d=8'd10; state_d=Complete;
-        end else if (int'(element_q)+1<group_count) element_d=element_q+8'd1;
-        else if (row_q<127) begin row_d=row_q+9'd1; element_d='0; end
-        else state_d=DestProbeReq;
-      end
-      DestProbeReq: begin
-        if (!dest_legal) begin status_d=8'd5; state_d=Complete; end
-        else if (tmem_rd_vld_o && tmem_rd_rdy_i) state_d=DestProbeRsp;
-      end
-      DestProbeRsp: if (tmem_rd_rsp_vld_i && tmem_rd_rsp_rdy_o) begin
-        if (tmem_rd_rsp_status_i != 0) begin status_d=tmem_rd_rsp_status_i; state_d=Complete; end
-        else if (column_q+9'd1<cmd_q.n) begin column_d=column_q+9'd1; state_d=DestProbeReq; end
-        else begin column_d='0; state_d=InitTile; end
-      end
-      InitTile: begin
-        acc_d='0; chunk_d='0; dot_d='0; column_d=tile_q; int_acc_d='0; gather_d='0; gather_element_d='0;
-        state_d=cmd_q.input_d ? OldDReq : GatherOperands;
-      end
-      OldDReq: if (tmem_rd_vld_o && tmem_rd_rdy_i) state_d=OldDRsp;
-      OldDRsp: if (tmem_rd_rsp_vld_i && tmem_rd_rsp_rdy_o) begin
-        if (tmem_rd_rsp_status_i != 0) begin status_d=tmem_rd_rsp_status_i; state_d=Complete; end
-        else begin
-          old_d_word_d=tmem_rd_rsp_data_i;
-          row_d='0; state_d=OldDScatter;
-        end
-      end
-      OldDScatter: begin
-        old_p=lane_for(cmd_q,int'(row_q),int'(column_q),int'(cmd_q.d_tmem[31:16]));
-        old_index=(int'(column_q)-int'(tile_q))*int'(cmd_q.m)+int'(row_q);
-        old_col=int'(cmd_q.d_tmem[15:0])+physical_column;
-        old_value=old_d_word_q[old_p*128+(old_col%4)*32+:32];
-        acc_d[old_index]=cmd_q.d_type == 0 ? promote_half(old_value[15:0]) : old_value;
-        if (row_q+9'd1<9'(cmd_q.m)) row_d=row_q+9'd1;
-        else if (int'(column_q)+1<int'(tile_q)+tile_columns && column_q+9'd1<cmd_q.n) begin
-          column_d=column_q+9'd1; state_d=OldDReq;
-        end else begin
-          column_d=tile_q; gather_d='0;
-          gather_element_d='0; state_d=GatherOperands;
-        end
-      end
-      GatherOperands: begin
-        g_dot=cmd_q.kind <= 1 ? int'(gather_q) : int'(dot_q);
-        g_m=g_dot%(cmd_q.m == 0 ? 128 : int'(cmd_q.m));
-        g_n=int'(tile_q)+g_dot/(cmd_q.m == 0 ? 128 : int'(cmd_q.m));
-        g_ba=precision_bits(cmd_q.a_type); g_bb=precision_bits(cmd_q.b_type);
-        g_av='0; g_bv='0;
-        if (g_n<int'(cmd_q.n)) begin
-          g_av=operand_value(1'b0,g_m,g_n,int'(chunk_q)+int'(gather_element_q));
-          g_bv=operand_value(1'b1,g_m,g_n,int'(chunk_q)+int'(gather_element_q));
-        end
-        prepared_a_d=(gather_element_q == 0 ? 256'd0 : gathered_a_q) |
-            (256'(g_av)<<(int'(gather_element_q)*g_ba));
-        prepared_b_d=(gather_element_q == 0 ? 256'd0 : gathered_b_q) |
-            (256'(g_bv)<<(int'(gather_element_q)*g_bb));
-        if (int'(gather_element_q)+1 == arithmetic_chunk) begin
-          gather_element_d='0;
-          if (cmd_q.kind >= 2 || gather_q == 8'hff) state_d=DotIssue;
-          else gather_d=gather_q+8'd1;
-        end else gather_element_d=gather_element_q+6'd1;
-      end
-      DotIssue: if (arithmetic_rdy) state_d=DotRsp;
-      DotRsp: if (arithmetic_vld) begin
-        // Preserve the final dot accumulator, including bits lost by FP32
-        // packing, for the FP16 provider. No extra multiplication array.
-        if (cmd_q.d_type == 0 && int'(chunk_q)+arithmetic_chunk>=int'(cmd_q.k)) begin
-          if (cmd_q.kind == 0) final_d=f16_final;
-          else final_d[dot_q]=low_final;
-        end
-        if (cmd_q.kind <= 1) acc_d=f16_d;
-        else if (cmd_q.kind == 3) begin
-          integer_sum=(chunk_q == 0 ? {{32{acc_q[dot_q][31]}},acc_q[dot_q]} : int_acc_q)+
-              {{32{int_result[31]}},int_result};
-          int_acc_d=integer_sum;
-          if (int'(chunk_q)+arithmetic_chunk>=int'(cmd_q.k)) begin
-            if (cmd_q.int_sat && integer_sum>64'sh7fffffff) acc_d[dot_q]=32'h7fffffff;
-            else if (cmd_q.int_sat && integer_sum< -64'sh80000000) acc_d[dot_q]=32'h80000000;
-            else acc_d[dot_q]=integer_sum[31:0];
-          end
-        end else acc_d[dot_q]=small_result;
-        if (int'(chunk_q)+arithmetic_chunk<int'(cmd_q.k)) begin
-          chunk_d=8'(int'(chunk_q)+arithmetic_chunk); gather_d='0;
-          gather_element_d='0; state_d=GatherOperands;
-        end else if (cmd_q.kind >= 2 && dot_q != 8'hff) begin
-          dot_d=dot_q+8'd1; chunk_d='0; gather_d='0; gather_element_d='0; state_d=GatherOperands;
-        end else begin
-          column_d=tile_q;
-          state_d=cmd_q.d_type == 0 ? EncodeReq : WriteDReq;
-        end
-      end
-      EncodeReq: if (encode_rdy) state_d=EncodeRsp;
-      EncodeRsp: if (encode_vld) begin acc_d=encoded_result; state_d=WriteDReq; end
-      WriteDReq: if (tmem_wr_vld_o && tmem_wr_rdy_i) state_d=WriteDRsp;
-      WriteDRsp: if (tmem_wr_rsp_vld_i && tmem_wr_rsp_rdy_o) begin
-        if (tmem_wr_rsp_status_i != 0) begin status_d=tmem_wr_rsp_status_i; state_d=Complete; end
-        else if (int'(column_q)+1<int'(tile_q)+tile_columns && column_q+9'd1<cmd_q.n) begin
-          column_d=column_q+9'd1; state_d=WriteDReq;
-        end else if (int'(tile_q)+tile_columns<int'(cmd_q.n)) begin
-          tile_d=9'(int'(tile_q)+tile_columns); state_d=InitTile;
-        end else if (cmd_q.ashift) begin cell_d='0; tensor_d='0; state_d=ShiftReq; end
-        else state_d=Complete;
-      end
-      ShiftReq: if (tmem_wr_vld_o && tmem_wr_rdy_i) state_d=ShiftRsp;
-      ShiftRsp: if (tmem_wr_rsp_vld_i && tmem_wr_rsp_rdy_o) begin
-        if (tmem_wr_rsp_status_i != 0) begin status_d=tmem_wr_rsp_status_i; state_d=Complete; end
-        else if (int'(cell_q)+1<tensor_cells) begin cell_d=cell_q+8'd1; state_d=ShiftReq; end
-        else state_d=Complete;
-      end
-      Complete: if (complete_vld_o && complete_rdy_i) begin
-        collector_valid_d[collector_slot]=status_q == 0 && cmd_q.collector_op == 1;
-        if (status_q == 0 && cmd_q.collector_op == 2) collector_valid_d[collector_slot]=1'b1;
-        collector_ctx_d[collector_slot]=cmd_q.ctx;
-        collector_epoch_d[collector_slot]=cmd_q.id.epoch;
-        state_d=Idle;
-      end
-      default: begin status_d=ASYNC_BAD_COMPLETION; state_d=Complete; end
-    endcase
-  end
-  // The execution buffers are not externally addressable state; resetting their
-  // payload is unnecessary because the FSM initializes every consumed field.
-  for (genvar p=0;p<128;p++) begin : g_operand_rows
-    always_ff @(posedge clk) begin
-      if (a_source_wr_en && row_q[6:0] == 7'(p)) begin
-        a_q[p][a_source_cell] <= (a_q[p][a_source_cell] & ~a_source_mask[31:0]) |
-                                a_source_data[31:0];
-        if (|a_source_mask[63:32])
-          a_q[p][a_source_cell+1] <= (a_q[p][a_source_cell+1] & ~a_source_mask[63:32]) |
-                                    a_source_data[63:32];
-      end else if (state_q == TensorRsp && tmem_rd_rsp_vld_i &&
-                   tmem_rd_rsp_status_i == 0 && tensor_q == 0) begin
-        a_q[p][cell_q[6:0]] <= tmem_rd_rsp_data_i[p*128+(tensor_column%4)*32+:32];
-      end
-      if (state_q == TensorRsp && tmem_rd_rsp_vld_i && tmem_rd_rsp_status_i == 0 &&
-          tmem_rd_lane_mask_o[p]) begin
-        case (tensor_q)
-          1: meta_q[p][cell_q[1:0]] <= tmem_rd_rsp_data_i[p*128+(tensor_column%4)*32+:32];
-          2: sfa_q[p][cell_q[2:0]] <= tmem_rd_rsp_data_i[p*128+(tensor_column%4)*32+:32];
-          3: sfb_q[p][cell_q[2:0]] <= tmem_rd_rsp_data_i[p*128+(tensor_column%4)*32+:32];
-          default: ;
-        endcase
-      end
-    end
-  end
-  for (genvar p=0;p<256;p++) begin : g_b_rows
-    always_ff @(posedge clk) if (b_source_wr_en && row_q[7:0] == 8'(p)) begin
-      b_q[p][b_source_cell] <= (b_q[p][b_source_cell] & ~b_source_mask[31:0]) |
-                              b_source_data[31:0];
-      if (|b_source_mask[63:32])
-        b_q[p][b_source_cell+1] <= (b_q[p][b_source_cell+1] & ~b_source_mask[63:32]) |
-                                  b_source_data[63:32];
     end
   end
   always_ff @(posedge clk) begin
-    acc_q<=acc_d; final_q<=final_d; old_d_word_q<=old_d_word_d;
-    gathered_a_q<=prepared_a_d; gathered_b_q<=prepared_b_d;
-    for (int d=0;d<DOTS;d++) if (state_q == GatherOperands && cmd_q.kind <= 1 &&
-        int'(gather_element_q)+1 == arithmetic_chunk &&
-        gather_q == 8'(d)) begin
-      prepared_a_q[d]<=prepared_a_d;
-      prepared_b_q[d]<=prepared_b_d;
+    if (!rst_n) locked <= 0;
+    else begin
+      locked <= valid && !ready;
+      if (valid && !ready) saved <= rec;
     end
   end
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      state_q<=Idle; cmd_q<='0; status_q<=ASYNC_OK; source_q<=0;
-      row_q<='0; element_q<='0; tile_q<='0; column_q<='0; tensor_q<='0;
-      cell_q<='0; chunk_q<='0; dot_q<='0; gather_q<='0; gather_element_q<='0; fetch_fault_q<=0; int_acc_q<='0;
-      collector_valid_q<='0; collector_ctx_q<='0; collector_epoch_q<='0;
-    end else begin
-      state_q<=state_d; cmd_q<=cmd_d; status_q<=status_d; source_q<=source_d;
-      row_q<=row_d; element_q<=element_d; tile_q<=tile_d; column_q<=column_d;
-      tensor_q<=tensor_d; cell_q<=cell_d; chunk_q<=chunk_d; dot_q<=dot_d; gather_q<=gather_d; gather_element_q<=gather_element_d;
-      fetch_fault_q<=fetch_fault_d; int_acc_q<=int_acc_d;
-      collector_valid_q<=collector_valid_d; collector_ctx_q<=collector_ctx_d;
-      collector_epoch_q<=collector_epoch_d;
-    end
-  end
-`ifndef SYNTHESIS
-  assert property (@(posedge clk) disable iff (!rst_n)
-    complete_vld_o && !complete_rdy_i |=> complete_vld_o && $stable(complete_o));
-  assert property (@(posedge clk) disable iff (!rst_n)
-    smem_req_vld_o && !smem_req_rdy_i |=> smem_req_vld_o &&
-      $stable({smem_req_addr_o,smem_req_id_o,smem_req_byte_mask_o}));
-  assert property (@(posedge clk) disable iff (!rst_n)
-    tmem_wr_vld_o && !tmem_wr_rdy_i |=> tmem_wr_vld_o &&
-      $stable({tmem_wr_ctx_o,tmem_wr_epoch_o,tmem_wr_column_o,tmem_wr_data_o,tmem_wr_byte_mask_o,tmem_wr_tag_o}));
+endmodule
 
-`endif
+module blackwell_tc_mma_engine
+  import blackwell_async_pkg::*;
+  import blackwell_tc_pkg::*;
+  import blackwell_tmem_pkg::*;
+(
+  input logic clk,
+  input logic rst_n,
+  input logic halt_i,
+  input logic stop_i,
+  input logic [15:0] epoch_i,
+  output logic idle_o,
+  output logic drained_o,
+  output logic fault_o,
+  input logic cmd_valid,
+  output logic cmd_ready,
+  input mma_cmd_t cmd_payload,
+  output logic done_valid,
+  input logic done_ready,
+  output op_done_t done_payload,
+  output logic pin_req_valid,
+  input logic pin_req_ready,
+  output tmem_pin_req_t pin_req_payload,
+  input logic pin_rsp_valid,
+  output logic pin_rsp_ready,
+  input op_done_t pin_rsp_payload,
+  output logic unpin_valid,
+  input logic unpin_ready,
+  output tmem_unpin_t unpin_payload,
+  output logic [3:0] prepare_valid,
+  input logic [3:0] prepare_ready,
+  output prepare_t prepare_payload[4],
+  output logic [3:0] b_select_valid,
+  input logic [3:0] b_select_ready,
+  output b_select_t b_select_payload[4],
+  output logic first_valid,
+  output async_id_t first_id,
+  output logic launch,
+  input logic [3:0] first_ready,
+  input logic [3:0][2:0] input_free,
+  input logic [3:0][2:0] writes_done,
+  input logic [3:0] local_done_valid,
+  output logic [3:0] local_done_ready,
+  input op_done_t local_done_payload[4],
+  output mma_live_t [2:0] live_o,
+  output logic [2:0][3:0] older_writes_clear,
+  output logic start_valid,
+  input logic start_ready,
+  output prepare_t start_payload,
+  output logic release_valid,
+  input logic release_ready,
+  output async_id_t release_payload,
+  input logic [2:0] snapshot_ready,
+  input logic [2:0] quiescent,
+  output logic load_valid,
+  input logic load_ready,
+  output b_load_t load_payload,
+  input logic result_valid,
+  output logic result_ready,
+  input op_done_t result_payload
+);
+  typedef struct packed {
+    mma_cmd_t cmd;
+    logic valid, checked, pin_sent, pinned, bank_bound, bank;
+    logic classified, hit, load_sent, installed, assigned, launched;
+    logic [1:0] base_part;
+    logic snap_started, sources_done, terminal, reported;
+    logic [3:0] prepared, selected, finished;
+  } record_t;
+  record_t rec_q[3], rec_d[3];
+  typedef struct packed {
+    logic valid;
+    logic [89:0] key;
+    logic [1:0] base_part, n_code;
+    async_id_t owner;
+    logic [1:0] rank;
+  } resident_t;
+  resident_t resident_q[4], resident_d[4];
+  logic [15:0] previous_epoch;
+  logic [2:0][1:0] order_q, order_d;
+  logic [1:0] count_q, count_d;
+  logic halt, fault_d;
+  assign halt = halt_i || fault_o;
+  assign idle_o = count_q == 0;
+  assign drained_o = idle_o;
+
+  function automatic int k_size(logic [2:0] kind);
+    case (kind)
+      0: return 16;
+      1: return 8;
+      5, 6: return 64;
+      default: return 32;
+    endcase
+  endfunction
+  function automatic int tmem_a_width(mma_cmd_t c);
+    case (c.kind)
+      0: return 16;
+      1: return 32;
+      5, 6: return 4;
+      default: return 8;
+    endcase
+  endfunction
+  function automatic logic [89:0] key(mma_cmd_t c);
+    return {c.id.epoch, c.b_desc, c.b_type, c.kind, c.transpose_b, c.n_code};
+  endfunction
+  function automatic logic [3:0] partitions(logic [1:0] base, n_code);
+    case (n_code)
+      0: return 4'b0001 << base;
+      1: return 4'b0011 << base;
+      default: return 4'b1111;
+    endcase
+  endfunction
+  function automatic logic desc_ok(mma_cmd_t c, logic side_b);
+    b_load_t src;
+    logic [63:0] d, last_bit;
+    int rows, bits_per_element, period, start, phase;
+    src.id = c.id;
+    src.desc = side_b ? c.b_desc : c.a_ref;
+    src.dtype = side_b ? c.b_type : c.a_type;
+    src.kind = c.kind;
+    src.transpose = side_b ? c.transpose_b : c.transpose_a;
+    src.n_code = c.n_code;
+    d = src.desc;
+    bits_per_element = element_bits(src.dtype);
+    if (d[15:14] != 0 || d[31:30] != 0 || d[48:46] != 1 || d[60:52] != 0) return 0;
+    case (d[63:61])
+      0: begin
+        if (d[51:49] != 0) return 0;
+        period = 1;
+      end
+      1, 4: period = 512;
+      2: period = 1024;
+      6: period = 256;
+      default: return 0;
+    endcase
+    start = int'(d[13:0]) * 16;
+    phase = int'(d[51:49]) * 128;
+    if (start < phase && phase < ((phase - start + period - 1) / period) * period) return 0;
+    if (src.transpose && (bits_per_element < 8 || ((bits_per_element == 32) != (d[63:61] == 1))))
+      return 0;
+    rows = side_b ? (64 << c.n_code) : 128;
+    // Legal dimensions contain whole swizzle stripes or a single partial
+    // stripe. All index coefficients are nonnegative. The last coordinate
+    // maximizes the unswizzled address, and XOR never crosses a 4 KiB page.
+    last_bit = source_bit(src, rows - 1, k_size(c.kind) - 1, bits_per_element - 1);
+    return (last_bit >> 3) < 64'd233472;
+  endfunction
+  function automatic logic cmd_ok(mma_cmd_t c);
+    int n, acols, lanes;
+    n = 64 << c.n_code;
+    if (c.n_code == 3 || c.id.epoch != epoch_i) return 0;
+    case (c.kind)
+      0: if (c.a_type > 1 || c.b_type > 1) return 0;
+      1: if (c.a_type != 2 || c.b_type != 2) return 0;
+      2, 4: if (c.a_type < 3 || c.a_type > 7 || c.b_type < 3 || c.b_type > 7) return 0;
+      3:
+      if (!(c.a_type inside {8, 9}) || !(c.b_type inside {8, 9}) || c.negate_a || c.negate_b)
+        return 0;
+      5, 6: if (c.a_type != 7 || c.b_type != 7 || c.transpose_a || c.transpose_b) return 0;
+      default: return 0;
+    endcase
+    if ((c.int_sat && c.kind != 3) || (c.scale_input_d != 0 && (c.ws || c.kind > 1)) ||
+        (c.collector_buffer != 0 && !c.ws) || ((c.ws || c.kind >= 4) && c.disable_lane_mask != 0))
+      return 0;
+    if (c.kind < 4) begin
+      if ({c.scale_type, c.scale_vec, c.scale_a_id, c.scale_b_id, c.scale_a, c.scale_b} != 0)
+        return 0;
+    end else begin
+      if (c.ws || c.scale_a > 508 || c.scale_b[31:16] != 0 || int'(c.scale_b[15:0]) > 512 - n / 32)
+        return 0;
+      case (c.kind)
+        4: if (c.scale_type || c.scale_vec != 1) return 0;
+        5, 6:
+        if (c.scale_type ? (c.kind != 6 || c.scale_vec != 3 || c.scale_a_id != 0 || c.scale_b_id !=
+                            0) : (c.scale_vec != 2 || c.scale_a_id[0] || c.scale_b_id[0]))
+          return 0;
+        default: return 0;
+      endcase
+    end
+    if (c.d_tmem > 512 - n || !desc_ok(c, 1)) return 0;
+    if (c.a_from_tmem) begin
+      acols = ((c.transpose_a ? 128 : k_size(c.kind)) * tmem_a_width(c) + 31) / 32;
+      lanes = c.transpose_a ? k_size(c.kind) : 128;
+      if (c.a_ref[63:32] != 0 || int'(c.a_ref[31:16]) > 128 - lanes ||
+          int'(c.a_ref[15:0]) > 512 - acols)
+        return 0;
+    end else if (!desc_ok(c, 0)) return 0;
+    return 1;
+  endfunction
+  function automatic logic overlaps(int a, aw, b, bw);
+    return a < b + bw && b < a + aw;
+  endfunction
+  for (genvar a = 0; a < 3; a++) begin : g_live
+    assign live_o[a] = {int'(count_q) > a, order_q[a], rec_q[order_q[a]].cmd.id};
+  end
+  always_comb begin
+    older_writes_clear = '1;
+    for (int a = 0; a < 3; a++) begin
+      for (int b = 0; b < a; b++) begin
+        mma_cmd_t young, old;
+        int old_w, old_base, awidth;
+        logic writes_clear;
+        young = rec_q[order_q[a]].cmd;
+        old = rec_q[order_q[b]].cmd;
+        old_w = 64 << old.n_code;
+        old_base = int'(old.d_tmem);
+        awidth = ((young.transpose_a ? 128 : k_size(young.kind)) * tmem_a_width(young) + 31) / 32;
+        writes_clear = 1;
+        for (int c = 0; c < 4; c++)
+        writes_clear &= writes_done[c][order_q[b]] || rec_q[order_q[b]].finished[c];
+        if (live_o[a].valid && !writes_clear && !(&old.disable_lane_mask)) begin
+          if (young.a_from_tmem && overlaps(old_base, old_w, int'(young.a_ref[15:0]), awidth))
+            older_writes_clear[order_q[a]][0] = 0;
+          if (young.kind >= 4 && overlaps(old_base, old_w, int'(young.scale_a), 4))
+            older_writes_clear[order_q[a]][1] = 0;
+          if (young.kind >= 4 && overlaps(
+                  old_base, old_w, int'(young.scale_b), (64 << young.n_code) / 32
+              ))
+            older_writes_clear[order_q[a]][2] = 0;
+          if (old_base != int'(young.d_tmem) && overlaps(
+                  old_base, old_w, int'(young.d_tmem), 64 << young.n_code
+              ))
+            older_writes_clear[order_q[a]][3] = 0;
+        end
+      end
+    end
+  end
+  logic [2:0]
+      pin_candidates,
+      unpin_candidates,
+      done_candidates,
+      snap_candidates,
+      release_candidates,
+      load_candidates;
+  logic [2:0] source_free, freeing;
+  logic [1:0] pin_rec, unpin_rec, done_rec, snap_rec, release_rec, load_rec;
+  logic [1:0] bank_rec, lookup_rec, assign_rec, first_rec;
+  logic bank_offer, bank_number, lookup_valid, assign_valid;
+  logic [1:0] occupied_banks;
+  logic [3:0][2:0] prep_candidates, sel_candidates;
+  logic [3:0][1:0] prep_rec, sel_rec;
+
+  for (genvar i = 0; i < 3; i++) begin : g_eligible
+    assign source_free[i] = rec_q[i].bank_bound && rec_q[i].launched && input_free[0][i] &&
+        input_free[1][i] && input_free[2][i] && input_free[3][i];
+    assign release_candidates[i] = source_free[i] && rec_q[i].snap_started && quiescent[i];
+    assign freeing[i] = rec_q[i].bank_bound &&
+        (rec_q[i].cmd.kind < 4 ?
+         source_free[i] : (release_valid && release_ready && release_rec == i));
+    assign pin_candidates[i] = rec_q[i].checked && !rec_q[i].pin_sent;
+    assign unpin_candidates[i] = rec_q[i].pinned && (&rec_q[i].finished) &&
+        (rec_q[i].sources_done || freeing[i]) && (rec_q[i].installed || rec_q[i].hit);
+    assign done_candidates[i] = rec_q[i].terminal && !rec_q[i].reported;
+    assign snap_candidates[i] = rec_q[i].bank_bound && rec_q[i].cmd.kind >= 4 &&
+        !rec_q[i].snap_started && older_writes_clear[i][2];
+    assign load_candidates[i] = rec_q[i].classified && !rec_q[i].hit && !rec_q[i].load_sent;
+  end
+  blackwell_tc_record_select pin_pick (
+    .clk,
+    .rst_n,
+    .halt,
+    .live(live_o),
+    .eligible(pin_candidates),
+    .valid(pin_req_valid),
+    .rec(pin_rec),
+    .ready(pin_req_ready)
+  );
+  blackwell_tc_record_select unpin_pick (
+    .clk,
+    .rst_n,
+    .halt,
+    .live(live_o),
+    .eligible(unpin_candidates),
+    .valid(unpin_valid),
+    .rec(unpin_rec),
+    .ready(unpin_ready)
+  );
+  blackwell_tc_record_select done_pick (
+    .clk,
+    .rst_n,
+    .halt,
+    .live(live_o),
+    .eligible(done_candidates),
+    .valid(done_valid),
+    .rec(done_rec),
+    .ready(done_ready)
+  );
+  blackwell_tc_record_select snapshot_pick (
+    .clk,
+    .rst_n,
+    .halt,
+    .live(live_o),
+    .eligible(snap_candidates),
+    .valid(start_valid),
+    .rec(snap_rec),
+    .ready(start_ready)
+  );
+  blackwell_tc_record_select release_pick (
+    .clk,
+    .rst_n,
+    .halt,
+    .live(live_o),
+    .eligible(release_candidates),
+    .valid(release_valid),
+    .rec(release_rec),
+    .ready(release_ready)
+  );
+  blackwell_tc_record_select load_pick (
+    .clk,
+    .rst_n,
+    .halt,
+    .live(live_o),
+    .eligible(load_candidates),
+    .valid(load_valid),
+    .rec(load_rec),
+    .ready(load_ready)
+  );
+  assign pin_req_payload = {rec_q[pin_rec].cmd.id, 1'b0, pin_rec};
+  assign unpin_payload = {rec_q[unpin_rec].cmd.id, 1'b0, unpin_rec};
+  assign done_payload = {rec_q[done_rec].cmd.id, OK};
+  assign start_payload = {snap_rec, rec_q[snap_rec].bank, rec_q[snap_rec].cmd};
+  assign release_payload = rec_q[release_rec].cmd.id;
+  assign load_payload = {
+    rec_q[load_rec].cmd.id,
+    rec_q[load_rec].cmd.b_desc,
+    rec_q[load_rec].cmd.b_type,
+    rec_q[load_rec].cmd.kind,
+    rec_q[load_rec].cmd.transpose_b,
+    rec_q[load_rec].cmd.n_code
+  };
+  assign pin_rsp_ready = !halt, result_ready = !halt, local_done_ready = {4{!halt}};
+
+  always_comb begin
+    occupied_banks = 0;
+    for (int r = 0; r < 3; r++)
+    if (rec_q[r].valid && rec_q[r].bank_bound && !freeing[r]) occupied_banks[rec_q[r].bank] = 1;
+    bank_offer = 0;
+    bank_rec = 0;
+    bank_number = occupied_banks[0];
+    lookup_valid = 0;
+    lookup_rec = 0;
+    assign_valid = 0;
+    assign_rec = 0;
+    first_valid = 0;
+    first_rec = 0;
+    for (int a = 2; a >= 0; a--) begin
+      if (live_o[a].valid) begin
+        if (!rec_q[order_q[a]].bank_bound && !rec_q[order_q[a]].sources_done) begin
+          bank_rec = order_q[a];
+          bank_offer = rec_q[order_q[a]].pinned && !(&occupied_banks) && !halt;
+        end
+        if (!rec_q[order_q[a]].classified) begin
+          lookup_rec = order_q[a];
+          lookup_valid = rec_q[order_q[a]].pinned && !halt;
+        end
+        if (!rec_q[order_q[a]].assigned) begin
+          assign_rec = order_q[a];
+          assign_valid = rec_q[order_q[a]].classified && !halt;
+        end
+        if (!rec_q[order_q[a]].launched) begin
+          first_valid = !halt;
+          first_rec = order_q[a];
+        end
+      end
+    end
+    first_id = rec_q[first_rec].cmd.id;
+  end
+  assign launch = first_valid && rec_q[first_rec].pinned && (&rec_q[first_rec].prepared) &&
+      (&rec_q[first_rec].selected) &&
+      (rec_q[first_rec].cmd.kind < 4 || snapshot_ready[first_rec]) && (&first_ready);
+
+  for (genvar c = 0; c < 4; c++) begin : g_core
+    for (genvar r = 0; r < 3; r++) begin : g_offer
+      assign prep_candidates[c][r] = !rec_q[r].prepared[c] &&
+          (rec_q[r].bank_bound || (bank_offer && bank_rec == r));
+      assign sel_candidates[c][r] = rec_q[r].assigned && !rec_q[r].selected[c];
+    end
+    blackwell_tc_record_select prep_pick (
+      .clk,
+      .rst_n,
+      .halt,
+      .live(live_o),
+      .eligible(prep_candidates[c]),
+      .valid(prepare_valid[c]),
+      .rec(prep_rec[c]),
+      .ready(prepare_ready[c])
+    );
+    blackwell_tc_record_select select_pick (
+      .clk,
+      .rst_n,
+      .halt,
+      .live(live_o),
+      .eligible(sel_candidates[c]),
+      .valid(b_select_valid[c]),
+      .rec(sel_rec[c]),
+      .ready(b_select_ready[c])
+    );
+    assign prepare_payload[c] = {
+      prep_rec[c],
+      rec_q[prep_rec[c]].bank_bound ? rec_q[prep_rec[c]].bank : bank_number,
+      rec_q[prep_rec[c]].cmd
+    };
+    assign b_select_payload[c] = {
+      rec_q[sel_rec[c]].cmd.id,
+      rec_q[sel_rec[c]].base_part,
+      rec_q[sel_rec[c]].cmd.n_code,
+      rec_q[sel_rec[c]].hit
+    };
+  end
+
+  // Classify in program order. Until an older same-name operation has bound
+  // its version, no later operation can decide whether that version hits.
+  logic lookup_wait, hit;
+  logic [1:0] lookup_name, assign_name;
+  logic [3:0] busy_parts, protected_names;
+  logic run_found, evict_found, assign_wait;
+  logic [1:0] run_base, victim;
+  always_comb begin
+    lookup_wait = 0;
+    lookup_name = rec_q[lookup_rec].cmd.collector_buffer;
+    hit = rec_q[lookup_rec].cmd.ws && rec_q[lookup_rec].cmd.collector_op[1] &&
+        resident_q[lookup_name].valid && resident_q[lookup_name].key == key(rec_q[lookup_rec].cmd);
+    for (int r = 0; r < 3; r++) begin
+      // An older miss may need to evict this exact version before it
+      // can reserve a contiguous run. Only bind the prospective hit
+      // after all earlier allocation decisions have taken effect.
+      if (hit && rec_q[r].valid && rec_q[r].classified && !rec_q[r].assigned) lookup_wait = 1;
+      if (r != int'(lookup_rec) && rec_q[r].valid && rec_q[r].classified && rec_q[r].cmd.ws &&
+          rec_q[r].cmd.collector_buffer == lookup_name && rec_q[lookup_rec].cmd.ws &&
+          (!rec_q[r].assigned || (!rec_q[r].installed && !rec_q[r].hit) ||
+           (rec_q[r].hit && !rec_q[r].launched)))
+        lookup_wait = 1;
+    end
+    assign_name = rec_q[assign_rec].cmd.collector_buffer;
+    busy_parts = 0;
+    protected_names = 0;
+    for (int r = 0; r < 3; r++) begin
+      if (rec_q[r].valid && rec_q[r].assigned && !rec_q[r].launched && rec_q[r].hit)
+        protected_names[rec_q[r].cmd.collector_buffer] = 1;
+      if (rec_q[r].valid && rec_q[r].assigned &&
+          ((!rec_q[r].hit && !rec_q[r].installed) || (rec_q[r].hit && !rec_q[r].launched)))
+        busy_parts |= partitions(rec_q[r].base_part, rec_q[r].cmd.n_code);
+    end
+    // A hit awaiting assignment keeps the resident version it matched.
+    for (int r = 0; r < 3; r++)
+    if (rec_q[r].valid && rec_q[r].hit && !rec_q[r].launched)
+      protected_names[rec_q[r].cmd.collector_buffer] = 1;
+    for (int n = 0; n < 4; n++)
+    if (resident_q[n].valid)
+      busy_parts |= partitions(resident_q[n].base_part, resident_q[n].n_code);
+    run_found = 0;
+    run_base = 0;
+    for (int base = 3; base >= 0; base--) begin
+      if (base + (1 << rec_q[assign_rec].cmd.n_code) <= 4 && (busy_parts & partitions(
+              2'(base), rec_q[assign_rec].cmd.n_code
+          )) == 0) begin
+        run_found = 1;
+        run_base = 2'(base);
+      end
+    end
+    victim = 0;
+    evict_found = 0;
+    for (int n = 0; n < 4; n++) begin
+      if (resident_q[n].valid && !protected_names[n] &&
+          (!evict_found || resident_q[n].rank > resident_q[victim].rank)) begin
+        evict_found = 1;
+        victim = 2'(n);
+      end
+    end
+    assign_wait = rec_q[assign_rec].cmd.ws && protected_names[assign_name] &&
+        !rec_q[assign_rec].hit;
+  end
+  task automatic make_mru(inout resident_t ways[4], input logic [1:0] name, input logic is_new);
+    logic [1:0] old_rank;
+    old_rank = ways[name].rank;
+    for (int n = 0; n < 4; n++)
+      if (n != int'(name) && ways[n].valid && (is_new || ways[n].rank < old_rank) &&
+          ways[n].rank != 3)
+        ways[n].rank = ways[n].rank + 1'b1;
+    ways[name].rank = 0;
+  endtask
+  // Removing a named version also closes the gap in the LRU stack.
+  task automatic drop_name(inout resident_t ways[4], input logic [1:0] name);
+    if (ways[name].valid) begin
+      for (int n = 0; n < 4; n++)
+      if (ways[n].valid && ways[n].rank > ways[name].rank) ways[n].rank = ways[n].rank - 1'b1;
+      ways[name].valid = 0;
+    end
+  endtask
+  logic [1:0] free_rec;
+  logic reclaim;
+  always_comb begin
+    free_rec = 0;
+    for (int r = 2; r >= 0; r--) if (!rec_q[r].valid) free_rec = 2'(r);
+  end
+  assign cmd_ready = !stop_i && !halt && count_q < 3;
+  assign reclaim = count_q != 0 &&
+      (rec_q[order_q[0]].reported || (done_valid && done_ready && done_rec == order_q[0]));
+  always_comb begin
+    logic pin_matched, result_matched, duplicate;
+    logic [3:0] local_matched;
+    logic [1:0] publish_name;
+    pin_matched = 0;
+    result_matched = 0;
+    duplicate = 0;
+    local_matched = 0;
+    publish_name = 0;
+    rec_d = rec_q;
+    resident_d = resident_q;
+    order_d = order_q;
+    count_d = count_q;
+    fault_d = fault_o;
+    if (!halt) begin
+      for (int r = 0; r < 3; r++) begin
+        if (rec_q[r].valid && !rec_q[r].checked) begin
+          if (cmd_ok(rec_q[r].cmd)) rec_d[r].checked = 1;
+          else fault_d = 1;
+        end
+      end
+    end
+    if (pin_req_valid && pin_req_ready) rec_d[pin_rec].pin_sent = 1;
+    if (pin_rsp_valid && pin_rsp_ready) begin
+      for (int r = 0; r < 3; r++) begin
+        if (rec_q[r].valid && rec_q[r].cmd.id == pin_rsp_payload.id && rec_q[r].pin_sent &&
+            !rec_q[r].pinned && !rec_q[r].terminal && pin_rsp_payload.status == OK) begin
+          rec_d[r].pinned = 1;
+          pin_matched = 1;
+        end
+      end
+      if (!pin_matched) fault_d = 1;
+    end
+    if (bank_offer) begin
+      rec_d[bank_rec].bank_bound = 1;
+      rec_d[bank_rec].bank = bank_number;
+    end
+    for (int r = 0; r < 3; r++)
+    if (freeing[r]) begin
+      rec_d[r].bank_bound = 0;
+      rec_d[r].sources_done = 1;
+    end
+    if (start_valid && start_ready) rec_d[snap_rec].snap_started = 1;
+    if (load_valid && load_ready) rec_d[load_rec].load_sent = 1;
+    if (assign_valid && !assign_wait) begin
+      if (rec_q[assign_rec].hit) begin
+        if (resident_q[assign_name].valid && resident_q[assign_name].key == key(
+                rec_q[assign_rec].cmd
+            )) begin
+          rec_d[assign_rec].assigned = 1;
+          rec_d[assign_rec].base_part = resident_q[assign_name].base_part;
+          resident_d[assign_name].owner = rec_q[assign_rec].cmd.id;
+          make_mru(resident_d, assign_name, 0);
+          if (rec_q[assign_rec].cmd.collector_op == 3) drop_name(resident_d, assign_name);
+        end else rec_d[assign_rec].hit = 0;
+      end else if (rec_q[assign_rec].cmd.ws && resident_q[assign_name].valid)
+        drop_name(resident_d, assign_name);
+      else if (run_found) begin
+        rec_d[assign_rec].assigned = 1;
+        rec_d[assign_rec].base_part = run_base;
+      end else if (evict_found) drop_name(resident_d, victim);
+    end
+    if (lookup_valid && !lookup_wait) begin
+      rec_d[lookup_rec].classified = 1;
+      rec_d[lookup_rec].hit = hit && resident_d[lookup_name].valid;
+    end
+    if (result_valid && result_ready) begin
+      for (int r = 0; r < 3; r++) begin
+        if (rec_q[r].valid && rec_q[r].cmd.id == result_payload.id && rec_q[r].load_sent &&
+            rec_q[r].assigned && (&rec_q[r].selected) && !rec_q[r].installed &&
+            result_payload.status == OK) begin
+          publish_name = rec_q[r].cmd.collector_buffer;
+          result_matched = 1;
+          rec_d[r].installed = 1;
+          if (rec_q[r].cmd.ws && rec_q[r].cmd.collector_op inside {2'd1, 2'd2}) begin
+            drop_name(resident_d, publish_name);
+            make_mru(resident_d, publish_name, 1);
+            resident_d[publish_name].valid = 1;
+            resident_d[publish_name].key = key(rec_q[r].cmd);
+            resident_d[publish_name].base_part = rec_q[r].base_part;
+            resident_d[publish_name].n_code = rec_q[r].cmd.n_code;
+            resident_d[publish_name].owner = rec_q[r].cmd.id;
+          end
+        end
+      end
+      if (!result_matched) fault_d = 1;
+    end
+    for (int c = 0; c < 4; c++) begin
+      if (prepare_valid[c] && prepare_ready[c]) rec_d[prep_rec[c]].prepared[c] = 1;
+      if (b_select_valid[c] && b_select_ready[c]) rec_d[sel_rec[c]].selected[c] = 1;
+      if (local_done_valid[c] && local_done_ready[c]) begin
+        for (int r = 0; r < 3; r++)
+        if (rec_q[r].valid && rec_q[r].cmd.id == local_done_payload[c].id && rec_q[r].launched &&
+            !rec_q[r].finished[c] && writes_done[c][r] && local_done_payload[c].status == OK) begin
+          local_matched[c] = 1;
+          rec_d[r].finished[c] = 1;
+        end
+        if (!local_matched[c]) fault_d = 1;
+      end
+    end
+    if (launch) rec_d[first_rec].launched = 1;
+    if (unpin_valid && unpin_ready) begin
+      rec_d[unpin_rec].pinned = 0;
+      rec_d[unpin_rec].terminal = 1;
+    end
+    if (done_valid && done_ready) rec_d[done_rec].reported = 1;
+    if (reclaim) begin
+      rec_d[order_q[0]].valid = 0;
+      order_d = {2'd0, order_q[2], order_q[1]};
+      count_d = count_q - 1'b1;
+    end
+    if (cmd_valid && cmd_ready) begin
+      for (int r = 0; r < 3; r++) duplicate |= rec_q[r].valid && rec_q[r].cmd.id == cmd_payload.id;
+      if (duplicate) fault_d = 1;
+      else begin
+        rec_d[free_rec] = '0;
+        rec_d[free_rec].cmd = cmd_payload;
+        rec_d[free_rec].valid = 1;
+        order_d[count_d] = free_rec;
+        count_d = count_d + 1'b1;
+      end
+    end
+    if (previous_epoch != epoch_i) for (int n = 0; n < 4; n++) resident_d[n].valid = 0;
+  end
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      count_q <= 0;
+      order_q <= 0;
+      fault_o <= 0;
+      previous_epoch <= 0;
+      for (int r = 0; r < 3; r++) rec_q[r] <= '0;
+      for (int n = 0; n < 4; n++) resident_q[n] <= '0;
+    end else begin
+      count_q <= count_d;
+      order_q <= order_d;
+      fault_o <= fault_d;
+      previous_epoch <= epoch_i;
+      rec_q <= rec_d;
+      resident_q <= resident_d;
+    end
+  end
 endmodule

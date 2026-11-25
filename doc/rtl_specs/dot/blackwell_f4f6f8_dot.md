@@ -72,7 +72,7 @@ P=6. Edge l captures S0. S5 is visible after l+5 and the earliest output transfe
 
 Verify all 25 dtype combinations, finite extrema/zero/subnormal/NaN as applicable, E5M2 Inf, UE8M0 0/254/255, and signed cancellation. Compare MX against a reference using exactly the same fixed-point alignment. Check truncation for large exponent differences between scaled finite products and C. Assert correct behavior under uniform backpressure across 64 lanes and fault injection with partial ready.
 
-RTL: [f4f6f8_dot_prod.sv](../../../rtl/dot/f4f6f8_dot_prod.sv).
+RTL: [blackwell_f4f6f8_dot.sv](../../../rtl/dot/blackwell_f4f6f8_dot.sv).
 
 ## Submodules
 
