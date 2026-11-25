@@ -68,7 +68,9 @@ module blackwell_tma_data_path
   logic slot_turn, write_turn, gmem_turn, gmem_locked, gmem_lock_store, gmem_store;
   logic [7:0] smem_turn, smem_lock, smem_lock_store, smem_store, smem_bad, smem_store_return;
   logic [7:0][3:0] store_selected, smem_lock_slot, return_slot;
-  ticket_t group_rr[8], rd_rr;
+  ticket_t group_rr[8], rd_store_rr;
+  logic [3:0] rd_load_rr;
+  logic rd_store_turn, pick_store;
   logic output_retire, out_space, q_space, rd_space, rd_found;
   tma_tag_t out_tag, return_tag;
   logic [7:0] read_rsp_groups;
@@ -177,28 +179,48 @@ module blackwell_tma_data_path
   always_comb begin
     logic [5:0] best, distance;
     logic [63:0] best_ordinal;
+    logic store_found, load_found, load_after_cursor;
+    logic [3:0] store_slot, first_load, next_load;
     output_retire = out_valid &&
         (owner_view[out_tag.ticket].store ? write_fire : (submitted & pending) == pending);
     out_space = !out_valid || output_retire;
     q_space = !q_valid || out_space;
     rd_space = !rd_valid || q_space;
-    rd_found = 0;
-    pick_rd = 0;
+    store_found = 0;
+    store_slot = 0;
     best = '1;
     best_ordinal = '1;
-    for (int i = 0; i < 16; i++) begin
+    load_found = 0;
+    load_after_cursor = 0;
+    first_load = 0;
+    next_load = 0;
+    for (int i = 15; i >= 0; i--) begin
       tma_tag_t tag;
       tag = tag_view[rows[i].key.tag];
-      distance = ticket_distance(tag.ticket, rd_rr);
-      if (rows[i].valid && !rows[i].claimed && tag.source_done &&
-          (!rd_found || distance < best ||
-           (distance == best && rows[i].ordinal < best_ordinal))) begin
-        rd_found = 1;
-        pick_rd = 4'(i);
-        best = distance;
-        best_ordinal = rows[i].ordinal;
+      distance = ticket_distance(tag.ticket, rd_store_rr);
+      if (rows[i].valid && !rows[i].claimed && tag.source_done) begin
+        if (owner_view[tag.ticket].store) begin
+          if (!store_found || distance < best ||
+              (distance == best && rows[i].ordinal < best_ordinal)) begin
+            store_found = 1;
+            store_slot = 4'(i);
+            best = distance;
+            best_ordinal = rows[i].ordinal;
+          end
+        end else begin
+          // Descending scan retains the lowest ready slot in each range.
+          load_found = 1;
+          first_load = 4'(i);
+          if (4'(i) >= rd_load_rr) begin
+            load_after_cursor = 1;
+            next_load = 4'(i);
+          end
+        end
       end
     end
+    rd_found = load_found || store_found;
+    pick_store = store_found && (!load_found || rd_store_turn);
+    pick_rd = pick_store ? store_slot : (load_after_cursor ? next_load : first_load);
     for (int g = 0; g < 8; g++) begin
       read_enable[g] = rst_n && !halt_i && !fault && rd_valid && q_space && !rows[rd_slot].zero;
       read_addr[g] = rd_slot;
@@ -317,7 +339,9 @@ module blackwell_tma_data_path
       out_valid <= 0;
       fault <= 0;
       read_held <= 0;
-      rd_rr <= 0;
+      rd_load_rr <= 0;
+      rd_store_rr <= 0;
+      rd_store_turn <= 0;
       outstanding_reads <= 0;
       slot_turn <= 0;
       write_turn <= 0;
@@ -370,8 +394,11 @@ module blackwell_tma_data_path
         rd_slot <= pick_rd;
         if (rd_found) begin
           rows[pick_rd].claimed <= 1;
-          rd_rr <= tag_view[rows[pick_rd].key.tag].ticket == 17 ? 0 :
-              tag_view[rows[pick_rd].key.tag].ticket + 5'd1;
+          rd_store_turn <= !pick_store;
+          if (pick_store)
+            rd_store_rr <= tag_view[rows[pick_rd].key.tag].ticket == 17 ? 0 :
+                tag_view[rows[pick_rd].key.tag].ticket + 5'd1;
+          else rd_load_rr <= pick_rd + 4'd1;
         end
       end
       if (q_space) begin

@@ -261,7 +261,7 @@ module blackwell_tc_mma_core
     );
     overlap = command[r].a_from_tmem &&
         32'(command[r].a_ref[15:0]) < command[r].d_tmem + (32'd64 << command[r].n_code) &&
-        command[r].d_tmem < 32'(command[r].a_ref[15:0]) + (command[r].transpose_a ? 128 : 8);
+        command[r].d_tmem < 32'(command[r].a_ref[15:0]) + tmem_a_columns(command[r]);
     all_a = overlap ? (&a_ready[bank[r]]) : a_ready[bank[r]][row_cursor[r]];
     b_can_load = current_valid && !halt_i && selected[r] && installed[r] > consumed[r] && all_a &&
         scale_ready[bank[r]] && (command[r].kind < 4 || sb_view[256]) && complete_c &&
@@ -388,9 +388,15 @@ module blackwell_tc_mma_core
     for (genvar b = 0; b < 2; b++)
       assign at_ret[b][l] = tm_rd_rsp_valid[l] && tm_rd_rsp_payload[l].tag.token[15:13] != 2 &&
           context_active[b] && command[context_rec[b]].id == tm_rd_rsp_payload[l].tag.id;
-    assign tm_pick[l] = tm_hold[l] ?
-        tm_source[l] : ((l / 32 == CORE && cr_valid[R]) ?
-                        2'd2 : (at_valid[oldest_bank][l] ? 2'(oldest_bank) : 2'(!oldest_bank)));
+    logic [1:0] scale_req;
+    for (genvar b = 0; b < 2; b++)
+      assign scale_req[b] = at_valid[b][l] && at_req[b][l].tag.token[15:13] == 3'd3;
+    always_comb begin
+      if (tm_hold[l]) tm_pick[l] = tm_source[l];
+      else if (l / 32 == CORE && cr_valid[R]) tm_pick[l] = 2'd2;
+      else if (scale_req[0] != scale_req[1]) tm_pick[l] = 2'(scale_req[1]);
+      else tm_pick[l] = at_valid[oldest_bank][l] ? 2'(oldest_bank) : 2'(!oldest_bank);
+    end
     assign tm_rd_req_valid[l] = tm_pick[l] == 2 ? cr_valid[R] : at_valid[tm_pick[l][0]][l];
     assign tm_rd_req_payload[l] = tm_pick[l] == 2 ? cr_req[R] : at_req[tm_pick[l][0]][l];
     assign tm_rd_rsp_ready[l] = (!at_ret[0][l] || at_accept[0][l]) &&

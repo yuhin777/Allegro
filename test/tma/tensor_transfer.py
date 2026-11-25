@@ -51,6 +51,7 @@ class Fabric:
         self.hold_reads = False
         self.held_reads = []
         self.read_cycles = []
+        self.load_write_addresses = None
 
     def val(self, name):
         return int(getattr(self.d, name).value)
@@ -65,6 +66,8 @@ class Fabric:
         await Timer(1, units="ns")
         ready = self.val(probe) if probe else 0
         if self.val("rst_n"):
+            if self.load_write_addresses is not None and self.val("t_req_v") & self.val("t_req_r") & 1:
+                self.load_write_addresses.append((int(d.t_req[0].value) >> 144) & 0xffffffff)
             if not allow_fault:
                 assert not self.val("fault"), self.cycle
             if self.pending and self.val("gmem_rsp_ready"):
@@ -161,8 +164,8 @@ class Fabric:
                 pass
         self.d.smem_wr_valid.value = 0
 
-    async def bar(self, op, count=0, nbytes=0, hint=0, addr=0x1000):
-        key = self.id()
+    async def bar(self, op, count=0, nbytes=0, hint=0, addr=0x1000, issuer=0):
+        key = self.id() | (issuer << 32)
         await self.send("bar_cmd", packed((58, key), (4, op), (32, addr), (32, count), (32, nbytes),
                                          (1, 0), (1, 0), (32, hint)))
         return key
@@ -187,6 +190,30 @@ class Fabric:
         while key not in self.results:
             await self.edge()
         return self.results.pop(key)
+
+
+@cocotb.test()
+async def init_fence_progresses_while_other_issuer_holds_init_result(dut):
+    f = Fabric(dut)
+    await f.reset()
+    dut.bar_rsp_ready.value = 0
+    init = await f.bar(0, count=1, addr=0)
+    while not f.val("bar_rsp_valid"):
+        await f.edge()
+    held = f.val("bar_rsp_payload")
+    assert held >> 5 == init
+
+    fence = await f.bar(5, addr=0, issuer=1)
+    for _ in range(16):
+        assert f.val("bar_rsp_valid") and f.val("bar_rsp_payload") == held
+        if await f.edge("order_req_valid") & 2:
+            break
+    else:
+        raise AssertionError("FENCE_INIT waited for another issuer to retire INIT at address 0")
+    assert list(f.order[1]) == [fence << 4]
+    dut.bar_rsp_ready.value = 1
+    await f.result(init)
+    await f.result(fence)
 
 
 @cocotb.test()
@@ -304,6 +331,7 @@ async def sixty_four_outstanding_and_sixteen_return_rows(dut):
     assert f.read_cycles == list(range(f.read_cycles[0], f.read_cycles[0] + 64))
     # The head blocked behind a full write ACK FIFO occupies R_OUT, so
     # no row can be reused until the LSU releases its outstanding ACKs.
+    f.load_write_addresses = []
     f.pending.extend(reversed(f.held_reads))
     for _ in range(30):
         await f.edge()
@@ -311,6 +339,8 @@ async def sixty_four_outstanding_and_sixteen_return_rows(dut):
     assert load not in f.results
     dut.smem_wr_ack_ready.value = 255
     assert await f.result(load) == 8192
+    # The first 16 returned sectors occupy slots 0 through 15 and precede all refills.
+    assert f.load_write_addresses[:16] == [0x2000 + 128 * i for i in range(63, 47, -1)]
     assert await f.result(await f.bar(4)) == 1
     await f.check_smem({0x2000 + i: f.mem[0x4000 + i] for i in range(8192)})
 

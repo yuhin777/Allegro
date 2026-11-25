@@ -140,11 +140,14 @@ module blackwell_mbarrier_frontend
         end
       end
       eligible[i] = sw[i] inside {S_NEW, S_SERVICE};
-      for (int j = 0; j < 8; j++)
-      if (older[i][j] && sw[j] != S_FREE) begin
-        if (cmd[i].id.issuer == cmd[j].id.issuer && sw[j] != S_RESULT) eligible[i] = 0;
-        if (cmd[i].addr == cmd[j].addr && (lifecycle_op(cmd[i].op) || lifecycle_op(cmd[j].op)))
-          eligible[i] = 0;
+      for (int j = 0; j < 8; j++) begin
+        logic same_object;
+        same_object = cmd[i].op != BAR_FENCE_INIT && cmd[j].op != BAR_FENCE_INIT &&
+            cmd[i].addr == cmd[j].addr;
+        if (older[i][j] && sw[j] != S_FREE) begin
+          if (cmd[i].id.issuer == cmd[j].id.issuer && sw[j] != S_RESULT) eligible[i] = 0;
+          if (same_object && (lifecycle_op(cmd[i].op) || lifecycle_op(cmd[j].op))) eligible[i] = 0;
+        end
       end
       lifecycle[i] = eligible[i] && lifecycle_op(cmd[i].op);
     end

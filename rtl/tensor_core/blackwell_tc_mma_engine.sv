@@ -124,14 +124,6 @@ module blackwell_tc_mma_engine
       default: return 32;
     endcase
   endfunction
-  function automatic int tmem_a_width(mma_cmd_t c);
-    case (c.kind)
-      0: return 16;
-      1: return 32;
-      5, 6: return 4;
-      default: return 8;
-    endcase
-  endfunction
   function automatic logic [89:0] key(mma_cmd_t c);
     return {c.id.epoch, c.b_desc, c.b_type, c.kind, c.transpose_b, c.n_code};
   endfunction
@@ -211,7 +203,7 @@ module blackwell_tc_mma_engine
     end
     if (c.d_tmem > 512 - n || !desc_ok(c, 1)) return 0;
     if (c.a_from_tmem) begin
-      acols = ((c.transpose_a ? 128 : k_size(c.kind)) * tmem_a_width(c) + 31) / 32;
+      acols = tmem_a_columns(c);
       lanes = c.transpose_a ? k_size(c.kind) : 128;
       if (c.a_ref[63:32] != 0 || int'(c.a_ref[31:16]) > 128 - lanes ||
           int'(c.a_ref[15:0]) > 512 - acols)
@@ -236,7 +228,7 @@ module blackwell_tc_mma_engine
         old = rec_q[order_q[b]].cmd;
         old_w = 64 << old.n_code;
         old_base = int'(old.d_tmem);
-        awidth = ((young.transpose_a ? 128 : k_size(young.kind)) * tmem_a_width(young) + 31) / 32;
+        awidth = tmem_a_columns(young);
         writes_clear = 1;
         for (int c = 0; c < 4; c++)
         writes_clear &= writes_done[c][order_q[b]] || rec_q[order_q[b]].finished[c];

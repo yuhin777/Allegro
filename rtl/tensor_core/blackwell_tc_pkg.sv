@@ -67,6 +67,18 @@ package blackwell_tc_pkg;
       default: return 8;
     endcase
   endfunction
+  function automatic int tmem_a_element_bits(logic [2:0] kind);
+    case (kind)
+      0: return 16;
+      1: return 32;
+      5, 6: return 4;
+      default: return 8;
+    endcase
+  endfunction
+  function automatic int unsigned tmem_a_columns(mma_cmd_t cmd);
+    // Each logical row occupies 256 bits. A transposed lane holds 128 elements.
+    return cmd.transpose_a ? 4 * tmem_a_element_bits(cmd.kind) : 8;
+  endfunction
   // Absolute-address XOR includes the phase of the submatrix start.
   function automatic logic [63:0] matrix_byte(logic [63:0] desc, logic transpose,
                                               int unsigned row_coord, k_coord);

@@ -76,7 +76,7 @@ module blackwell_tc_a_context
       // A nontransposed half row spans at most two adjacent bank words.
       // Transposition maps consecutive elements to consecutive lanes,
       // each touching exactly one word at the same column.
-      width_bits = cmd.kind >= 5 ? 4 : cmd.a_type == 2 ? 32 : cmd.a_type <= 1 ? 16 : 8;
+      width_bits = tmem_a_element_bits(cmd.kind);
       need[p] = sm_need;
       addresses[p] = sm_addr;
       masks[p] = sm_mask;
