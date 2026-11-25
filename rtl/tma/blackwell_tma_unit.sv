@@ -468,7 +468,8 @@ module blackwell_tma_unit
           older[i][new_ticket] <= 0;
           if (i < 18 && state[i] != FREE && id[i].issuer == cmd_payload.id.issuer &&
               op[i] inside {LOAD_TENSOR, STORE_TENSOR}) begin
-            if (cmd_payload.opcode == COMMIT_GROUP && age[i] != 2) age[i] <= age[i] + 2'd1;
+            if (reject_status == OK && cmd_payload.opcode == COMMIT_GROUP && age[i] != 2)
+              age[i] <= age[i] + 2'd1;
             if (age[i] > 2'(cmd_payload.wait_n) && !source_done[i] &&
                 !(progress_valid && progress_payload.boundary == 1 &&
                   progress_payload.ticket == 5'(i)))
@@ -479,7 +480,8 @@ module blackwell_tma_unit
             cmd_payload.opcode == WAIT_GROUP_READ ? (pending_set == 0 ? RESULT : GROUP_WAIT) :
             QUEUED;
         id[new_ticket] <= cmd_payload.id;
-        op[new_ticket] <= cmd_payload.opcode;
+        // A rejected command owns a response ticket but creates no data or group obligations.
+        op[new_ticket] <= reject_status == OK ? cmd_payload.opcode : REJECT;
         status[new_ticket] <= reject_status;
         total[new_ticket] <= 0;
         bound[new_ticket] <= 0;

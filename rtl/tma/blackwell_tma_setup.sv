@@ -27,15 +27,21 @@ module blackwell_tma_setup
   output logic drained,
   output logic fault
 );
-  typedef enum logic [1:0] {
+  typedef enum logic [2:0] {
     DECODE,
     CALC,
+    CLIP_STORE,
     CHECK,
     PUBLISH
   } build_t;
   build_t stage[2];
   logic [1:0] map_legal, mult_busy;
   logic [3:0] product_step[2];
+  logic [1:0] clipped_store;
+  logic [3:0][7:0] last_local[2];
+  logic [1:0] clip_dim[2];
+  logic [25:0] last_sector[2];  // Up to 4 panels of 256^3 rows.
+  localparam logic [3:0] ClipSectorProduct = 4'd10;
   logic [5:0] launched[2], completed[2];
   logic [2:0][32:0] lows[2], highs[2];
   logic [63:0] rows[2], elements[2];
@@ -100,6 +106,13 @@ module blackwell_tma_setup
         publication = 1;
         publication_slot = s;
       end
+      if (!found && slot_state[s] == BUILD && stage[s] == CLIP_STORE && !mult_busy[s]) begin
+        found = 1;
+        chosen = s;
+        task_id = ClipSectorProduct;
+        mul_a = 64'(last_sector[s]);
+        mul_b = 40'(ctx[s].map.box[clip_dim[s]]);
+      end
       if (!found && slot_state[s] == BUILD && stage[s] == CALC) begin
         if (!mult_busy[s] && product_step[s] < 4) begin
           found = 1;
@@ -159,9 +172,10 @@ module blackwell_tma_setup
         if (stage[i] == DECODE) begin
           if (ctx[i].cmd.opcode == LOAD_LINEAR) stage[i] <= CHECK;
           else begin
-            logic empty_tile;
+            logic empty_tile, clipped;
             logic [75:0] addr_lo, addr_hi;
             empty_tile = 0;
+            clipped = 0;
             addr_lo = 76'(ctx[i].map.base_addr);
             addr_hi = addr_lo + 1;
             for (int d = 0; d < 4; d++) begin
@@ -170,7 +184,11 @@ module blackwell_tma_setup
               last = first + 35'({1'b0, ctx[i].map.box[d]}) - 1;
               high_limit = $signed({2'b0, ctx[i].map.dim[d]}) - 1;
               if (first < 0) first = 0;
-              if (last > high_limit) last = high_limit;
+              if (last > high_limit) begin
+                clipped = 1;
+                last = high_limit;
+              end
+              last_local[i][d] <= 8'(last - first);
               if (first > last) empty_tile = 1;
               if (d == 0) begin
                 addr_lo += 76'(first[32:0]) << 1;
@@ -181,6 +199,7 @@ module blackwell_tma_setup
               end
               if (ctx[i].cmd.opcode == STORE_TENSOR && $signed(ctx[i].cmd.coord[d]) < 0) fault <= 1;
             end
+            clipped_store[i] <= ctx[i].cmd.opcode == STORE_TENSOR && clipped && !empty_tile;
             low_addr[i] <= addr_lo;
             high_addr[i] <= addr_hi;
             span[i].gmem_empty <= empty_tile;
@@ -192,7 +211,14 @@ module blackwell_tma_setup
             stage[i] <= CALC;
           end
         end
-        if (stage[i] == CALC && product_step[i] == 4 && (&completed[i])) stage[i] <= CHECK;
+        if (stage[i] == CALC && product_step[i] == 4 && (&completed[i])) begin
+          if (clipped_store[i]) begin
+            // Linearize the last accessed (panel, z, y, x-row) using full box pitches.
+            last_sector[i] <= 26'(last_local[i][0][7:6]);
+            clip_dim[i] <= 3;
+            stage[i] <= CLIP_STORE;
+          end else stage[i] <= CHECK;
+        end
         if (stage[i] == CHECK) begin
           logic [64:0] glast, slast;
           logic [63:0] total, inner, final_panel, final_within;
@@ -207,6 +233,9 @@ module blackwell_tma_setup
           slast = 65'(ctx[i].cmd.smem_addr) +
               (linear ? 65'(total) -
                1 : ((65'(final_panel) * 65'(rows[i]) + 65'(rows[i]) - 1) << 7) + 65'(final_within));
+          if (!linear && clipped_store[i])
+            slast = 65'(ctx[i].cmd.smem_addr) + (65'(last_sector[i]) << 7) +
+                65'({last_local[i][0][5:0], 1'b1});
           glast = 65'(ctx[i].cmd.global_addr) + 65'(total) - 1;
           valid_geometry = ctx[i].cmd.smem_addr[3:0] == 0 && (empty_s || slast < 233472);
           if (linear)
@@ -236,7 +265,7 @@ module blackwell_tma_setup
       };
       if (found) begin
         compute_rr <= !chosen;
-        if (task_id < 4) mult_busy[chosen] <= 1;
+        if (task_id < 4 || task_id == ClipSectorProduct) mult_busy[chosen] <= 1;
         else launched[chosen][3'(task_id-4'd4)] <= 1;
       end
       if (pipe[3].valid) begin
@@ -244,7 +273,12 @@ module blackwell_tma_setup
         logic [3:0] n;
         s = pipe[3].slot;
         n = pipe[3].task_id;
-        if (n < 4) begin
+        if (n == ClipSectorProduct) begin
+          last_sector[s] <= pipe[3].value[25:0] + 26'(last_local[s][clip_dim[s]]);
+          mult_busy[s] <= 0;
+          if (clip_dim[s] == 1) stage[s] <= CHECK;
+          else clip_dim[s] <= clip_dim[s] - 1'b1;
+        end else if (n < 4) begin
           if (n == 3) elements[s] <= pipe[3].value[63:0];
           else rows[s] <= pipe[3].value[63:0];
           mult_busy[s] <= 0;

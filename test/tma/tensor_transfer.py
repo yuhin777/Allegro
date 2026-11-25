@@ -41,6 +41,7 @@ class Fabric:
         self.pending = deque()
         self.order = [deque() for _ in range(3)]
         self.results = {}
+        self.expected_tma_status = {}
         self.cycle = 0
         self.seq = 0
         self.map_reads = []
@@ -106,7 +107,8 @@ class Fabric:
             for channel, suffix in [("tma_rsp", 68), ("bar_rsp", 5)]:
                 if self.val(channel + "_valid") and self.val(channel + "_ready"):
                     p = self.val(channel + "_payload")
-                    assert not (p >> (suffix - 4)) & 15
+                    expected = self.expected_tma_status.pop(p >> suffix, 0) if channel == "tma_rsp" else 0
+                    assert ((p >> (suffix - 4)) & 15) == expected
                     assert p >> suffix not in self.results
                     self.results[p >> suffix] = p & ((1 << suffix) - 1)
         d.clk.value = 1
@@ -133,10 +135,11 @@ class Fabric:
         self.seq += 1
         return (1 << 42) | self.seq
 
-    async def tma(self, opcode, map_addr=0, coord=(0, 0, 0, 0)):
+    async def tma(self, opcode, map_addr=0, coord=(0, 0, 0, 0), smem=0xf0, expected_status=0):
         key = self.id()
+        self.expected_tma_status[key] = expected_status
         coords = sum((c & 0xffffffff) << (i * 32) for i, c in enumerate(coord))
-        await self.send("tma_cmd", packed((58, key), (3, opcode), (64, map_addr), (32, 0xf0),
+        await self.send("tma_cmd", packed((58, key), (3, opcode), (64, map_addr), (32, smem),
                                          (64, 0), (32, 0), (32, 0x1000), (128, coords), (64, 0), (1, 0)))
         return key
 
@@ -398,3 +401,72 @@ async def stale_bound_producer_cannot_flip_phase(dut):
     while not f.val("fault"):
         await f.edge(allow_fault=True)
     assert load not in f.results
+
+
+@cocotb.test()
+async def clipped_stores_at_end_of_smem(dut):
+    f = Fabric(dut)
+    await f.reset()
+    limit, src, dst = 228 * 1024, 0x1000, 0x4000
+    cases = [
+        # Only the first 128-byte row exists in the destination tensor.
+        ((64, 2, 1, 1), (64, 1, 1, 1), (0, 0, 0, 0)),
+        # Clip every dimension. Panel and row pitches still use the original box.
+        ((144, 3, 3, 3), (77, 3, 3, 3), (5, 1, 1, 1)),
+    ]
+    await f.result(await f.bar(0, 1))
+    for i, (box, dim, origin) in enumerate(cases):
+        strides = (160, 512, 1536)
+        image = descriptor(dst, dim, strides)
+        pack_into("<5H", image, 72, *box, 0)
+        f.mem[128*i:128*(i+1)] = image
+        offsets = {}
+        for w in range(dim[3] - origin[3]):
+            for z in range(dim[2] - origin[2]):
+                for y in range(dim[1] - origin[1]):
+                    row = y + box[1] * (z + box[2]*w)
+                    for x in range(dim[0] - origin[0]):
+                        g = dst + 2*(x+origin[0]) + sum(a*b for a, b in
+                            zip((y+origin[1], z+origin[2], w+origin[3]), strides))
+                        for byte in range(2):
+                            panel, within = divmod(2*x + byte, 128)
+                            offsets[g+byte] = 128*(panel*box[1]*box[2]*box[3] + row) + within
+        size = (max(offsets.values()) // 128 + 1)*128
+        base = limit - size
+        f.mem[src:src+size] = bytes((j*13 + j//128) % 256 for j in range(size))
+        await f.result(await f.bar(3, nbytes=size))
+        await f.result(await f.linear(src, base, size))
+        expected = f.mem.copy()
+        for address, offset in offsets.items():
+            logical = base + offset
+            physical = logical ^ (((logical >> 7) & 7) << 4)
+            expected[address] = f.mem[src + physical - base]
+        store = await f.tma(1, 128*i, origin, smem=base)
+        assert await f.result(store) == 2*box[0]*box[1]*box[2]*box[3]
+        assert f.mem == expected
+
+    # Now put the last real sector outside SMEM. The same partial store must fault.
+    await f.tma(1, 0, smem=limit)
+    for _ in range(150):
+        await f.edge(allow_fault=True)
+        if f.val("fault"):
+            break
+    assert f.val("fault")
+
+
+@cocotb.test()
+async def rejected_store_does_not_join_committed_group(dut):
+    f = Fabric(dut)
+    await f.reset()
+    dut.tma_rsp_ready.value = 0
+    reserved = [await f.tma(3), await f.tma(3)]
+    bad = await f.tma(1, map_addr=1, expected_status=2)
+    commit = await f.tma(3)
+    wait = await f.tma(4)
+    dut.tma_rsp_ready.value = 1
+    for _ in range(128):
+        await f.edge()
+        if wait in f.results and all(k in f.results for k in [*reserved, bad, commit]):
+            break
+    assert f.results == {**dict.fromkeys([*reserved, commit, wait], 0), bad: 2 << 64}
+    assert not f.map_reads and not f.read_cycles
