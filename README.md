@@ -8,15 +8,3 @@ Allegro models a single-CTA asynchronous subsystem for SM100a. It includes the T
 - The [Cross-MMA pipeline design record](doc/proposals/mma_inter_instruction_pipeline.md) preserves the actual descriptors, instruction sequences, address formulas, and cycle-by-cycle derivations for both FA4 kernels.
 
 The implementation starts at the [RTL top level](rtl/top/blackwell_async_subsystem_top.sv). Acceptance covers the results and synchronization order of the three target kernels and the specified handshake edges under the stated service conditions. Total kernel cycles are recorded for observation.
-
-## Building and verifying the RTL
-
-[rtl/files.f](rtl/files.f) lists the SystemVerilog packages and implementation sources in compilation order. Compile from the repository root with `blackwell_async_subsystem_top` as the top module. The external interface accepts normalized commands and uses independent ready/valid channels for GMEM, ordering, RF and the eight LSU atom ports.
-
-Run the regressions on the RTX 5080 verification host. [test/run.sh](test/run.sh) accepts `lint`, `unit`, `workloads`, or `all`. The unit and workload suites use Verilator, a C++ compiler, Python and cocotb. The workload reference models also use NumPy. It drives the same top-level ports for linear bulk copies, independent issuer commits under a delayed or failing write acknowledgment, eight consecutive FP16 accumulations, a native FP4 MMA with independent TMEM scale operands, and the FA4 kernels. The FA4 timing fixture measures every core with operands published before the measured window. FA4 defaults to all distinct CTA row schedules at the last batch and head of each case, with uniform and coordinate-dependent inputs. Use `FA4_BATCH=all FA4_HEAD=all` for every grid coordinate. The [synthesis check](test/synth/check.sh) elaborates the complete top with Slang and synthesizes the base SRAM, FIFO, integer dot and TC completion logic with Yosys in the ORFS image.
-
-[test/dot/run.sh](test/dot/run.sh) runs the v1 shared-array checks and an experimental independent-array comparison. The v1 acceptance criteria apply to the shared array. See the [module verification guide](test/README.md) for numerical references, directed checks and FA4 measurement conditions.
-
-## SystemVerilog formatting
-
-Follow the [lowRISC Verilog Coding Style Guide](https://github.com/lowRISC/style-guides/blob/master/VerilogCodingStyle.md). Use two spaces per indentation level and four for wrapped expressions. Aim for 100 columns. Give each module port its own direction, type and line. Keep the valid, ready and payload signals of each channel together. Put one named instance connection or procedural statement on each line.
