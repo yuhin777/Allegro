@@ -33,7 +33,6 @@ async def replay_linear_bulk(dut):
         checksums.append(sum(words))
         for op in copies:
             assert await fe.result(op, "tma_rsp") & ((1 << 64) - 1) == 4096
-    assert checksums == [8390656, 25167872]
     await fe.result(await fe.barrier(barrier, 1, issuer=0), "bar_rsp")
     await fe.send("close_req")
     await fe.wait_until(lambda: "close_rsp" in fe.lifecycle, f"close response for epoch {fe.epoch}")

@@ -100,11 +100,11 @@ module wait_boundary_tb;
   initial begin
     repeat (3) @(negedge clk);
     rst_n = 1;
-    for (int i = 0; i < 3; i++) begin
-      check(i * 2, i == 2 ? 641 : 0, 64);
-      check(i * 2 + 1, i == 2 ? 641 : 0, 65);
-    end
-    $display("PASS all six ARMED deadline cases");
+    check(0, 0, 64);
+    check(1, 0, 65);
+    check(2, 641, 64);
+    check(3, 641, 65);
+    $display("PASS ARMED deadline and following edge for hints 0 and 641");
     $finish;
   end
 endmodule

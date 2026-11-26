@@ -45,6 +45,7 @@ class Fabric:
         self.expected_tma_status = {}
         self.cycle = 0
         self.seq = 0
+        self.gmem_requests = 0
         self.map_reads = []
         self.store_acks = []
         self.hold_store_acks = False
@@ -73,6 +74,7 @@ class Fabric:
             if self.pending and self.val("gmem_rsp_ready"):
                 self.pending.popleft()
             if self.val("gmem_req_valid") and self.val("gmem_req_ready"):
+                self.gmem_requests += 1
                 p = self.val("gmem_req_payload") >> 64
                 mask = p & ((1 << 128) - 1)
                 data = (p >> 128) & ((1 << 1024) - 1)
@@ -649,13 +651,22 @@ async def rejected_store_does_not_join_committed_group(dut):
     await f.reset()
     dut.tma_rsp_ready.value = 0
     reserved = [await f.tma(3), await f.tma(3)]
+    requests_before_store = f.gmem_requests
     bad = await f.tma(1, map_addr=1, expected_status=2)
     commit = await f.tma(3)
     wait = await f.tma(4)
+    expected = {**dict.fromkeys([*reserved, commit, wait], 0), bad: 2 << 64}
     dut.tma_rsp_ready.value = 1
     for _ in range(128):
         await f.edge()
-        if wait in f.results and all(k in f.results for k in [*reserved, bad, commit]):
+        assert f.gmem_requests == requests_before_store, (
+            f"rejected store issued {f.gmem_requests - requests_before_store} GMEM request(s)"
+        )
+        if expected.keys() <= f.results.keys() and f.val("drained"):
             break
-    assert f.results == {**dict.fromkeys([*reserved, commit, wait], 0), bad: 2 << 64}
-    assert not f.map_reads and not f.read_cycles
+    else:
+        raise TimeoutError(
+            f"rejected store after 128 cycles: missing responses={sorted(expected.keys() - f.results.keys())}, "
+            f"drained={f.val('drained')}, GMEM requests={f.gmem_requests - requests_before_store}"
+        )
+    assert f.results == expected
