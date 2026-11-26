@@ -193,6 +193,42 @@ class Fabric:
 
 
 @cocotb.test()
+async def proxy_fence_waits_only_for_its_issuer(dut):
+    f = Fabric(dut)
+    await f.reset()
+    f.mem[:128] = descriptor(0x4000, (8, 1, 1, 1), (16, 16, 16), box=(8, 1, 1, 1))
+    f.hold_store_acks = True
+    store = await f.tma(1, smem=0)
+    while not f.store_acks:
+        await f.edge()
+
+    async def fence(issuer):
+        key = f.id() | (issuer << 32)
+        await f.send("tma_cmd", packed((58, key), (3, 5), (64, 0), (32, 0), (64, 0),
+                                       (32, 0), (32, 0), (128, 0), (64, 0), (1, 0)))
+        return key
+
+    other = await fence(1)
+    for _ in range(16):
+        if await f.edge("order_req_valid") & 1:
+            break
+    else:
+        raise AssertionError("unrelated store ACK blocked proxy fence")
+    assert list(f.order[0]) == [other << 4]
+    await f.result(other)
+
+    same = await fence(0)
+    for _ in range(16):
+        assert not (await f.edge("order_req_valid") & 1)
+    f.pending.extend(f.store_acks)
+    while not (await f.edge("order_req_valid") & 1):
+        pass
+    assert list(f.order[0]) == [same << 4]
+    assert await f.result(same) == 0
+    assert await f.result(store) == 16
+
+
+@cocotb.test()
 async def init_fence_progresses_while_other_issuer_holds_init_result(dut):
     f = Fabric(dut)
     await f.reset()

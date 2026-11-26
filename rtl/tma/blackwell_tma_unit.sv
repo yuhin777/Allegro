@@ -373,7 +373,7 @@ module blackwell_tma_unit
         if (!new_store && !spans[i].smem_empty && spans[i].smem_low <= new_object &&
             new_object <= spans[i].smem_high && (old_store ? !old_src : !old_target))
           deps_clear = 0;
-        if (!old_target) fence_clear = 0;
+        if (id[i].issuer == out_payload.cmd.id.issuer && !old_target) fence_clear = 0;
       end
     end
   end
