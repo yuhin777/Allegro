@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
 }
 CPP
 verilator_root=$(verilator -V | sed -n 's/^ *VERILATOR_ROOT *= *//p' | head -1)
+jobs=${JOBS:-4}
 for shared in 1 0; do
     echo "SHARE_FP_DOT_ADDER_TREE=$shared"
     verilator --xml-only --xml-output "array-$shared.xml" --top-module blackwell_tc_dot_array \
@@ -49,8 +50,12 @@ for shared in 1 0; do
     python3 "$project/test/dot/check_topology.py" "array-$shared.xml" "$shared"
     mode_flags=()
     if [[ $shared == 0 ]]; then mode_flags+=(+define+TEST_INDEPENDENT_FP_TREES); fi
-    verilator --hierarchical --cc --timing --assert --build "${mode_flags[@]}" --Mdir "model-$shared" -j "${JOBS:-4}" \
+    # Verilator 5.020 gives each child wrapper and makefile independent make
+    # targets with the same recipe. Finish generation before building libraries
+    # so parallel targets cannot rewrite files a compiler submake is reading.
+    verilator --hierarchical --cc --timing --assert "${mode_flags[@]}" --Mdir "model-$shared" -j "$jobs" \
         --top-module array_tb "$project/test/dot/hierarchy.vlt" "${sources[@]}" "$project/test/dot/array_tb.sv"
+    make -C "model-$shared" -f Varray_tb_hier.mk -j "$jobs" hier_build
     "${CXX:-c++}" -std=c++17 -pthread -I "model-$shared" -I "${VERILATOR_ROOT:-$verilator_root}/include" -I "${VERILATOR_ROOT:-$verilator_root}/include/vltstd" \
         driver.cpp -Wl,--start-group "model-$shared/libVarray_tb.a" "model-$shared/libverilated.a" -Wl,--end-group -o dot-test
     ./dot-test
