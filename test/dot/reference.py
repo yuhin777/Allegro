@@ -1,4 +1,5 @@
 """Generate deterministic dot transactions and exact integer reference results."""
+import argparse
 import itertools
 import random
 from dataclasses import dataclass
@@ -163,7 +164,7 @@ class Vector:
         print(*(int(v) for v in control), *(f'{v:x}' for v in [self.a,self.b,self.c,self.sa,self.sb,self.value()]))
 
 
-def vectors():
+def numerical_vectors():
     # Alternating pipeline lengths and independent factors/operand signs.
     yield Vector(2, 7, 7, 0x3, 0x2)
     yield Vector(3, 9, 9, asym=True)
@@ -263,20 +264,35 @@ def vectors():
         lanes = int('3fff' * 16, 16)
         yield Vector(0, 0, 0, lanes, lanes, c=0xbfffffff if negative else 0x3fffffff, na=negative)
 
-    # The bench drains before this 96-request window, then requires one issue per clock.
+
+def throughput_vectors():
+    # The bench drains before this window, then requires one issue per clock.
     for i in range(96):
         if (i < 48 and i % 2 == 0) or (i >= 48 and i % 12 == 0):
             yield Vector(2, 3, 4, a=0x38, b=0x3c, c=0x3f800000)
         else:
             yield Vector(0, 0, 1, a=0x3c00, b=0x3f80, c=0xbf800000)
 
-    # The testbench issues these last four separately to measure exact latency.
+
+def latency_vectors():
+    # Issue one isolated transaction from each arithmetic family.
     yield Vector(3, 8, 9, 0x1ff, 0x302, 4)
     yield Vector(0, 0, 1, 0x3c00, 0x3f80)
     yield Vector(4, 7, 6, 0x13, 0x22, sa=127, sb=127)
     yield Vector(6, 7, 7, 0x37, 0x55, sa=0x38383838, sb=0x38383838, ue4=True)
 
 
+def vectors():
+    yield from numerical_vectors()
+    yield from throughput_vectors()
+    yield from latency_vectors()
+
+
 if __name__ == '__main__':
-    for vector in vectors():
+    phases = {'all': vectors, 'numerical': numerical_vectors,
+              'throughput': throughput_vectors, 'latency': latency_vectors}
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--phase', choices=phases, default='all')
+    args = parser.parse_args()
+    for vector in phases[args.phase]():
         vector.emit()

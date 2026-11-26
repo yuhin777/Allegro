@@ -6,12 +6,14 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 # External golden transactions use the raw-bit layout of reference.py. Supply
 # MMA-Sim accumulation cases with matching decode, zero-term and packing rules.
-# Keep the directed throughput and isolated latency windows at the end.
 if [[ -n ${MMA_SIM_VECTORS:-} ]]; then
-    cat -- "$MMA_SIM_VECTORS" > "$work/vectors.txt"
+    cat -- "$MMA_SIM_VECTORS" > "$work/numerical.txt"
+    echo >> "$work/numerical.txt"
 fi
 cd "$work"
-python3 "$project/test/dot/reference.py" >> vectors.txt
+for phase in numerical throughput latency; do
+    python3 "$project/test/dot/reference.py" --phase "$phase" >> "$phase.txt"
+done
 mapfile -t sources < "$project/test/dot/rtl.f"
 sources=("${sources[@]/#/$project/}")
 # Debian's split install places the compiler under /usr/bin and its include

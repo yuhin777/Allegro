@@ -45,15 +45,16 @@ module array_tb;
   int accepted_at[$];
   int sent, received, cycle;
   bit [31:0] rng = 32'h8582fd35;
-  initial begin
+  typedef enum {Numerical, Throughput, Latency} phase_t;
+
+  task automatic load_vectors(input string path);
     sample_t entry;
     int fd, fields;
     int kind, ta, tb, shift, na, nb, sat, ue4, asym, ncode, ws;
     logic [255:0] raw_a, raw_b;
     logic [31:0] raw_c, sa, sb, reference;
-    logic [31:0] expected;
-    fd = $fopen("vectors.txt", "r");
-    if (fd == 0) $fatal(1, "open vectors.txt");
+    fd = $fopen(path, "r");
+    if (fd == 0) $fatal(1, "open %s", path);
     do begin
       fields = $fscanf(
           fd,
@@ -96,22 +97,21 @@ module array_tb;
         reference
       };
       if (fields == 17) samples.push_back(entry);
-      else if (fields > 0) $fatal(1, "malformed vector");
+      else if (fields > 0 || !$feof(fd)) $fatal(1, "malformed vector in %s", path);
     end while (fields == 17);
     $fclose(fd);
-    if (samples.size() == 0) $fatal(1, "empty vectors");
-    rst_n = 0;
-    operand_valid = 0;
-    result_ready = 0;
-    @(negedge clk);
-    rst_n = 1;
-    while (received < samples.size()) begin
+  endtask
+
+  task automatic run_phase(input phase_t phase, input int end_index);
+    sample_t entry;
+    logic [31:0] expected;
+    int native_latency;
+    while (received < end_index) begin
       rng = {rng[30:0], rng[31] ^ rng[21] ^ rng[1] ^ rng[0]};
-      // First three arrivals deliberately invert natural finish order.
-      result_ready = (cycle >= 12) && (rng[2] || rng[5]);
-      if (sent >= samples.size() - 100) result_ready = 1;
-      operand_valid = sent < samples.size() && (sent < samples.size() - 4 || received == sent);
-      if (sent == samples.size() - 100 && received != sent) operand_valid = 0;
+      // Block the first retirements, apply intermittent backpressure, then drain.
+      result_ready = phase != Numerical || sent == end_index ||
+                     (cycle >= 12 && (rng[2] || rng[5]));
+      operand_valid = sent < end_index && (phase != Latency || received == sent);
       cmd_i = '0;
       operand_payload = '0;
       if (operand_valid) begin
@@ -138,7 +138,7 @@ module array_tb;
         operand_payload.c[n] = entry.asymmetric ? 100 * (n / 8) + n % 8 : entry.c;
       end
       @(posedge clk);
-      if(sent>=samples.size()-100 && sent<samples.size()-4 && operand_valid && !operand_ready)
+      if (phase == Throughput && operand_valid && !operand_ready)
         $fatal(1, "mixed floating point stream lost II=1 at %0d", sent);
       if (operand_valid && operand_ready) begin
         accepted_at.push_back(cycle);
@@ -147,11 +147,10 @@ module array_tb;
       if (result_valid && result_ready) begin
         if (result_payload.tag !== 76'(received)) $fatal(1, "tag mismatch at %0d", received);
         entry = samples[received];
-        if (cycle - accepted_at[received] <
-            (entry.kind == 3 ? 3 : ((entry.kind == 2 || entry.kind == 4) ? 6 : 5)))
+        native_latency = entry.kind == 3 ? 3 : ((entry.kind == 2 || entry.kind == 4) ? 6 : 5);
+        if (cycle - accepted_at[received] < native_latency)
           $fatal(1, "premature result at %0d", received);
-        if (received >= samples.size() - 4 && cycle - accepted_at[received] !=
-            (entry.kind == 3 ? 3 : ((entry.kind == 2 || entry.kind == 4) ? 6 : 5)))
+        if (phase == Latency && cycle - accepted_at[received] != native_latency)
           $fatal(1, "incorrect unstalled native latency at %0d", received);
         for (int n = 0; n < 64; n++) begin
           expected = entry.asymmetric ? (n / 8 + 1) * (n % 8 + 9) + 100 * (n / 8) + n % 8 :
@@ -172,7 +171,29 @@ module array_tb;
       if (++cycle > samples.size() * 20 + 100) $fatal(1, "timeout");
       @(negedge clk);
     end
-    if (!empty_o || sent != received) $fatal(1, "drain failed");
+    if (!empty_o || sent != received) $fatal(1, "%s phase failed to drain", phase.name());
+  endtask
+
+  initial begin
+    int numerical_end, throughput_end, latency_end;
+    load_vectors("numerical.txt");
+    numerical_end = samples.size();
+    load_vectors("throughput.txt");
+    throughput_end = samples.size();
+    load_vectors("latency.txt");
+    latency_end = samples.size();
+    if (numerical_end == 0) $fatal(1, "empty numerical phase");
+    if (throughput_end - numerical_end != 96) $fatal(1, "expected 96 throughput requests");
+    if (latency_end - throughput_end != 4) $fatal(1, "expected 4 latency requests");
+
+    rst_n = 0;
+    operand_valid = 0;
+    result_ready = 0;
+    @(negedge clk);
+    rst_n = 1;
+    run_phase(Numerical, numerical_end);
+    run_phase(Throughput, throughput_end);
+    run_phase(Latency, latency_end);
     result_ready = 0;
     // Block retirement and fill both floating-point tails, the common/front
     // slots and the two other families before applying synchronous reset.

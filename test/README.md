@@ -12,7 +12,9 @@ Run these commands from the repository root on the RTX 5080 verification host. T
 | `test/run.sh all` | Lint, unit and workloads in sequence. |
 | `test/synth/check.sh` | Slang elaboration of the top and Yosys synthesis/check of the FIFO, SRAM, TC bridge, TC tracker and INT8 dot in the ORFS image. |
 
-Set `JOBS` to control build parallelism. Set `ALLEGRO_BUILD_DIR` to select the regression output directory. The [dot suite](dot/run.sh) also accepts `MMA_SIM_VECTORS`, a file of additional raw-bit transactions in the [reference generator's format](dot/reference.py). External finite cases must share the decode, zero-term, alignment and packing rules of the DUT. [MMA-Sim finite accumulation reference](https://github.com/yuhin777/Allegro/blob/ac5b2a4/MMA-Sim/mmasim/simulator/arithmetic.py)
+Set `JOBS` to control build parallelism. Set `ALLEGRO_BUILD_DIR` to select the regression output directory. The [dot suite](dot/run.sh) also accepts `MMA_SIM_VECTORS`, a file of additional numerical transactions in the existing 17-field [reference format](dot/reference.py). External finite cases must share the decode, zero-term, alignment and packing rules of the DUT. [MMA-Sim finite accumulation reference](https://github.com/yuhin777/Allegro/blob/ac5b2a4/MMA-Sim/mmasim/simulator/arithmetic.py)
+
+The dot array bench drains between three phases. The numerical phase compares all 64 result cells by tag under intermittent backpressure. The throughput phase keeps the sink ready and requires 96 consecutive input handshakes. The latency phase issues four isolated requests and measures each family from acceptance to result transfer. External vectors extend the numerical phase. To inspect a phase, run `python3 test/dot/reference.py --phase numerical`, `--phase throughput` or `--phase latency` from the repository root. Invoking the generator without arguments prints all three in execution order.
 
 ## Testbench architecture
 
@@ -71,7 +73,7 @@ For larger environments, OpenTitan SPI_HOST illustrates separate stimulus, monit
 
 ### SMEM, TMA and memory barriers
 
-Python case names in this table run from the [SMEM/TMA integration suite](tma/tensor_transfer.py). The setup product checker binds into that same simulation.
+The [SMEM subsystem scenarios](tma/smem_subsystem_tests.py) exercise tensor addressing, copy throughput, store groups, barrier waits and memory faults. Their [fabric driver](tma/smem_fabric_driver.py) drives the clock and ports, serves GMEM and ordering responses, and records handshakes. All cases and the bound setup product checker use the same subsystem simulation.
 
 | Specification | Executable check and pass condition | Planned checks |
 | --- | --- | --- |
