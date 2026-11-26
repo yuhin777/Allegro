@@ -25,7 +25,11 @@ module wait_boundary_tb;
   logic change_valid, addr_busy, drained, fault;
   bar_change_t change_payload;
   logic [31:0] busy_addr = 128;
-  blackwell_mbarrier_wait dut (.*);
+  blackwell_mbarrier_wait dut (
+    .ingress_id('0),
+    .ingress_id_busy(),
+    .*
+  );
   always #1 clk = !clk;
   task automatic check(input int seq_no, hint, flip_at);
     async_id_t id;

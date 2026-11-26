@@ -24,6 +24,7 @@ module blackwell_tma_data_path
   input logic [7:0] smem_rsp_valid,
   output logic [7:0] smem_req_valid,
   output logic [7:0] smem_rsp_ready,
+  output logic [7:0] smem_read_blocked,
   output smem_atom_req_t smem_req_payload[8],
   input smem_atom_rsp_t smem_rsp_payload[8],
   output logic drained,
@@ -226,13 +227,26 @@ module blackwell_tma_data_path
       read_addr[g] = rd_slot;
     end
   end
+  logic start_alloc, load_has_row;
   always_comb begin
-    logic store_return_competes, start_alloc;
     reply_bad = gmem_rsp_payload.id.cls != 0 || return_tag.state inside {TAG_FREE, RETIRE} ||
         return_tag.phase != return_key.phase || !return_tag.gmem_sent || return_tag.gmem_done ||
         gmem_rsp_payload.status != OK;
     load_reply = gmem_rsp_valid && !reply_bad && !owner_view[return_tag.ticket].store;
     read_rsp_groups = active_groups(return_tag);
+    slot_requested = start_payload.segment.store ^ start_payload.segment.oob;
+    room_for_start = free_count != 0;
+    if (start_payload.segment.store || stores_present)
+      room_for_start &= 8'(free_count) > outstanding_reads;
+    start_alloc = start_valid && slot_requested && room_for_start;
+    load_has_row = load_reply && free_count != 0;
+    // A competing SMEM read cannot write these banks when the GMEM fill wins
+    // both the payload banks and the row allocator, regardless of mux selection.
+    smem_read_blocked = load_has_row && write_turn && !(start_alloc && slot_turn) ?
+        read_rsp_groups : '0;
+  end
+  always_comb begin
+    logic store_return_competes;
     store_return_competes = 0;
     for (int g = 0; g < 8; g++) begin
       logic [15:0] token;
@@ -259,12 +273,7 @@ module blackwell_tma_data_path
       store_return_competes |= read_rsp_groups[g] && smem_rsp_valid[g] && !smem_bad[g] &&
           smem_store_return[g];
     end
-    slot_requested = start_payload.segment.store ^ start_payload.segment.oob;
-    room_for_start = free_count != 0;
-    if (start_payload.segment.store || stores_present)
-      room_for_start &= 8'(free_count) > outstanding_reads;
-    start_alloc = start_valid && slot_requested && room_for_start;
-    reply_alloc = load_reply && free_count != 0 && (!store_return_competes || write_turn);
+    reply_alloc = load_has_row && (!store_return_competes || write_turn);
     choose_start = start_alloc && (!reply_alloc || slot_turn);
     gmem_rsp_ready = rst_n && !fault && (!load_reply || (reply_alloc && !choose_start));
     load_write = load_reply && gmem_rsp_ready;

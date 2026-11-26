@@ -171,6 +171,7 @@ module blackwell_smem_subsystem
   bar_bind_t bind_req_payload;
   op_done_t bind_rsp_payload, producer_rsp_payload;
   bar_producer_done_t producer_done_payload;
+  logic [7:0] smem_read_blocked;
   blackwell_tma_unit tma (
     .clk,
     .rst_n,
@@ -212,6 +213,7 @@ module blackwell_smem_subsystem
     .smem_req_payload(t_req),
     .smem_rsp_valid(t_rsp_v),
     .smem_rsp_ready(t_rsp_r),
+    .smem_read_blocked,
     .smem_rsp_payload(t_rsp),
     .drained(local_drained[0]),
     .fault(local_fault[0])
@@ -233,6 +235,7 @@ module blackwell_smem_subsystem
       wait_addr_busy,
       change_valid;
   logic [31:0] wait_busy_addr;
+  logic wait_id_busy;
   bar_cmd_t wait_cmd_payload;
   bar_rsp_t wait_rsp_payload;
   bar_change_t change_payload;
@@ -291,6 +294,8 @@ module blackwell_smem_subsystem
     .change_valid,
     .change_payload,
     .busy_addr(wait_busy_addr),
+    .ingress_id(bar_cmd_payload.id),
+    .ingress_id_busy(wait_id_busy),
     .addr_busy(wait_addr_busy),
     .drained(local_drained[2]),
     .fault(local_fault[2])
@@ -425,7 +430,7 @@ module blackwell_smem_subsystem
         assign v = t_req_v[g];
         assign t_req_r[g] = req.write ? wr_req_ready[c][g] : rd_req_ready[c][g];
         assign select_ack[g] = lock_ack[g] ? held_ack[g] :
-            wr_ack_valid[c][g] && (!rd_rsp_valid[c][g] || prefer_ack[g]);
+            wr_ack_valid[c][g] && (!rd_rsp_valid[c][g] || prefer_ack[g] || smem_read_blocked[g]);
         assign t_rsp_v[g] = rd_rsp_valid[c][g] || wr_ack_valid[c][g];
         assign t_rsp[g] = select_ack[g] ? smem_atom_rsp_t
             '({1'b1, wr_ack_payload[c][g].tag, 128'b0, wr_ack_payload[c][g].status}) :

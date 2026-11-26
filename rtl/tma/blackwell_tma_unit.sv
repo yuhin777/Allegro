@@ -43,6 +43,7 @@ module blackwell_tma_unit
   input logic [7:0] smem_rsp_valid,
   output logic [7:0] smem_req_valid,
   output logic [7:0] smem_rsp_ready,
+  output logic [7:0] smem_read_blocked,
   output smem_atom_req_t smem_req_payload[8],
   input smem_atom_rsp_t smem_rsp_payload[8],
   output logic drained,
@@ -264,6 +265,7 @@ module blackwell_tma_unit
     .smem_req_payload,
     .smem_rsp_valid,
     .smem_rsp_ready,
+    .smem_read_blocked,
     .smem_rsp_payload,
     .drained(data_drained),
     .fault(data_fault)

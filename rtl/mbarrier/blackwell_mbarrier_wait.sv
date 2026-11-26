@@ -27,6 +27,8 @@ module blackwell_mbarrier_wait
   input order_rsp_t acquire_rsp_payload,
   input logic change_valid,
   input bar_change_t change_payload,
+  input async_id_t ingress_id,
+  output logic ingress_id_busy,
   input logic [31:0] busy_addr,
   output logic addr_busy,
   output logic drained,
@@ -55,6 +57,7 @@ module blackwell_mbarrier_wait
     acquire_any = 0;
     rsp_any = 0;
     addr_busy = 0;
+    ingress_id_busy = 0;
     drained = 1;
     free_slot = 0;
     probe_slot = 0;
@@ -85,6 +88,7 @@ module blackwell_mbarrier_wait
       if (state[i] != FREE) begin
         drained = 0;
         addr_busy |= addr[i] == busy_addr;
+        ingress_id_busy |= id[i] == ingress_id;
       end
     end
     if (probe_locked) begin

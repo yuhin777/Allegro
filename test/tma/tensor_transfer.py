@@ -3,7 +3,7 @@ from collections import deque
 from struct import pack_into
 from random import Random
 import cocotb
-from cocotb.triggers import Timer
+from cocotb.triggers import RisingEdge, Timer
 
 
 def packed(*fields):
@@ -190,6 +190,84 @@ class Fabric:
         while key not in self.results:
             await self.edge()
         return self.results.pop(key)
+
+
+@cocotb.test()
+async def ready_ack_bypasses_blocked_store_return(dut):
+    f = Fabric(dut)
+    await f.reset()
+    fresh_contentions = 0
+
+    async def check_returns():
+        nonlocal fresh_contentions
+        while True:
+            await RisingEdge(dut.clk)
+            # Client 8 has one read return and one write ACK per SMEM group.
+            both = (f.val("rd_rsp_valid") & f.val("wr_ack_valid")) >> (8 * 8)
+            fresh = both & ~f.val("lock_ack") & 0xff
+            fresh_contentions += fresh.bit_count()
+            assert not (fresh & ~f.val("t_rsp_r")), "a ready write ACK lost its group slot"
+
+    monitor = cocotb.start_soon(check_returns())
+    try:
+        f.mem[:128] = descriptor(0x8000, (64, 32, 1, 1), (128, 4096, 4096), box=(64, 32, 1, 1))
+        await f.result(await f.bar(0, 1))
+        await f.result(await f.bar(3, nbytes=1920))
+        f.hold_reads = True
+        load = await f.linear(0x4000, 0x2000, 1920)
+        store = await f.tma(1, smem=0x6000)
+        while not (f.val("t_req_v") and len(f.held_reads) == 15):
+            await f.edge()
+        await f.edge()
+        # Release the 15 load replies while the independent store reads SMEM.
+        rng = Random(1)
+        for reply in f.held_reads:
+            for _ in range(rng.randrange(5)):
+                await f.edge()
+            f.pending.append(reply)
+            await f.edge()
+        assert await f.result(store) == 4096
+        assert await f.result(load) == 1920
+        assert fresh_contentions
+    finally:
+        monitor.kill()
+
+
+async def reject_duplicate_bar_id(dut, original_op):
+    f = Fabric(dut)
+    await f.reset()
+    if original_op == 4:
+        await f.result(await f.bar(0, 1))
+    dut.bar_rsp_ready.value = 0
+    key = await f.bar(original_op)
+    while not f.val("bar_rsp_valid"):
+        await f.edge()
+    original = f.val("bar_rsp_payload")
+    assert original >> 5 == key
+
+    # The original response is still live, including after TRY hands off to wait.
+    dut.bar_cmd_payload.value = packed((58, key), (4, 5), (32, 0), (32, 0), (32, 0),
+                                       (1, 0), (1, 0), (32, 0))
+    dut.bar_cmd_valid.value = 1
+    assert not await f.edge("bar_cmd_ready")
+    dut.bar_cmd_valid.value = 0
+    await f.edge(allow_fault=True)
+    assert f.val("fault") and f.val("bar_rsp_valid")
+    assert f.val("bar_rsp_payload") == original
+    dut.bar_rsp_ready.value = 1
+    await f.edge(allow_fault=True)
+    await f.edge(allow_fault=True)
+    assert not f.val("bar_rsp_valid") and not f.val("order_req_valid")
+
+
+@cocotb.test()
+async def duplicate_fence_id_faults(dut):
+    await reject_duplicate_bar_id(dut, 5)
+
+
+@cocotb.test()
+async def duplicate_wait_id_faults_after_handoff(dut):
+    await reject_duplicate_bar_id(dut, 4)
 
 
 @cocotb.test()

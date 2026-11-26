@@ -60,6 +60,7 @@ module blackwell_mbarrier_frontend
   output logic [31:0] wait_busy_addr,
   output logic [31:0] commit_busy_addr,
   input logic wait_addr_busy,
+  input logic wait_id_busy,
   input logic commit_addr_busy,
   input logic [31:0] commit_candidate_addr,
   output logic commit_blocked
@@ -114,13 +115,14 @@ module blackwell_mbarrier_frontend
   logic [3:0] held_bind, held_done;
   logic free_sw, free_prod, have_svc, have_wait, have_order, have_result, have_bind, have_done;
   logic have_lifecycle, matches_prod, duplicate_prod, bind_blocked;
-  logic tc_busy, producer_busy;
+  logic tc_busy, producer_busy, duplicate_sw;
   function automatic logic lifecycle_op(input bar_op_t op);
     return op inside {BAR_INIT, BAR_INVAL};
   endfunction
 
   always_comb begin
     free_sw = 0;
+    duplicate_sw = wait_id_busy;
     free_s = 0;
     eligible = 0;
     lifecycle = 0;
@@ -133,6 +135,7 @@ module blackwell_mbarrier_frontend
         free_s = 3'(i);
       end
       if (sw[i] != S_FREE) begin
+        duplicate_sw |= cmd[i].id == sw_cmd_payload.id;
         drained = 0;
         if (lifecycle_op(cmd[i].op)) begin
           commit_blocked |= cmd[i].addr == commit_candidate_addr;
@@ -151,7 +154,7 @@ module blackwell_mbarrier_frontend
       end
       lifecycle[i] = eligible[i] && lifecycle_op(cmd[i].op);
     end
-    sw_cmd_ready = rst_n && !stop && !fault && free_sw;
+    sw_cmd_ready = rst_n && !stop && !fault && free_sw && !duplicate_sw;
     if (sw_cmd_valid && sw_cmd_ready && lifecycle_op(sw_cmd_payload.op)) begin
       commit_blocked |= sw_cmd_payload.addr == commit_candidate_addr;
       bind_blocked |= sw_cmd_payload.addr == bind_req_payload.addr;
@@ -372,6 +375,7 @@ module blackwell_mbarrier_frontend
       done_cursor <= 0;
       lifecycle_cursor <= 0;
     end else if (!halt_i && !fault) begin
+      if (sw_cmd_valid && !stop && duplicate_sw) fault <= 1;
       lifecycle_cursor <= lifecycle_cursor + 3'd1;
       if (sw_cmd_valid && sw_cmd_ready) begin
         status_t status;
