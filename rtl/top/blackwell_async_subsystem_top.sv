@@ -228,6 +228,8 @@ module blackwell_async_subsystem_top
     .*
   );
   blackwell_tc_async_completion bridge (
+    .stop_i(stopped),
+    .epoch_i(epoch),
     .halt_i(fault),
     .tc_bar_req_valid(tc_req_valid),
     .tc_bar_req_ready(tc_req_ready),

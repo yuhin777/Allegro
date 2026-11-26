@@ -63,6 +63,7 @@ module completion_tb;
     busy_addr = 16;
     #1;
     check(addr_busy && !ready_commit_valid);
+    stop_i = 1;  // Drain the registered commit after new commands are stopped.
     engine_done_valid = 1;
     engine_done_payload = '{id(6, 0), OK};
     tick();
@@ -86,6 +87,7 @@ module completion_tb;
     check(commit_retire_valid);
     tick();
     check(!addr_busy && op_done_valid && op_done_payload.id == id(6, 0));
+    stop_i = 0;
     op_done_ready = 1;
     engine_done_valid = 1;
     engine_done_payload = '{id(5, 0), OK};
@@ -104,6 +106,13 @@ module completion_tb;
     engine_done_payload = '{id(6, 0), OK};
     tick();
     if (!fault_o) $fatal(1, "duplicate completion accepted");
+    rst_n = 0;
+    tick();
+    rst_n = 1;
+    engine_done_valid = 0;
+    tc_bar_rsp_valid = 1;  // No request is outstanding after reset.
+    tick();
+    if (!bridge_fault || ready_commit_ready) $fatal(1, "faulted bridge admitted a commit");
     $display(
         "PASS completion snapshots, issuer isolation, bridge handshake and duplicate detection");
     $finish;
