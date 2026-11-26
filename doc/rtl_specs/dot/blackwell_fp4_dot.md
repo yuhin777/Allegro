@@ -33,15 +33,15 @@ See [low-precision input formats](blackwell_f4f6f8_dot.md#formats) for E2M1 and 
 
 ### Pipeline registers
 
-| Stage | bit/dot | payload |
-|---|---:|---|
-| S0 | 161 | special2, 4×sigma13, 4×scale product8, 4×scale exponent10, C sign1/sig24/relative_exp10 |
-| S1 | 167 | special2, 4×sign1/mag19/exp10, C sign1/sig24/exp10, emax10 |
-| S2 | 237 | special2, 4×signed47 gamma, signed37 C, base_exp10 |
-| S3 | 61 | special2, signed49 sum, base_exp10 |
-| S4 | 32 | result32 |
+| Stage | Registered payload | Bits per dot |
+|---|---|---:|
+| S0 | special2, 4×sigma13, 4×scale product8, 4×scale exponent10, C sign1/sig24/relative_exp10 | 161 |
+| S1 | special2, 4×sign1/mag19/exp10, C sign1/sig24/exp10, emax10 | 167 |
+| S2 | special2, 4×signed47 gamma, signed37 C, base_exp10 | 237 |
+| S3 | special2, signed49 sum, base_exp10 | 61 |
+| S4 | result32 | 32 |
 
-Total 658 bits/dot or 5,264 B/core, plus five valid bits/dot. S4 decodes the 2-bit finite/+Inf/−Inf/NaN result class and directly implements R_DOT. A NaN scale or NaN C selects canonical NaN. Otherwise an infinite C supplies the result and its sign.
+The pipeline stores 658 data bits and five valid bits per dot. S4 decodes the 2-bit finite/+Inf/−Inf/NaN result class and directly implements R_DOT. A NaN scale or NaN C selects canonical NaN. Otherwise an infinite C supplies the result and its sign.
 
 ### Products within groups, scaling across groups, and reduction
 
@@ -67,7 +67,12 @@ RTL: [blackwell_fp4_dot.sv](../../../rtl/dot/blackwell_fp4_dot.sv).
 
 ## Submodules
 
-| Submodule | Instances per dot | Connections and control |
+Instance counts are per dot unless specified otherwise.
+
+| Submodule | Instances | Connections and control |
 | --- | --- | --- |
-| [signed_reduce_tree](blackwell_dot_signed_reduce_tree.md) | 5 | Four carry-save trees produce the exact 16-term group sums at S0. The S3 tree sums the four aligned groups and C. |
+| [dot_signed_reduce_tree](blackwell_dot_signed_reduce_tree.md) | 5 | Four carry-save trees produce the exact 16-term group sums at S0. The S3 tree sums the four aligned groups and C. |
+| [dot_emax_tree](blackwell_dot_emax_tree.md) | 1 | Selects the maximum eligible exponent across four scaled groups and C for S1. |
+| [dot_align_fixed_rz](blackwell_dot_align_fixed_rz.md) | 5 | Aligns four group magnitudes and C before S2. |
+| [dot_fp32_pack](blackwell_dot_fp32_pack.md) | 1 | Encodes the signed49 sum or special result for S4. |
 | [pipeline_reg](../base/blackwell_pipeline_reg.md) | 5 | Connect S0…S4 at the widths in the table. Group multiply-adds, scaling, and FP32 encoding are combinational between stages. |

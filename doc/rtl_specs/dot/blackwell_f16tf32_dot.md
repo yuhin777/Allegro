@@ -38,17 +38,15 @@ The bit-exact reference uses integer significands and the truncation points spec
 
 ### Pipeline registers
 
-Each row describes the combinational work ending at that register. Each stage can accept a new transaction as its previous transaction advances. The 2-bit special-result code travels with the same transaction through S0…S3.
+| Stage | Registered payload | Bits per dot |
+|---|---|---:|
+| S0 | 16 × (sign1, sig22, exp9), four group maxima × 9, C(sign1, sig24, exp9), special2 | 584 |
+| S1 | 16 × (sign1, sig22, distance5), C(sign1, sig24, distance5), emax9, special2 | 489 |
+| S2 | Eight signed29 pair sums, signed27 C, emax9, special2 | 270 |
+| S3 | signed33 sum, emax9, special2 | 44 |
+| S4 | result32 | 32 |
 
-| Stage | Work before the register | Registered payload per dot | Bits |
-|---|---|---|---:|
-| S0 | Multiply 16 pairs of 11-bit significands. In parallel, add operand exponents and find the maximum within each consecutive group of four products (two comparison levels). Prescale C and resolve special classes. | 16 × (sign1, sig22, exp9), four group maxima × 9, C(sign1, sig24, exp9), special2 | 584 |
-| S1 | Find the maximum of the four group maxima and the C exponent. Subtract each term exponent from this global maximum and saturate the distance. | 16 × (sign1, sig22, distance5), C(sign1, sig24, distance5), emax9, special2 | 489 |
-| S2 | Align each unsigned magnitude independently, truncate toward zero, apply its sign, then add adjacent product pairs. Align and sign C in parallel. | Eight signed29 pair sums, signed27 C, emax9, special2 | 270 |
-| S3 | Sign-extend eight pair sums and C and reduce nine terms to one exact integer. | signed33 sum, emax9, special2 | 44 |
-| S4 | Normalize the sum, apply FP32 truncation, select the special result when required and capture the encoding. | result32 | 32 |
-
-Independent native pipeline data storage is 1,419 bits/dot or 11,352 B for 64 dots. The array shares stage control across its 64 cells. See [array storage](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) for the output collision buffer and configuration totals. The array keeps a stage-matched microtile tag chain shared by all 64 leaves. The cut divides exponent selection between S0 and S1 and divides integer addition between S2 and S3. These are combinational work assignments. Their propagation delays depend on the implementation.
+The native wide path stores 1,419 bits per dot. In the default array, wide and K32 share the S0…S3 registers and use separate tails. The independent configuration gives each path its own S0…S3 registers. See [array storage](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) for the physical widths.
 
 ### Decode, align, reduce, and pack
 
@@ -66,7 +64,7 @@ Put FP16 A=2 and B=3 only at k=1, with C=1 and scale_input_d=0. With the array a
 
 ### Result transfer and stalls
 
-Input fire at l captures S0. Without stalls S4 is visible after l+4 and can transfer at l+5. P=5 and II=1. Backpressure propagates toward the input stage by stage. Each full stage holds its payload until it can advance. Reset clears only the five valid bits.
+Input fire at l captures S0. Without stalls S4 is visible after l+4 and can transfer at l+5. P=5 and II=1. Backpressure propagates toward the input stage by stage. Each full stage holds its payload until it can advance. Synchronous reset clears the five stage-valid bits in the standalone wide leaf. In either array configuration it also invalidates the wide spill slot and clears the [issue-order FIFO](../tensor_core/blackwell_tc_dot_array.md#issue-order-result-selection-and-backpressure).
 
 Verify all FP16/BF16 input combinations, TF32 Inf and NaNs whose only set fraction bits lie in the low 13 container bits, maximum/minimum normals, subnormals, exact cancellation, conflicting Inf signs, and C prescale underflow. The bit-exact reference must reproduce the specified fixed-point order. Per-term host floating-point addition is insufficient. Randomly stall continuous requests and check for loss, duplication, and correct edge-by-edge pairing of S4 results with input tags.
 
@@ -76,10 +74,13 @@ RTL: [blackwell_f16tf32_dot.sv](../../../rtl/dot/blackwell_f16tf32_dot.sv).
 
 ## Submodules
 
-| Submodule | Instances per dot | Connections and control |
+Instance counts are per dot unless specified otherwise.
+
+| Submodule | Instances | Connections and control |
 | --- | --- | --- |
 | [dot_emax_tree](blackwell_dot_emax_tree.md) | 4 local + 1 global | Four 4-input signed9 maxima feed S0. A 5-input signed9 maximum including C feeds S1 distance generation. |
-| Magnitude alignment | 17 | S2 consumes the bounded S1 distances directly and applies the [RZ aligner](blackwell_dot_align_fixed_rz.md) magnitude and sign semantics. |
-| [dot_signed_reduce_tree](blackwell_dot_signed_reduce_tree.md) | 8 pairs + 2 groups + 1 tail | S2 registers eight exact pair sums. Two four-input carry-save group trees feed a dedicated three-input carry-save tree with C before S3. Each tree ends in one carry-propagating addition. Shared mode uses the lower half of the K32 pair and group trees. |
+| [dot_signed_reduce_tree](blackwell_dot_signed_reduce_tree.md) | 8 pairs + 2 groups + 1 tail | S2 registers eight exact pair sums. Two four-input carry-save trees feed the three-input carry-save tail with C before S3. |
 | [dot_fp32_pack](blackwell_dot_fp32_pack.md) | 1 | Encode with the extended base_exp and capture in S4. |
-| [FP stage control](../../../rtl/dot/blackwell_fp_dot_control.sv) | Shared across cells | S0…S3 capture on their common enables. The wide tail captures the packed result and holds it until retirement or transfer into the spill slot. |
+| [FP stage control](../../../rtl/dot/blackwell_fp_dot_control.sv) | 1 per wide-capable path per core | Drives stage enables and wide result retirement. |
+
+The [wide front end](../../../rtl/dot/blackwell_fp_dot_front.sv) supplies the products and shift distances. The [configurable lane](../../../rtl/dot/blackwell_fp_dot_lane.sv) aligns the 16 products and C inline using the [RZ alignment rules](blackwell_dot_align_fixed_rz.md).
