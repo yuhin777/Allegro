@@ -88,8 +88,6 @@ LOAD_TENSOR and STORE_TENSOR join their issuer's current group at acceptance. LO
 
 Subtract old progress arriving on the same edge. Clear a pending bit only after descriptor and all source reads have finished. Later acceptance, commit, or ticket reuse cannot add to an old snapshot. At pending=0 the wait result can deliver and must hold under backpressure. Store full requires all actual GMEM write ACKs. Load full requires all actual SMEM write ACKs and confirmation of the producer update.
 
-Check separate edges for source reads, destination write ACKs, producer_rsp, and final response. In the linear case each phase has 4×4096 B. Register 16384 B once with mbarrier and deduct 4096 B for each of four loads. Reuse the address with new parity for the next phase. For tiled stores check group.read 0/1 separately from the trailing full obligation.
-
 <a id="issue-type"></a>
 
 ### Dispatch to execution
@@ -144,15 +142,13 @@ First S0.fire removes the head from the dispatch queue. While the walker enumera
 
 Check all earlier tickets in this epoch with relevant unsettled obligations. Each general ticket may capture a bitmap of older live tickets at acceptance. When an old ticket retires, clear its old bit from all bitmaps before registering the new owner on the same edge so a reused ticket cannot make a younger copy a predecessor. Loads read GMEM and write SMEM. Stores reverse direction. Check the [conservative spans in both address spaces](blackwell_tma_setup.md#copy-span). Read-only intersections can coexist. If a new write overlaps an old read, wait for the old source to finish. If an access overlaps an old write and ordering is required, wait for the old destination write ACKs. Treat a load's barrier object as a separate active 8 B write range. If data overlaps an older binding, wait for the old object update. If a new binding overlaps older data, wait for the old data obligation. Legal producers targeting the same barrier can bind independently. The front end atomically deducts bytes for the same address/phase in actual commit order. Each producer must first satisfy data visibility and match its binding. Treat unknown spans as possibly intersecting. Empty segments occupy no data span but must finish generation and binding. Stores follow the same dependency and actual port admission rules as other copies.
 
-Two independent 16 KiB panels each contain 128 full segments. Take A's first allocate as 0. With B prepared and all stages ready, A's last/B's first enter S0 at 124/125, allocate at 127/128, enter the data path at 128/129, and issue GMEM READ at 129/130. A sets generated on its final allocate. For three successive panels the first reads are 2, 130, and 258. Also exercise three 16 B linear loads with SMEM destination bases 0x000, 0x090, and 0x120 (distinct sectors and physical groups, barrier disjoint from data). Hold the last ACKs of A and B and check that C can still issue its read. Stalling a group's head ACK can fill its physical queue, after which resource backpressure applies to later copies. Count actual fire edges under arbitration, partial segments, or insufficient cache/producer capacity.
+Two independent 16 KiB panels each contain 128 full segments. Take A's first allocate as 0. With B prepared and all stages ready, A's last/B's first enter S0 at 124/125, allocate at 127/128, enter the data path at 128/129, and issue GMEM READ at 129/130. A sets generated on its final allocate. For three successive panels the first reads are 2, 130, and 258. Outstanding destination ACKs for two independent loads do not block a third independent load when its resources are available. Stalling a group's head ACK can fill its physical queue, after which resource backpressure applies to later copies. Count actual fire edges under arbitration, partial segments, or insufficient cache/producer capacity.
 
 ### Reset, drain, and acceptance
 
 All copies share the 128 B/cycle data ports. Calculate transfer time from actual masks, grants, and returns. [Data path cycle baseline](blackwell_tma_data_path.md#peak)
 
 Synchronous reset clears ticket/FIFO/arbitration state and fault. Normal epoch transition requires drained. Unknown identities, duplicate responses, and non-OK active transactions (descriptor, data, ordering, or producer service) raise top-level runtime fault. Terminate this run and reset after isolation.
-
-Test linear loads, tiled loads/stores, partial eight-group delivery, reads returning to different slots, GMEM write backpressure, descriptor hit/miss/failure, cross-issuer groups, an empty commit moving the prior group with unfinished reads from age 1 to 2, .read 0/1, and separate stalls of final destination write and producer_rsp. Cover reordered responses, 64 outstanding tags, GMEM return backpressure with all 16 rows full, and a late write ACK for an old tag after slot reuse.
 
 ## Submodules
 

@@ -12,8 +12,8 @@ The single walker consumes ARMED setup slots in FIFO order and generates segment
 | `slot_release` | Output | tma_context_ref_t (6 bits) | TMA unit | Pulse once on the last segment or close marker entering S0. May coincide with walk_start. Release determines the slot’s final state. |
 | `segment` | Output | [tma_segment_t](#segment) (193 bits) | tracker | On `segment.fire`, send an ordinary S2 segment to allocate. Its final handshake also closes enumeration. |
 | `generated` | Output | [tma_finish_t](blackwell_tma_completion_tracker.md#transfer-types) (5 bits) | tracker | On `generated.fire`, send the empty enumeration’s close-only marker without taking a tag. |
-| `drained` | Output | 1 bit | Top level | Assert with the cursor, three elastic stages and held generated event empty. |
-| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
+| `drained` | Output | 1 bit | TMA unit | Assert with the cursor, three elastic stages and held generated event empty. |
+| `fault` | Output | 1 bit | TMA unit | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
@@ -47,7 +47,7 @@ A nonempty command releases its setup slot on its final S0.fire. Its ticket trav
 
 ### Reset and boundary conditions
 
-Clear valid, cursor valid, result, and fault. The data side drains responses independently. Test separate stalls of S0/S1/S2, last-segment handoff to the next command, stable outputs, nonoverlapping ordinals, GMEM line crossings, full/partial OOB, nonmonotonic dimension strides, different addresses mapping to the same SMEM bank, recovery after filling all 64 tags, and continued load segment issue while waiting for GMEM returns.
+Clear valid, cursor valid, result, and fault. The data side drains responses independently.
 
 <a id="segment"></a>
 
@@ -65,4 +65,4 @@ Clear valid, cursor valid, result, and fault. The data side drains responses ind
 
 For segment byte `j=0…n−1`, let `u=soff+j`, physical group `g=(u>>4)^xor_group`, and byte lane `k=u&15`. The group's request address is `smem_sector+16*g`. Set `mask[g][k]`. The GMEM line lane is `goff+j`. These formulas also define reverse gather and byte enables on both sides. Each group has at most one atom and issues only with a nonempty mask. Full lines only permute the groups of the eight 16 B atoms. Misaligned segments also align bytes using the offsets at both ends. Generate port masks and group addresses combinationally from these fields.
 
-OOB loads generate only the destination SMEM mask, actually write zeros, and count toward logical bytes. OOB stores have zero masks at both ends and only advance ordinal. Do not split OOB segments on a GMEM line boundary or issue a GMEM access for an out-of-range virtual address. Cover linear bases aligned to only 16 B, starts inside a sector, different GMEM/SMEM boundaries, FP16 row ends, and OOB transitions. [Completion events](blackwell_tma_completion_tracker.md#transfer-types)
+OOB loads generate only the destination SMEM mask, actually write zeros, and count toward logical bytes. OOB stores have zero masks at both ends and only advance ordinal. Do not split OOB segments on a GMEM line boundary or issue a GMEM access for an out-of-range virtual address. [Completion events](blackwell_tma_completion_tracker.md#transfer-types)

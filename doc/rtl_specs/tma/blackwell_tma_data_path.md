@@ -15,8 +15,8 @@ Moves data between a 128 B GMEM line and eight 16 B SMEM atom groups. All active
 | `gmem_rsp` | Input | [gmem_rsp_t](blackwell_tma_unit.md#gmem-types) (1,037 bits) | GMEM (via unit) | On `gmem_rsp.fire`, accept a read return or write ACK by key, up to one per cycle. |
 | `smem_req[8]` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | On `smem_req.fire`, issue independently on client 8 port g to SMEM group g. |
 | `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (211 bits) | SMEM fabric | On `smem_rsp.fire`, accept each group’s return by original key and group. |
-| `drained` | Output | 1 bit | Top level | Assert when all RAM rows, held selections and pipeline stages are empty. |
-| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
+| `drained` | Output | 1 bit | TMA unit | Assert when all RAM rows, held selections and pipeline stages are empty. |
+| `fault` | Output | 1 bit | TMA unit | Sticky runtime fault level, cleared by isolated reset. |
 
 ```mermaid
 flowchart LR
@@ -85,12 +85,10 @@ With 64 full segments allocated tags at a=0…63, loads can deliver 64 consecuti
 
 | Boundary case | Expected behavior |
 |---|---|
-| Issue 64 reads before any return, then stall the SMEM destination | The first 16 successful returns occupy one slot each and the 17th stays held. Return the oldest read last. Ready rows can still drain. After resumption verify each byte and destination exactly once. |
+| 64 reads outstanding, SMEM destination stalled | The first 16 successful returns occupy one slot each and the 17th stays held. Ready rows can drain before the oldest read returns. Each selected byte is delivered once to its destination. |
 | Seven load groups have written and ACKed early, eighth group delayed | Retain the old data until the eighth group accepts, then allow slot reuse. While its eighth ACK is held, the old tag and command barrier remain pending. |
 | Store GMEM write or ACK stalls | Before write acceptance hold the full row stable. After acceptance reuse the slot for another segment. A late old ACK delays old transaction retirement and full only. A .read whose sources have all completed can proceed. |
 | MEMORY status arrives with all slots occupied | Report fault without a free row. The response cannot trigger producer success or a new write. |
-
-Also cover out-of-order returns across the eight groups, same-edge ACKs for several tags, short segments, OOB zero fill, wrong/duplicate tags, and descriptor sharing of the return port. The RTL must replay these edges.
 
 ## Submodules
 

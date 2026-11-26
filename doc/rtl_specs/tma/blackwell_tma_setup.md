@@ -15,8 +15,8 @@ Setup accepts linear or tiled copies from the TMA unit and builds immutable, ran
 | `slot_state[2]` | Output | Five-state enum per slot | TMA unit, walker | Level. Select a pre-edge ARMED slot or continue its active walk. |
 | `slot_ticket[2]` | Output | 5 bits per slot | TMA unit, walker | Level. Identify the pre-edge owner. |
 | `span[2]` | Output | [Access spans](#copy-span) (138 bits per slot) | TMA unit, walker | Level. Copy the checked spans in READY. |
-| `drained` | Output | 1 bit | Top level | Assert with both slots empty and no computation or held result. |
-| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
+| `drained` | Output | 1 bit | TMA unit | Assert with both slots empty and no computation or held result. |
+| `fault` | Output | 1 bit | TMA unit | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
@@ -51,7 +51,7 @@ CHECK produces an empty flag and inclusive span per address space. For SMEM reta
 
 ### Errors and resource release
 
-An illegal descriptor or expanded address outside range raises runtime fault to the unit. Do not publish READY or issue bind. With three old tickets still receiving returns after early slot release, check that late replies route by original ticket. Cover two interleaved slots, result backpressure, nonmonotonic strides, GMEM overflow, and the last legal SMEM byte.
+An illegal descriptor or expanded address outside range raises runtime fault to the unit. Do not publish READY or issue bind. After slot reuse, late replies still belong to their original tickets.
 
 <a id="tensor-map"></a>
 
