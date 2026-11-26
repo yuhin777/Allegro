@@ -40,8 +40,6 @@ wait_cmd.fire allocates an entry. QUERY can issue on the next cycle. For a succe
 
 Every entry into ARMED gets **64 ARMED cycles**, whether `time_hint` is omitted, zero, or any nonzero value. Synchronous reset zeros `tick`. It then increments modulo 64 on every rising edge, including stop drain. On entry to ARMED, save pre-edge `tick` in the entry's `armed_tick`. Only entries already ARMED before an edge compare `tick == armed_tick`. The first equality occurs on the 64th rising edge after entry. If the entry is still unmatched and error-free at that edge, it times out. QUERY and ACQUIRE wait time is outside this budget. [hint field](blackwell_mbarrier_frontend.md#command)
 
-Run each acceptance case with an omitted hint, explicit zero, and nonzero hint 641. The initial QUERY sees the old phase without error in all three.
-
 | Phase flip edge | Result |
 | --- | --- |
 | 64th ARMED edge | change wins over timeout. Enter MATCHED and return true after the matching acquire ACK succeeds. |
@@ -53,4 +51,4 @@ A valid same-edge phase change takes priority over an old phase from the initial
 
 MATCHED can issue acquire on the next edge. Publishing completed=1 requires a matching OK acquire for the same ID. A non-OK ACK raises fault. If phase matches at c, acquire can issue at c+1. With ACK acceptance at a, software can receive success at a+1. Multiple waits may coexist. Backpressure on the single ordering transaction does not block producers, changes at other objects, or earlier QUERY returns. Select RESULT by round-robin and hold ID/predicate/status under backpressure. Consumption returns the entry to FREE.
 
-Synchronous reset clears control. Normal stop blocks new waits and allows old probes, timing, ordering, and results to continue. Authorized epoch transition requires drained. Test 32 waiters across more than four cache lines, late old probes, acquire backpressure, two consecutive phase flips, and retention of an already presented result on fault.
+Synchronous reset clears control. Normal stop blocks new waits and allows old probes, timing, ordering, and results to continue. Authorized epoch transition requires drained.

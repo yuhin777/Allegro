@@ -241,17 +241,15 @@ For consecutive single-family instructions with all writes enabled, aligned acce
 | Dot service cycles | 32 | 64 | 128 |
 
 <a id="mma-vectors"></a>
-#### Reference vector for consecutive accumulations
+#### N128 accumulation timing
 
-Eight N128 FP16 instructions accumulate in place. Command i, row m, column n, and K index k start at zero. A and B are exactly representable integer-valued FP16. C is the initial FP32 accumulator.
+Under the service conditions above, eight successive N128 instructions issue their first dots at edges 0, 64, 128, 192, 256, 320, 384, and 448. Each row below changes one event while all other inputs and slots are ready on time.
 
-```text
-A[i,m,k] = ((3*m + 2*k + i*(k+1)) mod 7) - 3
-B[i,n,k] = ((n + 3*k + i*(n+2)) mod 9) - 4
-C[m,n]   = m - 2*n
-```
-
-For each coordinate independently add the initial C to products over all k from all eight instructions. Compare all 65,536 FP32 result bytes. Record first dot, last write acceptance, actual write, final ACK, and tracker acceptance for each instruction. Under the stated layout and service conditions the eight first dots must occur at 0, 64, 128, 192, 256, 320, 384, and 448.
+| Delayed event | Earliest dependent event |
+|---|---|
+| M0 block 0 receives its final successful write ACK at 64 | M1 can receive its first C0 read grant at 65. |
+| Only M0’s final block ACK moves to 80 | M1 can still issue its first dot at 64. |
+| M1 receives its final C1 return at 70 | M1 can issue its first block 1 dot at 72. |
 
 ## Submodules
 

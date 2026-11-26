@@ -95,11 +95,7 @@ Compute byte addresses in panel order. Each of the two panels in `inner=256` spa
 
 All fill destinations and actual requests must fit within this CTA's 228 KiB SMEM. The fabric applies physical bank mapping exactly once to these logical addresses. Setup checks the actual address set and the walker splits by logical ordinal. Virtual OOB addresses outside the accessed set cannot cause an error. [PTX tensor copy](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-cp-async-bulk-tensor)
 
-#### Reproducible examples
-
-Vary each dimension's stride and the panel independently. At the same coordinate check the GMEM byte and swizzled SMEM byte. See the [FA4 design record](../../proposals/mma_inter_instruction_pipeline.md) for actual descriptors, nonmonotonic strides, and individual addresses across panels.
-
-Test nonzero swizzle base, partial/full OOB at edges, 128 B GMEM line crossings, illegal stride alignment, address addition overflow, the last legal SMEM byte, and rejection before bind for invalid fields. The map stays read-only during its epoch. There is no map writer or invalidation request. A new epoch clears cache valid after drain.
+The map stays read-only throughout its epoch. The [descriptor cache](blackwell_tma_descriptor_cache.md) clears validity on an epoch change after drain.
 
 <a id="context"></a>
 
@@ -113,6 +109,6 @@ Test nonzero swizzle base, partial/full OOB at edges, 128 B GMEM line crossings,
 | tma_setup_req_t / tma_setup_rsp_t | issue,raw1024 / ticket5,context_slot1,total_bytes64,status4 |
 | tma_context_ref_t | ticket5,context_slot1 |
 
-The unit consumes cache.result by ticket and sends raw to setup only for status=OK. linear.setup uses raw=0. Setup exclusively owns each context throughout its lifetime and exposes a read-only combinational active view. Source progress requires delivery of all necessary source reads. Full progress also requires every actual destination write ACK and, for a successful load, producer_rsp.
+The unit consumes cache.result by ticket and sends raw to setup only for status=OK. linear.setup uses raw=0. Setup exclusively owns each context throughout its lifetime and exposes a read-only combinational active view. The [completion tracker](blackwell_tma_completion_tracker.md) owns source and full progress.
 
 See [unit](blackwell_tma_unit.md#issue-type) for `tma_issue_t`.

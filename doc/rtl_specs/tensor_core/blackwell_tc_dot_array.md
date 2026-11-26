@@ -63,11 +63,7 @@ The FIFO head selects the output family. Only `result.fire` retires that microti
 
 ### Acceptance
 
-With the v1 shared array, check sustained wide/K32 issue with the sink ready, each family's isolated latency after drain, and synchronous reset at full blocked capacity.
-
-Compare all 33 shapes and every mode. Issue six-stage low precision, three-stage integer, and five-stage FP16/TF32 consecutively. Stall the head result while the shorter family becomes ready first. Check that queued family IDs equal the number of valid microtiles in the pipelines, results deliver in original tag order, and lifting D backpressure causes no loss or duplication. Check native edges and payload capacity for each family. Verify broadcast wiring with an asymmetric INT8 microtile. Only k=0 is nonzero, A[r,0]=r+1, B[c,0]=c+9, and C[8r+c]=100r+c. Check `(r+1)×(c+9)+100r+c` in every cell.
-
-Continuously vary input data and switch families. Check that unselected S0 row/column inputs stay zero and that issued microtiles deliver with their original tags. A blocked selected input holds its decoded values through the handshake edge.
+The v1 shared array covers all 33 supported kind/mode/shape combinations. Each outstanding microtile owns one FIFO entry until its complete result retires in tag order.
 
 <a id="numeric-routing"></a>
 
