@@ -35,7 +35,7 @@ For QK, `row` denotes Q's output row or K's output column. Only N128 PV accesses
 
 The published Q/K example has logical dims=[64,128,2,1], stride[1:4]=[256,128,32768] B, and box=[64,128,1,1]. Relative to the same base, (0,0,1,0) maps to +128, (0,1,0,0) to +256, and (63,127,1,0) to +32766. The high byte of the last FP16 is at +32767. Treating stride[2] as stride[1]×128 reads the wrong head. Fill two heads with distinct data, compare encoding and decoding, then compare the address sets of the two tensor loads. Clearing the cache on a head switch cannot correct an addressing error. [Captured Q/K example](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L107-L125)
 
-The address regression starts with contiguous FP16 B/S/H/D host tensors, permutes them to logical D/S/H/B, and doubles the element strides to obtain byte strides. F1 has dims=[64,128,32,2] and byte stride[1…3]=[4096,128,524288]. F2 has dims=[128,1024,16,32] and byte stride[1…3]=[4096,256,4194304]. These fixtures derive reference addresses from the host layout. The opaque runtime descriptors for these two cases were not captured. Check the deltas for a head switch at one sequence position, a sequence increment within one head, and a batch switch.
+Reference byte addresses follow the FP16 host layout, with logical dimensions ordered D/S/H/B. F1 has dims=[64,128,32,2] and byte stride[1…3]=[4096,128,524288]. F2 has dims=[128,1024,16,32] and byte stride[1…3]=[4096,256,4194304].
 
 At rows=128, the D128 QK subblock byte offsets are `0/32/64/96/16384/16416/16448/16480`. The MN-major PV descriptor has LBO=16384 and SBO=1024. D64 QK subblock offsets are 0/32/64/96 B, and PV accesses one panel. [Upstream FA4 descriptor example](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L29-L51)
 
@@ -121,10 +121,6 @@ All copies share 128 B/cycle. For the two independent D128 16 KiB panels, the fi
 | D128, K+V for one KV tile | 64 KiB | 512 | The two Q stages together provide 2×(512 QK + 512 PV)=2,048 active dot cycles. |
 
 The three-slot K/V ring allows reads to start early. Use the first actual grant, last destination ACK, and complete-tx of each copy to derive the earliest phase release. Stores also peak at 128 B/cycle. SMEM source reads of O compete with Q/K/V operand reads for the same group grants. GMEM write ACKs are tracked separately. A load write and an MMA read need separate edges only on a same-bank, same-word conflict. [TMA scheduling](../rtl_specs/tma/blackwell_tma_unit.md) · [Full-line cycle example](../rtl_specs/tma/blackwell_tma_data_path.md#peak)
-
-An independent-load experiment on H20 with one CTA, hot D128 data, and two logical tiles in flight measured 95.3 B per SM cycle. The 128 B/cycle in the table comes from the project's port width. The store figure is derived from the specification.
-
-For measurements, align events by work tile, Q stage, KV index, barrier address/phase, and MMA ID. Record the final destination write ACK, complete-tx, phase flip, successful wait, cmd.fire/prepare, readiness of each row group and the first B block, relevant D block ACKs, and four-core op_load/dot_fire. Delay only the final K or V complete-tx, late P arrival, or the corresponding C block ACK in turn. Identify the first consumer edge that moves. If several conditions are outstanding, attribute the delay to the last one satisfied to avoid counting the same idle cycles against both TMA and P.
 
 ## In-place accumulation and block dependencies
 

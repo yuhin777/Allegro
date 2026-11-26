@@ -68,7 +68,7 @@ Each cache entry contains tag (addr[31:3], 29 bits), object64, valid, dirty, and
 
 One R_REQ stores the complete 199-bit service request. R_OLD/R_NEXT are 64 bits each, R_RESULT holds the 72-bit service response, and the replacement cursor is 2 bits. The pending backing record stores cache index, victim address, and MISS/FLUSH/INVAL reason without duplicating object payload. The wait table, producer registrations, and software return slots belong to their respective modules.
 
-The baseline serializes one transaction through LOOKUP, UPDATE, and COMMIT. A hit commits in three cycles. It does not promise one update per cycle. Serialization avoids same-object RAW forwarding and competing commits. Optimizations must preserve visible timing and the atomic point. The front end sends external ordering for FENCE_INIT after earlier INITs commit. This unit owns the atomic object value.
+The unit services one transaction at a time through LOOKUP, UPDATE, and COMMIT. A hit takes three cycles. COMMIT atomically updates the object. The front end sends external ordering for FENCE_INIT after earlier INITs commit.
 
 ### Hits and atomic updates
 

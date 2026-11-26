@@ -51,7 +51,7 @@ The bit-exact reference uses integer significands and the truncation points spec
 | S4 | signed33 sum, base10, special2 | 45 |
 | S5 | FP32 result | 32 |
 
-The native K32 path stores 1,800 bits per dot. The default array shares S0…S3 with wide requests. In the independent configuration K32 has its own S0…S3 registers. Both configurations use a dedicated K32 sum and pack tail. See [array storage](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) for the physical widths.
+The native K32 path stores 1,800 bits per dot. The v1 array shares S0…S3 with wide requests and uses a dedicated K32 sum and pack tail. See [array storage](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) for the physical widths.
 
 ### Products, scaling, reduction, and packing
 

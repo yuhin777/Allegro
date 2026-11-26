@@ -16,7 +16,7 @@ The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-p
 ```mermaid
 flowchart LR
     OP[R_OP] --> AD["Combinational decode of eight A rows and eight B columns"]
-    AD --> FP["Wide and K32 S0…S3 (shared or independent)"]
+    AD --> FP["Shared wide and K32 S0…S3"]
     FP --> W["Wide S4 with one spill slot"]
     FP --> K["K32 S4 and S5"]
     AD --> M[FP4 ×64]
@@ -39,31 +39,31 @@ Row/column decode and operand isolation between R_OP and S0 are combinational an
 
 ### Floating-point storage
 
-The top-level [`SHARE_FP_DOT_ADDER_TREE`](../top/blackwell_async_subsystem_top.md) selects how wide (F16/TF32) and K32 use S0…S3. In shared mode a family bit travels with each tag and selects the tail at S3. Wide uses the lower half of the K32 pair adders and group trees. In independent mode each of these two families has its own front stages and adders.
+The [v1 array](../top/blackwell_async_subsystem_top.md) shares S0…S3 between wide (F16/TF32) and K32. A family bit travels with each tag and selects the tail at S3. Wide uses the lower half of the K32 pair adders and group trees.
 
-| Per core, 64 cells | Shared | Independent |
-|---|---:|---:|
-| Wide and K32 data in S0…S3, bits per cell | 584 + 490 + 503 + 163 | 584 + 489 + 270 + 44 (wide), 567 + 490 + 503 + 163 (K32) |
-| Tail data, bits per cell | Wide 32 + spill 32, K32 45 + 32 | Same |
-| Wide and K32 data registers | 15,048 B | 26,008 B |
-| Data registers across all four families | 23,584 B | 34,544 B |
-| Wide and K32 tags (76 bits per slot) | 608 bits | 912 bits |
-| Wide and K32 stage control | 8 valid + 4 mode bits | 12 valid bits |
-| Issue-order FIFO capacity (2-bit family ID per microtile) | 16 entries | 19 entries |
+| Per core, 64 cells | Shared |
+|---|---:|
+| Wide and K32 data in S0…S3, bits per cell | 584 + 490 + 503 + 163 |
+| Tail data, bits per cell | Wide 32 + spill 32, K32 45 + 32 |
+| Wide and K32 data registers | 15,048 B |
+| Data registers across all four families | 23,584 B |
+| Wide and K32 tags (76 bits per slot) | 608 bits |
+| Wide and K32 stage control | 8 valid + 4 mode bits |
+| Issue-order FIFO capacity (2-bit family ID per microtile) | 16 entries |
 
 The data totals exclude tags, control and FIFO storage. The FIFO bounds total accepted work, including any microtile in the spill slot.
 
 ### Issue order, result selection, and backpressure
 
-On `operand.fire`, all 64 selected lanes capture S0 and the [issue-order FIFO](../base/blackwell_fifo.md) records the family. Admission requires space in both the selected path and the FIFO. With the array initially empty and the result sink continuously ready, either configuration accepts a stream of wide and K32 microtiles at one per cycle. For an isolated microtile issued at edge l, the result becomes visible after l+Ldot and can transfer at l+P, using the timing in the submodule table.
+On `operand.fire`, all 64 selected lanes capture S0 and the [issue-order FIFO](../base/blackwell_fifo.md) records the family. Admission requires space in both the selected path and the FIFO. With the array initially empty and the result sink continuously ready, the array accepts a stream of wide and K32 microtiles at one per cycle. For an isolated microtile issued at edge l, the result becomes visible after l+Ldot and can transfer at l+P, using the timing in the submodule table.
 
-If an older K32 result takes the output when a wide result completes, the wide result can enter its one-entry spill slot. Shared mode also permits spilling during downstream stalls. An isolated wide result bypasses the slot. The oldest wide result is always selected first.
+If an older K32 result takes the output when a wide result completes, the wide result can enter its one-entry spill slot. The wide tail can also spill during downstream stalls. An isolated wide result bypasses the slot. The oldest wide result is always selected first.
 
 The FIFO head selects the output family. Only `result.fire` retires that microtile and removes its FIFO entry. The core asserts `result.ready` when the destination slot, generation and row can accept the result. While `result.valid && !result.ready`, the output tag and all 64 cells stay stable. Empty stages can continue accepting work until backpressure reaches R_OP. Synchronous reset clears stage and FIFO validity and preserves stage payloads. `empty_o` indicates drain.
 
 ### Acceptance
 
-In both configurations, check sustained wide/K32 issue with the sink ready, each family's isolated latency after drain, and synchronous reset at full blocked capacity.
+With the v1 shared array, check sustained wide/K32 issue with the sink ready, each family's isolated latency after drain, and synchronous reset at full blocked capacity.
 
 Compare all 33 shapes and every mode. Issue six-stage low precision, three-stage integer, and five-stage FP16/TF32 consecutively. Stall the head result while the shorter family becomes ready first. Check that queued family IDs equal the number of valid microtiles in the pipelines, results deliver in original tag order, and lifting D backpressure causes no loss or duplication. Check native edges and payload capacity for each family. Verify broadcast wiring with an asymmetric INT8 microtile. Only k=0 is nonzero, A[r,0]=r+1, B[c,0]=c+9, and C[8r+c]=100r+c. Check `(r+1)×(c+9)+100r+c` in every cell.
 

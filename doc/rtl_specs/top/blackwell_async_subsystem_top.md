@@ -2,7 +2,7 @@
 
 ## Description
 
-The elaboration parameter `SHARE_FP_DOT_ADDER_TREE` defaults to 1. It applies to all four MMA cores. Set it to 0 for independent wide and K32 pair and group trees. Both configurations accept the same instruction and microtile interfaces. The [dot array](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) defines storage, issue credits and retirement timing.
+Allegro v1 uses `SHARE_FP_DOT_ADDER_TREE=1` on all four MMA cores. The [dot array](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) defines storage, issue credits and retirement timing for this configuration. Setting the elaboration parameter to 0 selects an experimental independent-tree configuration outside v1 acceptance.
 
 Connects one SM100a single-CTA asynchronous backend to the warp instruction front end, RF, LSU, GMEM, and ordering services. The top level handles joint acceptance, shared port routing, and CTA lifetime. The surrounding system handles decode, warp convergence, and program order. See [Supported PTX](../../proposals/supported_ptx.md) for ingress commands.
 
