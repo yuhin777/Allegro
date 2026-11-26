@@ -1,7 +1,7 @@
 """Linear GMEM service and readback for integrated subsystem tests."""
 from struct import pack as word_pack
 
-from fa4_model import CASES, pack
+from workload_protocol import pack
 from frontend import FrontEnd
 
 
@@ -13,8 +13,7 @@ class LinearMemory:
 
 class LinearFrontEnd(FrontEnd):
     def __init__(self, dut):
-        super().__init__(dut, CASES["F1"], "uniform")
-        self.mem = LinearMemory()
+        super().__init__(dut, memory=LinearMemory())
         self.atoms = {}
         self.order_kinds = []
         self.observe = self.capture

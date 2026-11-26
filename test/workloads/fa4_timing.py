@@ -5,7 +5,7 @@ import cocotb
 import numpy as np
 
 from fa4_model import CASES, mma_payload, tile
-from frontend import FrontEnd
+from fa4_driver import Fa4FrontEnd
 
 
 class DotMonitor:
@@ -79,7 +79,7 @@ async def measure(frontend, case, stage, pv, slot, reference):
 async def published_fa4_windows(dut):
     for target in os.environ.get("FA4_CASE", "F1,F2").split(","):
         case = CASES[target]
-        fe = FrontEnd(dut, case, "coordinate")
+        fe = Fa4FrontEnd(dut, case, "coordinate")
         barrier = {64: 1}
         await fe.lifecycle_start(barrier)
         stages = [int(os.environ["FA4_TIMING_STAGE"])] if "FA4_TIMING_STAGE" in os.environ else range(case.stages)

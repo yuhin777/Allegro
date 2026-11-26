@@ -4,7 +4,7 @@ import numpy as np
 from cocotb.triggers import Timer
 from linear_driver import LinearFrontEnd
 from mma_driver import Accumulation, descriptor
-from fa4_model import pack
+from workload_protocol import pack
 
 
 def masked_mma(op, partition):

@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from struct import pack_into
 import numpy as np
 
+from workload_protocol import pack
+
 
 @dataclass(frozen=True)
 class Case:
@@ -104,16 +106,6 @@ class Memory:
             start = self.addr("O",batch,r,head,0)
             blob.extend(self.output[start+i] for i in range(2*c.depth))
         return np.frombuffer(blob, dtype="<f2").reshape(128,c.depth)
-
-
-def pack(*fields):
-    result = 0
-    for width, value in fields:
-        value = int(value)
-        if not 0 <= value < (1 << width):
-            raise ValueError((width,value))
-        result = result << width | value
-    return result
 
 
 def mma_payload(case, op_id, pv, stage, step, kv_slot, use_d):

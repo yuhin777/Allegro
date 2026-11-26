@@ -4,7 +4,7 @@ from struct import unpack
 import cocotb
 from cocotb.triggers import Timer
 
-from fa4_model import pack
+from workload_protocol import pack
 from linear_driver import LinearFrontEnd
 
 

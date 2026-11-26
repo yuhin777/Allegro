@@ -4,13 +4,7 @@ from collections import defaultdict, deque
 from cocotb.triggers import Timer
 import numpy as np
 
-from fa4_model import MAP_BASE, NAMES, Memory, pack, tile
-
-MASK128 = (1 << 128)-1
-
-# Elected lane 0 of each specialist warp in both 512-thread CTA exports.
-MMA_ISSUER = 12*32
-LOAD_ISSUER = 14*32
+from workload_protocol import MASK128, pack
 
 
 class FrontEnd:
@@ -18,9 +12,9 @@ class FrontEnd:
     wait_cycles = 200_000
     returns = {"tc_op_done":4,"tc_commit_done":4,"tmem_ldst_done":4,"tmem_wait_done":4,
                "bar_rsp":5,"tma_rsp":68,"tmem_manage_rsp":36}
-    def __init__(self,dut,case,pattern):
-        self.d, self.case = dut,case
-        self.mem = Memory(case,pattern)
+    def __init__(self, dut, memory=None):
+        self.d = dut
+        self.mem = memory
         self.pending_memory, self.pending_order = deque(),deque()
         self.results, self.rf = {},defaultdict(list)
         self.observe = lambda: None
@@ -30,8 +24,6 @@ class FrontEnd:
         self.lifecycle = set()
         self.acquired = {}
         self.order_kind, self.wait_address = {}, {}
-        self.copy_bytes, self.copy_atoms, self.copy_expected, self.producer = {}, {}, {}, {}
-        self.active_stage = {}
         for name in (*self.returns,"rf_load","open_rsp","close_rsp","gmem_req","order_req"):
             getattr(dut,name+"_ready").value = 1
         for name in ("open_req","close_req","tmem_manage","tmem_ldst","rf_store","tmem_wait",
@@ -56,43 +48,11 @@ class FrontEnd:
         self.seq[issuer]+=1
         return key
 
-    def trace_copy_acks(self):
-        sm = self.d.sm
-        request_fire = int(sm.t_req_v.value) & int(sm.t_req_r.value)
-        ack_fire = int(sm.t_rsp_v.value) & int(sm.t_rsp_r.value)
-        # Retire old tokens first; reusing a token on its retirement edge is legal.
-        for group in range(8):
-            if ack_fire >> group & 1:
-                rsp = int(sm.t_rsp[group].value)
-                if rsp >> 210:
-                    tag = (rsp >> 132) & ((1<<78)-1)
-                    assert rsp & 15 == 0 and tag in self.copy_atoms, (tag,group)
-                    self.copy_bytes[tag>>20] += self.copy_atoms.pop(tag)
-            if request_fire >> group & 1:
-                req = int(sm.t_req[group].value)
-                if req >> 254:
-                    tag = (req >> 176) & ((1<<78)-1)
-                    assert tag not in self.copy_atoms and tag>>20 in self.copy_bytes
-                    mask=(req >> 128) & 0xffff
-                    address=(req >> 144) & 0xffffffff
-                    op=tag>>20
-                    expected,remaining=self.copy_expected[op][address]
-                    assert mask and (mask&remaining)==mask
-                    data=req&MASK128
-                    for byte in range(16):
-                        if mask>>byte&1:
-                            assert (data>>(8*byte))&255 == expected[byte], (op,address,byte)
-                    if remaining==mask:
-                        del self.copy_expected[op][address]
-                    else:
-                        self.copy_expected[op][address]=(expected,remaining^mask)
-                    self.copy_atoms[tag] = mask.bit_count()
-        if int(sm.producer_done_valid.value) and int(sm.producer_done_ready.value):
-            value=int(sm.producer_done_payload.value)
-            op,count,status=value>>36,(value>>4)&0xffffffff,value&15
-            assert op not in self.producer and status==0 and self.copy_bytes[op]==count==16384
-            assert not self.copy_expected[op]
-            self.producer[op]=self.cycle
+    def sample_transfers(self):
+        """Sample workload-specific transfers before checking ordering requests."""
+
+    def check_acquire(self, addr):
+        """Check any workload-specific prerequisites at the acquire handshake."""
 
     async def edge(self,probe=None):
         d=self.d
@@ -132,7 +92,7 @@ class FrontEnd:
                     self.acks.add(tag)
             if self.fired("gmem_rsp"):
                 self.pending_memory.popleft()
-            if self.copy_bytes: self.trace_copy_acks()
+            self.sample_transfers()
             if self.fired("order_rsp"):
                 op=self.pending_order.popleft()>>4
                 if self.order_kind.pop(op)==1:
@@ -145,11 +105,15 @@ class FrontEnd:
                 opcode=(request>>1216)&7
                 tag=request>>1219
                 assert addr%128==0 and opcode in (0,1)
+                operation = "write" if opcode else "read"
+                service = getattr(self.mem, operation, None)
+                if service is None:
+                    raise AssertionError(f"Missing GMEM {operation} service at {addr:#x}, cycle {self.cycle}")
                 if opcode:
-                    self.mem.write(addr,data.to_bytes(128,"little"),mask)
+                    service(addr,data.to_bytes(128,"little"),mask)
                     reply=0
                 else:
-                    reply=int.from_bytes(self.mem.read(addr),"little")
+                    reply=int.from_bytes(service(addr),"little")
                 self.pending_memory.append(pack((9,tag),(1024,reply),(4,0)))
             if self.fired("order_req"):
                 request=self.read("order_req_payload")
@@ -160,9 +124,7 @@ class FrontEnd:
                 assert not self.written_atoms
                 self.order_kind[op]=kind
                 if kind==1:
-                    addr=self.wait_address[op]
-                    if addr in self.active_stage:
-                        assert all(i in self.producer for i in self.active_stage[addr]), "early acquire"
+                    self.check_acquire(self.wait_address[op])
                 self.pending_order.append(op<<4)
         self.observe()
         d.clk.value=1
@@ -228,39 +190,6 @@ class FrontEnd:
                 return
         raise AssertionError(f"Barrier {addr:#x} phase {self.phase[addr]} still pending at cycle {self.cycle}")
 
-    async def tma(self,name,opcode,smem,coord,bar=0,issuer=288,wait_n=0):
-        op=self.sign(issuer)
-        map_addr=MAP_BASE+128*NAMES.index(name) if name else 0
-        coords=sum(int(x)<<(32*i) for i,x in enumerate(coord))
-        if opcode==0:
-            self.copy_bytes[op]=0
-            dim,row,head,batch=coord
-            panel=tile(self.case,name,row,128,head,batch,self.mem.pattern)[:,dim:dim+64].astype("<f2")
-            expected={}
-            for r in range(128):
-                for atom in range(8):
-                    x=smem+128*r+16*atom
-                    expected[x^(((x>>7)&7)<<4)]=(panel[r,8*atom:8*atom+8].tobytes(),0xffff)
-            self.copy_expected[op]=expected
-        await self.send("tma_cmd",pack((58,op),(3,opcode),(64,map_addr),(32,smem),(64,0),
-                        (32,0),(32,bar),(128,coords),(64,0),(1,wait_n)))
-        return op
-
-    async def copy(self,name,smem,row,batch,head,bar):
-        n=self.case.depth//64
-        expect=await self.barrier(bar,3,count=0,nbytes=16384*n,issuer=LOAD_ISSUER)
-        await self.result(expect,"bar_rsp")
-        copies=[]
-        for panel in range(n):
-            copies.append(await self.tma(name,0,smem+panel*16384,(panel*64,row,head,batch),bar,issuer=LOAD_ISSUER))
-        self.active_stage[bar]=copies
-        await self.wait_barrier(bar,issuer=MMA_ISSUER)
-        assert all(op in self.producer for op in copies) and sum(self.copy_bytes[op] for op in copies)==n*16384
-        del self.active_stage[bar]
-        for op in copies:
-            assert (await self.result(op,"tma_rsp"))&((1<<64)-1)==16384
-            del self.copy_bytes[op], self.copy_expected[op], self.producer[op]
-
     async def get_rf(self,col,width,warp_base=0):
         rows=np.empty((128,width),dtype="<u4")
         for j in range(0,width,32):
@@ -302,9 +231,9 @@ class FrontEnd:
         self.acks.remove(tag)
         self.d.lsu_quiescent.value=1
 
-    async def read_smem(self,addr,mask):
+    async def read_smem(self,addr,mask,issuer=384):
         group=(addr>>4)&7
-        tag=pack((58,self.sign(MMA_ISSUER)),(4,12),(16,group))
+        tag=pack((58,self.sign(issuer)),(4,12),(16,group))
         self.d.lsu_quiescent.value=0
         self.d.smem_rd_rsp_ready.value=0
         self.d.smem_rd_payload[group].value=pack((78,tag),(32,addr),(16,mask))
@@ -344,26 +273,10 @@ class FrontEnd:
         await self.wait_until(lambda: "open_rsp" in self.lifecycle, f"open response for epoch {self.epoch}")
         self.lifecycle.remove("open_rsp")
 
-    async def lifecycle_start(self,barriers):
-        await self.open()
-        for name in NAMES:
-            await self.result(await self.tma(name,6,0,(),issuer=0),"tma_rsp")
-        for addr,count in barriers.items():
-            op=await self.barrier(addr,0,count=count,issuer=0)
-            await self.result(op,"bar_rsp")
-        await self.result(await self.barrier(0,5,issuer=0),"bar_rsp")
-        alloc=self.sign(MMA_ISSUER)
-        await self.send("tmem_manage",pack((58,alloc),(2,0),(32,0),(10,512)))
-        rsp=await self.result(alloc,"tmem_manage_rsp")
-        assert rsp & 0xffffffff == 0
-        dst=280 if self.case.causal else 328
-        await self.write_smem(dst&~15,0,0xf<<(dst%16),op_id=alloc)
-        assert await self.read_smem(dst&~15,0xf<<(dst%16))==0
-
-    async def shutdown(self,barriers):
+    async def shutdown(self,barriers,issuer=384):
         for addr in barriers:
             await self.result(await self.barrier(addr,1),"bar_rsp")
-        free=self.sign(MMA_ISSUER)
+        free=self.sign(issuer)
         await self.send("tmem_manage",pack((58,free),(2,1),(32,0),(10,512)))
         await self.result(free,"tmem_manage_rsp")
         await self.send("close_req")

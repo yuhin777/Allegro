@@ -1,5 +1,4 @@
 """Top-level MMA panel stimulus and edge monitors."""
-from fa4_model import CASES
 from frontend import FrontEnd
 
 
@@ -9,7 +8,7 @@ def descriptor(start):
 
 class Accumulation(FrontEnd):
     def __init__(self, dut):
-        super().__init__(dut, CASES["F1"], "uniform")
+        super().__init__(dut)
         self.observe = self.capture
         self.active = False
         self.first_dots = []

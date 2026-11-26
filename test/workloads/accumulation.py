@@ -1,8 +1,9 @@
 """Eight in-place N128 commands against the top-level reference vector."""
 import cocotb
 import numpy as np
-from fa4_model import CASES, pack
-from frontend import FrontEnd
+from fa4_model import CASES
+from workload_protocol import pack
+from fa4_driver import Fa4FrontEnd
 from mma_driver import Accumulation, descriptor
 
 
@@ -63,7 +64,7 @@ async def eight_accumulations(dut):
 @cocotb.test()
 async def native_fp4_scale_snapshots(dut):
     """Route two E8M0 factors from each TMEM scale operand to the FP4 dots."""
-    fe = FrontEnd(dut, CASES["F1"], "uniform")
+    fe = Fa4FrontEnd(dut, CASES["F1"], "uniform")
     await fe.lifecycle_start({})
     a, b = 8192, 12288
     one = int.from_bytes(bytes([0x22])*16, "little")

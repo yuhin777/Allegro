@@ -4,8 +4,9 @@ import os
 import cocotb
 import numpy as np
 
-from fa4_model import CASES, direct_attention, mma_payload, pack, tile
-from frontend import FrontEnd, LOAD_ISSUER, MMA_ISSUER
+from fa4_model import CASES, direct_attention, mma_payload, tile
+from workload_protocol import pack
+from fa4_driver import Fa4FrontEnd, LOAD_ISSUER, MMA_ISSUER
 
 CORRECTION_FIRST = 8*32
 STORE_ISSUER = 13*32
@@ -273,7 +274,7 @@ async def replay_fa4(dut):
                 assert pattern in ("uniform","coordinate")
                 for head in coordinates("FA4_HEAD",case.heads):
                     for batch in coordinates("FA4_BATCH",case.batches):
-                        fe=FrontEnd(dut,case,pattern)
+                        fe=Fa4FrontEnd(dut,case,pattern)
                         work=WorkTile(fe,first,batch,head,pattern)
                         await fe.lifecycle_start(work.barriers())
                         await work.run()
