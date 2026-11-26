@@ -110,4 +110,4 @@ Each MMA collects its own read returns, arithmetic results, and actual D write A
 
 For every value of `time_hint`, each wait has a budget of **64 ARMED cycles**. Timeout returns false. A phase match requires a successful acquire acknowledgment before returning true. [Wait budget and the 64th/65th edge](../rtl_specs/mbarrier/blackwell_mbarrier_wait.md#wait-budget)
 
-These timings apply to normal execution. A runtime fault terminates the CTA at the top level, and the surrounding system isolates the subsystem before reset. Acceptance uses functional results and key handshake edges for the three kernels. Total kernel cycles are recorded for observation. [Top-level contract](../rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol) · [Target workloads](supported_ptx.md)
+These timings apply to normal execution. A runtime fault terminates the CTA at the top level, and the surrounding system isolates the subsystem before reset. [Top-level contract](../rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol) · [Target workloads](supported_ptx.md)

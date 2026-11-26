@@ -64,7 +64,7 @@ bind.fire reserves a producer entry. A successful QUERY records the initialized 
 
 ### Service selection and progress
 
-Round-robin across software, wait probe, TC, and producer classes and within each class. A continuously eligible class can be bypassed by at most three other service fires. unit.commit is independent of front-end result capture. A reserved slot does not wait for software ready. stop closes new software operations but continues accepting older TMA bind/producer_done, TC, service, and ordering traffic. drained requires no held or outstanding work. Synchronous reset clears ownership and fault. Duplicate or unknown identities raise fault. Verify same-edge same-address new commit and INIT, retirement of old commits under the gate, independent barriers for different issuers, producer updates with a full software output, and the phase guard.
+Round-robin across software, wait probe, TC, and producer classes and within each class. A continuously eligible class can be bypassed by at most three other service fires. unit.commit is independent of front-end result capture. A reserved slot does not wait for software ready. stop closes new software operations but continues accepting older TMA bind/producer_done, TC, service, and ordering traffic. drained requires no held or outstanding work. Synchronous reset clears ownership and fault. Duplicate or unknown identities raise fault.
 
 ### Request and response edges
 

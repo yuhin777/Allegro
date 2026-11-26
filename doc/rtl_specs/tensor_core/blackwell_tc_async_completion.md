@@ -50,4 +50,4 @@ Hold R_COMMIT if retire is blocked. The tracker determines retire ready by match
 
 ### Reset and acceptance
 
-Continue accepting previously registered commits during normal stop. drained requires EMPTY and no held output. Only then may epoch change normally. Synchronous reset clears FSM/valid. Unknown or non-OK responses trigger [top-level fault handling](../top/blackwell_async_subsystem_top.md#common-protocol). Verify one object request, software done, and retire per successful commit and same-issuer order under result backpressure.
+Continue accepting previously registered commits during normal stop. drained requires EMPTY and no held output. Only then may epoch change normally. Synchronous reset clears FSM/valid. Unknown or non-OK responses trigger [top-level fault handling](../top/blackwell_async_subsystem_top.md#common-protocol). Each successful commit produces one object request, software result, and retirement.

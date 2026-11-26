@@ -24,7 +24,7 @@ sum=0 produces +0. For other finite values let s be the sign, a the exact absolu
 
 The wide and K32 paths use CANONICAL_ZERO=1. The native K64 FP4 path uses CANONICAL_ZERO=0 and preserves the sign when a nonzero reduction sum underflows to zero. Exact cancellation produces +0 in every family.
 
-The parent captures the result at its final stage without an extra pipeline stage. Verify that sum=3 and base_exp=0 give 0x40400000. Also check negative powers of two, the most negative sum, normal/subnormal boundaries, e=−149/−150, e=127/128, and special-result priority.
+The parent captures the result at its final stage without an extra pipeline stage.
 
 For sum=2^24+3 and base_exp=−24 the retained 24-bit significand is 0x800001 and the FP32 result is 0x3f800001. The discarded 1 does not increment the result.
 

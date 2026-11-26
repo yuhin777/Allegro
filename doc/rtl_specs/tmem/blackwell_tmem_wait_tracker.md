@@ -41,4 +41,4 @@ After final LD RF writeback or actual ST write ACK, the engine returns pin and o
 
 One wait entry holds valid1, id58, and pending32, totaling 91 bits. wait_cmd.fire captures pre-edge live stores of the same epoch and warp, subtracting old slots completing on this edge. Exclude LD and same-edge new alloc. Later allocations cannot enlarge the set. When pending is zero, OK can deliver at the next edge at the earliest, including for an empty set. Hold wait_done until consumed. A busy wait stalls new waits while LD/ST can register in other free slots and complete.
 
-Normal stop prevents new external commands. Old complete, slot, and results continue. Synchronous reset clears valid and selections. Normal epoch change requires drained. Verify empty wait after consuming 64 stores, same-edge alloc/complete/wait, different warps, LD exclusion, and independent backpressure on both return ports.
+Normal stop prevents new external commands. Old complete, slot, and results continue. Synchronous reset clears valid and selections. Normal epoch change requires drained.

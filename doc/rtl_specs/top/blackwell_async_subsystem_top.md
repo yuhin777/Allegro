@@ -155,7 +155,7 @@ Match acknowledgments by ID, with at most one ordering transaction outstanding p
 - PROXY_FENCE confirms that subsequent to_proxy accesses can observe earlier from_proxy writes.
 - MBARRIER_INIT_RELEASE first requires all earlier objects initialized by this issuer in the CTA to have committed. Publish their initialization to the single-CTA cluster. Release subsequent synchronization only after a matching ACK.
 
-The external ordering adapter must not return OK unconditionally. The top-level fixture must implement these contracts or establish that its single-clock memory model satisfies them before acknowledgment. For TMA copy, each successful destination write ACK guarantees implicit visibility for that write. Explicit proxy fence, barrier release/acquire, and CTA_CLOSE still require their own ordering acknowledgments.
+The external ordering adapter must not return OK unconditionally. An OK acknowledgment requires the visibility guarantee for the requested kind and scope. For TMA copy, each successful destination write ACK guarantees implicit visibility for that write. Explicit proxy fence, barrier release/acquire, and CTA_CLOSE still require their own ordering acknowledgments.
 
 <a id="memory-routing"></a>
 
@@ -224,16 +224,11 @@ The top holds epoch/FSM, fault, arbiter held/source, outstanding ordering and pi
 
 ### Nonempty commits across issuers
 
-In the same CTA, epoch, and warp, thread 5 (A) first issues an ordinary FP16 MMA writing X. Thread 6 (B) next issues an MMA writing Y. After B's register_op.fire and before its engine_done.fire, B commits to a separate initialized barrier one arrival short of completion. Verify the pending snapshot contains only B's operation. Use disjoint X/Y column ranges, input_d=0, and no cross-instruction source/destination aliases. Use the legal ordinary MMA disable_lane_mask so A writes only TMEM partition 0 and B only partition 1. Holding an ACK for A then occupies no bank or ACK frame needed by B.
+A commit captures its issuer’s preceding unfinished operations. Independent issuers in the same warp can commit and complete separately.
 
-Hold only the matching ACK for A's last actual write and keep other interfaces ready. Observe all actual B write ACKs and unpin, then engine_done(B).fire and B's atomic barrier arrival. A is still unfinished and both engine records still occupy slots. Release A's ACK and observe engine_done(A).fire. Reclaim A then B. B must notify and arrive exactly once each. If B is terminal yet cannot notify until A is released, the test fails. Also return MEMORY for A's final ACK. B's previously committed success and arrival must remain, top-level fault must assert, and A must not generate a successful arrival.
+Once a younger MMA’s own writes and unpin settle, it can notify the tracker and satisfy its issuer’s commit while an older MMA awaits a write ACK. Both records remain occupied until in-order reclamation. A later fault on the older MMA preserves the younger MMA’s committed arrival and suppresses a successful arrival dependent on the failed write.
 
-### Cross-module acceptance
-
-- Trace the first three N128 instructions under the steady-state window below. Check that prefetch, execution, and trailing writes can advance concurrently. For N256 in-place B replacement, stall one core and check deliveries already made, that core's consumption watermark, and the identity of old ACKs.
-- In addition to the nonempty commit above, cover independent empty commits, same-address INIT/INVAL exclusion of new commits, and backpressure on software responses and acquire.
-- Align transfers, RF writeback, and mbarrier by ID. When two independent loads bind the same phase, acknowledge each byte contribution separately. The consuming warp waits for all expect-tx and arrival obligations and successful acquire. Test recovery after data slots fill, consecutive reads across commands, and progress of a third independent short copy. [TMA data path](../tma/blackwell_tma_data_path.md#peak) · [Walker handoff example](../tma/blackwell_tma_unit.md#copy-overlap)
-- Apply normal backpressure separately during the second phase, descriptor access, final destination ACK, dirty flush, and final ordering. On release check that the original transaction continues. Separately inject MEMORY at the final ACK and check fault and isolated reset.
+### MMA pipeline timing
 
 <a id="cycles"></a>
 #### Cycle boundaries for consecutive MMAs

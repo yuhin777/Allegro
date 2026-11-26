@@ -17,4 +17,4 @@ This combinational tree finds the maximum valid exponent. Parameters are `TERM_N
 
 Each leaf is `(v,e)`. Ignore invalid inputs when merging two nodes. With two valid inputs, take the larger signed exponent, choosing the left on a tie. Two invalid inputs produce invalid/DEFAULT_EXP. Recursively pair adjacent indices and pair an odd trailing entry with invalid. The tree has ceil(log2 TERM_N) levels. Result valid is the OR of all input valid bits.
 
-There is no internal state or added latency. The parent captures the output at its specified pipeline stage. Verify N=1, odd N, all invalid, the minimum negative exponent, and equal exponents. Check that comparisons use signed arithmetic.
+There is no internal state or added latency. The parent captures the output at its specified pipeline stage.

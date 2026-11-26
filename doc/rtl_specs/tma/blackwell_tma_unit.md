@@ -13,7 +13,7 @@ The TMA top level owns the command FIFO, ticket table, and bulk group member age
 | `smem_req[8]` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | On `smem_req.fire`, issue independently per client 8 group for load writes and store reads. |
 | `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (211 bits) | SMEM fabric | On `smem_rsp.fire`, accept the matching group’s write ACK or read data. |
 | `order_req` | Output | [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) (163 bits) | Ordering service | On `order_req.fire`, submit the explicit PROXY_FENCE. |
-| `order_rsp` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | Ordering service | On `order_rsp.fire`, accept its ordering acknowledgment. |
+| `order_rsp` | Input | [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) (62 bits) | Ordering service | On `order_rsp.fire`, accept its ordering acknowledgment. |
 | `bar_bind` | Output | [bar_bind_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (90 bits) | barrier frontend | On `bar_bind.fire`, bind the load after successful precheck. |
 | `bar_bind_rsp` | Input | op_done_t (62 bits) | barrier frontend | On `bar_bind_rsp.fire`, capture the binding status. |
 | `producer_done` | Output | [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (94 bits) | barrier frontend | On `producer_done.fire`, submit the bound load’s completion once. |

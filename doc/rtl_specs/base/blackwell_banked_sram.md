@@ -27,6 +27,6 @@ Sample write_enable at the write edge and immediately commit the selected bytes.
 
 If the macro cannot hold Q, an adapter must supply an equivalent enable register of the same width. Count it as Q. If both copies are retained, count both. Data RAM and Q require no array-wide reset. Clearing the parent's valid bits makes undefined payload unobservable.
 
-### Port conflicts and boundary checks
+### Controller responsibilities
 
-Check independent bank enables, Q retention during stalls, preservation of adjacent bytes under masking, addresses DEPTH−1 and DEPTH, concurrent different-word reads and writes, and controller suppression of same-word conflicts. The fabric or partition owns transaction identity, ready, return credits, and ACKs. This module supplies physical storage.
+The fabric or partition owns transaction identity, ready, return credits, and ACKs. This module supplies physical storage.

@@ -55,7 +55,7 @@ On success with P'=0 and T'=0, set F'=!F and P'=E on the commit edge. Otherwise 
 
 TRY_WAIT observes completion when expected parity differs from the current F. Software must successfully wait for that phase before arriving in the next phase and may use only the current or previous phase's parity. See [wait](blackwell_mbarrier_wait.md#wait-budget) for acquire, response retention, and timeout. Eviction does not cancel waiters.
 
-Test four 4096 B transactions per round over two rounds with one flip each, negative T, consecutive same-address COMPLETE_TX and arrival, count limits, failure without false success, 8 B writes preserving the adjacent object, busy throughout dirty eviction, and phase completion coinciding with timeout. Numerical reference: [PTX 8.7 mbarrier](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier).
+The object follows the phase and count semantics of [PTX 8.7 mbarrier](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier).
 
 <a id="change-type"></a>
 
@@ -113,6 +113,6 @@ An unknown back_rsp in the same epoch is PROTOCOL. Synchronous reset clears cach
 
 A normal epoch transition requires drained, successful flush of all dirty entries, and no fault. Clear cache valid/dirty/busy and the replacement cursor, preserving payload and SMEM. An epoch change cannot discard authoritative dirty data or outstanding transactions. A protocol fault requires isolated reset.
 
-### Assertions and acceptance
+### Cache invariants
 
-At most one valid entry per address. A busy entry cannot be replaced. Each request commits and responds at most once. Cycle through five objects with waits, updates, and dirty misses. Check progress with a four-entry cache, agreement of commit change with the new object, preservation of the adjacent half-line, and retention of the victim until writeback succeeds.
+At most one valid entry per address. A busy entry cannot be replaced. Each request commits and responds at most once. A dirty victim remains resident until writeback succeeds.

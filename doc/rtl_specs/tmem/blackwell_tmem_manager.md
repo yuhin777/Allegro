@@ -14,7 +14,7 @@ Manages the full TMEM allocation exclusively owned by one CTA (128 lanes ×512 c
 | `unpin` | Input | 61 bits | MMA engine, LD/ST | On `unpin.fire`, release the reference for the supplied 58-bit ID and 3-bit user. |
 | `epoch_i` | Input | 16 bits | Top level | Level. Current CTA lifetime. |
 | `stop_i` | Input | 1 bit | Top level | Level. Stop new external management commands. Continue pins, unpins, and responses for accepted work. |
-| `epoch_end` | Input | no payload | Top level | Transfer on `epoch_end.fire`. The top has finished flush/ordering and all pins have returned. Atomically clear the old allocation and close the epoch. |
+| `epoch_end` | Input | Event without payload | Top level | Transfer on `epoch_end.fire`. The top has finished flush/ordering and all pins have returned. Atomically clear the old allocation and close the epoch. |
 | `empty_o` | Output | 1 bit | Top level | Level. No allocation, references, or held responses. |
 | `drained_o` | Output | 1 bit | Top level | Level. No references or outstanding responses. |
 | `fault_o` | Output | 1 bit | Top level | Level. Protocol fault such as unknown/duplicate unpin. |
@@ -43,4 +43,4 @@ Before pin, each engine validates actual lane/column ranges, layout, and alignme
 
 Synchronous reset clears allocation occupancy, references, and response valid and sets closed. Opening a legal new epoch sets permit. On normal shutdown the top issues epoch_end after flush and ordering finish. Accept only with no references, held responses, or same-edge control commit. Clear allocated/permit and close the old epoch. epoch_end may reclaim a static allocation.
 
-Use the F1/F2 512-column allocation and check a same-address SMEM read obtains base=0. Retain allocation while an old reference returns late. A subsequent DEALLOC allows another warp's waiting ALLOC to take the full block. Verify independent reference return from all five users and continued unpin progress under management or pin response backpressure.
+A waiting ALLOC becomes eligible after successful DEALLOC when the allocation permit is available.

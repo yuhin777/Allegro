@@ -62,16 +62,12 @@ Only the listed forms are supported. L/F1/F2 identify the target workloads using
 | `fence.proxy.async.shared::cta`, `fence.mbarrier_init.release.cluster` | Single thread. Publish the relevant preceding generic shared writes and barrier initialization, respectively. Cluster scope is restricted to this CTA. Completion requires actual ordering acknowledgment. | L/F1/F2 / TMA or barrier front end and external ordering |
 | `prefetch.tensormap` | Descriptor prefetch hint. It neither transfers tile data nor substitutes for copy completion. | F1/F2 / descriptor cache |
 
-The surrounding system handles address arithmetic, branching, softmax, RF, ordinary LSU, `bar.sync`/`bar.arrive`/`bar.warp.sync`, `elect.sync`, and `setmaxnreg`. It must supply actual RF acceptance, memory ACKs, visibility acknowledgments, and thread arrivals at their proper edges in the fixture. Tensor Map uses the published project encoding. The surrounding system normalizes host descriptors. NVIDIA opaque binary compatibility is outside the contract.
+The surrounding system handles address arithmetic, branching, softmax, RF, ordinary LSU, `bar.sync`/`bar.arrive`/`bar.warp.sync`, `elect.sync`, and `setmaxnreg`. It must supply actual RF acceptance, memory ACKs, visibility acknowledgments, and thread arrivals at their specified edges. Tensor Map uses the published project encoding. The surrounding system normalizes host descriptors. NVIDIA opaque binary compatibility is outside the contract.
 
-## 5. Exclusions and acceptance
+## 5. Exclusions and workload guarantees
 
 Unsupported forms include sparse, M32/M64 or other M sizes, FP16 MMA results, cross-CTA operation, `.ashift`, standalone SHIFT, `tcgen05.cp`, an active zero-column mask, nonzero column shift, and UE8M0 4X. Unlisted TMEM shapes/repeats, pack/unpack, `tcgen05.wait::ld`, `tcgen05.fence`, TMA ranks/types, linear store, map replace, reduction, multicast, and registration of ordinary cp.async with a barrier are outside scope.
 
 Before asynchronous registration, the surrounding system rejects detectable out-of-scope PTX (UNSUPPORTED), illegal encodings (INVALID), and out-of-range addresses (RANGE). A memory, ordering, or protocol error in an active transaction terminates the run with a sticky fault. [Top-level recovery contract](../rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol)
 
-For L/F1/F2 check data and program-visible completion order. Check key edges under the alignment, input readiness, and port service conditions in each specification. Record whole-kernel cycles as observations.
-
-- For L check four 4 KiB copies in each of two rounds, the checksum, phase reuse, and the ordering from final write ACK to wakeup.
-- F1/F2 cover QK → TMEM/RF intermediates → PV → O writeback. Retain the Q=K=0, V=1, O=1 connectivity case and add coordinate-dependent nonuniform inputs to check addresses, values, and completion order separately. Under the documented data and ACK conditions, consecutive K16 first dots within one product are 64 cycles apart for QK, and 32 (F1) or 64 (F2) for PV. The two 16 KiB F2 copies for a stage submit separately. Consumption requires completion of all 32,768 B and successful acquire. [FA4 addresses and timing](mma_inter_instruction_pipeline.md)
-- Compare all 33 MMA combinations and legal dtype, scale, and control settings against an independent numerical reference. WS coverage includes four names, every collector operation, hits, and reload after eviction.
+F1/F2 cover QK → TMEM/RF intermediates → PV → O writeback. Under the documented data and ACK conditions, consecutive K16 first dots within one product are 64 cycles apart for QK, and 32 (F1) or 64 (F2) for PV. The two 16 KiB F2 copies for a stage submit separately. Consumption requires completion of all 32,768 B and successful acquire. [FA4 addresses and timing](mma_inter_instruction_pipeline.md)

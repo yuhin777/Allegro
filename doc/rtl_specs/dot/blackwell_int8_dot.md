@@ -41,7 +41,7 @@ Set the two low bytes of A to 0xff, 0x01, and of B to 0x02, 0x03. Set all other 
 
 Input fire at l captures S0. R_DOT is visible after l+2 and first transfers at l+3. P=3 and II=1. Three independent elastic stages include R_DOT. A downstream stall must not overwrite any stage. Reset clears valid.
 
-Test all four signedness combinations, signed/unsigned interpretations of 0xff, both extreme C values, positive/negative overflow, saturation and wrap, cancellation, and random backpressure. The reference sums in at least 64 signed bits and applies S32 rules only at the end. Per-term S32 wrap or saturation is incorrect.
+Apply S32 wrap or saturation only to the final sum.
 
 RTL: [blackwell_int8_dot.sv](../../../rtl/dot/blackwell_int8_dot.sv).
 

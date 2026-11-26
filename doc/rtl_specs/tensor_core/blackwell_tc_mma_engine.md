@@ -22,7 +22,7 @@ One engine per SM manages three ordered MMA command records, four [core](blackwe
 | `writes_done` | Input | 4 × 3 bits | Four cores | Level. Sample settlement of actual writes per core and record. |
 | `local_done[4]` | Input | op_done_t (62 bits per core) | Four cores | On `local_done.fire`, accept completion by ID. |
 | `live[3]` | Output | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | core, loader, snapshot, SMEM/TMEM fabric | Level. Acceptance order, oldest at the head. Faults from these execution modules feed the top level. |
-| `older_writes_clear[3]` | Output | 4 bits per record | Cores and scale B snapshot | Level. Gate TMEM A, scale A, scale B and offset-overlapping C/D against older unsettled writes. Write-after-write waits only for prior writes to settle. The engine applies scale B permission to snapshot start. |
+| `older_writes_clear[3]` | Output | 4 bits per record | Four cores | Level. Gate TMEM A, scale A, scale B and offset-overlapping C/D against older unsettled writes. Write-after-write waits only for prior writes to settle. The engine gates snapshot.start with the scale B permission. |
 | `start` | Output | prepare_t (449 bits) | Scale B snapshot | On `start.fire`, start the permitted scale B snapshot. |
 | `release` | Output | async_id_t (58 bits) | Scale B snapshot | On `release.fire`, release the matching snapshot. |
 | `ready` | Input | 3 bits | Scale B snapshot | Level. Read snapshot availability by record. |
@@ -163,7 +163,7 @@ The ideal B source is K-major, with 4 KiB aligned start, mode0, LBO=128 B, and S
 
 `addr=start+(n//8)*256+(n%8)*16+(z//16)*128+z%16`.
 
-The engine sends the original b_desc, b_type, kind, and transpose_b with load. For FP16/BF16 MN-major V, the loader enumerates eight successive columns at each K using [full-atom assembly and output wire order](blackwell_tc_b_loader.md#assembly). Compute SMEM grants from actual group indices for each layout. Each core reads installed B on a block's first-group load and supplies the next three groups according to the [core R_OP reuse rules](blackwell_tc_mma_core.md#r-op-b-reuse). Use distinct byte signatures by (n,k) to verify both major orders, each permitted swizzle, FP6 cross-byte fields, adjacent FP4 nibbles, and padding masks. Check layout before physical bank mapping.
+The engine sends the original b_desc, b_type, kind, and transpose_b with load. For FP16/BF16 MN-major V, the loader enumerates eight successive columns at each K using [full-atom assembly and output wire order](blackwell_tc_b_loader.md#assembly). Compute SMEM grants from actual group indices for each layout. Each core reads installed B on a block's first-group load and supplies the next three groups according to the [core R_OP reuse rules](blackwell_tc_mma_core.md#r-op-b-reuse). Apply the layout before physical bank mapping.
 
 ### Command registration, first issue, and completion
 
@@ -178,7 +178,7 @@ Each record stores cmd, order, pin ownership, optional input bank, per-core prep
 
 Each rec has terminal and reported bits cleared at allocation. The single done port selects the oldest eligible entry satisfying valid && terminal && !reported. Lock the selection and hold ID/status under backpressure. Set reported for the matching rec only on done.fire. With continuous ready, different IDs may notify on consecutive edges. Success status is OK. While waiting for reclamation, a reported record cannot start work or unpin again. Retain its old write completion state for dependency checks.
 
-Reclaim at most one head per edge if already reported or delivering the head's done on this edge. Reclamation creates no tracker event and may coincide with another ID's done.fire. Settle by pre-edge identity and reinitialize on reuse. If the head is unfinished, a younger reported record still occupies a command slot. Backpressure new instructions when all three fill. Continue notification and reclamation after stop. A held done or any valid command record deasserts drained. For simultaneous eligible entries, entries becoming eligible while done is held, and interleaved completions, verify exactly one notification per ID.
+Reclaim at most one head per edge if already reported or delivering the head's done on this edge. Reclamation creates no tracker event and may coincide with another ID's done.fire. Settle by pre-edge identity and reinitialize on reuse. If the head is unfinished, a younger reported record still occupies a command slot. Backpressure new instructions when all three fill. Continue notification and reclamation after stop. A held done or any valid command record deasserts drained. Each ID generates exactly one completion notification.
 
 For consecutive N128 bank reuse, suppose the first two instructions issue at 0 and 64. After instruction 0's last op_load at 62, its input_free bits become visible on all four cores. Instruction 2 is already prechecked/pinned. At 63 it can handshake prepare and bypass its first A request into R_BREQ on that edge for first grant at 64. Instructions without a snapshot incur no extra release cycle for bank reuse. Instruction 1's launch and instruction 2's prepare use different channels. If commands arrive late, include ingress stalls in the measurement.
 
@@ -195,9 +195,9 @@ resident[4] is shared within CTA/epoch and indexed by b0…b3. Each entry stores
 
 ### Timing and acceptance
 
-The cold path follows actual availability of the first required row group, first B block, C0, scale, and R_OP space. A hit skips B load/data. If the last required input is captured at h, first R_OP can load at h+1 and first dot can issue at h+2. For steady-state handoff observe launch, local_done, unpin, and tracker handshakes separately. [Cross-module cycle baseline](../top/blackwell_async_subsystem_top.md#cycles)
+The cold path follows actual availability of the first required row group, first B block, C0, scale, and R_OP space. A hit skips B load/data. If the last required input is captured at h, first R_OP can load at h+1 and first dot can issue at h+2. [Cross-module cycle baseline](../top/blackwell_async_subsystem_top.md#cycles)
 
-Check ingress backpressure with all three slots full. Each cmd.fire registers with the tracker on the same edge. Three consecutive normal commands each launch once. Exercise a late final ACK, stalled partial distribution, same-name fill→use→lastuse, late completion by an old owner, and stop. WS coverage includes four N64 entries, two N128 entries, one N256 entry, and mixed sizes. Check the lowest contiguous free run, fragmentation, and LRU. Each core reads only blocks it has installed and has permission to use. Each accepted command finishes exactly once.
+Each core reads only installed blocks it has permission to use.
 
 ## Submodules
 

@@ -6,7 +6,7 @@ One instance per backend stores scale B snapshots for two active input contexts 
 
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
-| `start` | Input | prepare_t (449 bits) | MMA engine | On `start.fire`, start after pin and cross-instruction dependencies clear. |
+| `start` | Input | prepare_t (449 bits) | MMA engine | On `start.fire`, accept the command after the engine has obtained the pin and granted scale B read permission. |
 | `release` | Input | async_id_t (58 bits) | MMA engine | On `release.fire`, release the snapshot by ID. |
 | `rd_req[128]` | Output | tmem_rd_req_t (108 bits) | TMEM fabric | On `rd_req.fire`, issue for client 4 on source lane x modulo 32. |
 | `rd_rsp[128]` | Input | tmem_rd_rsp_t (210 bits) | TMEM fabric | On `rd_rsp.fire`, accept the matching read return. |
@@ -38,8 +38,6 @@ Each started bank holds ID/rec, base/id/V, needed/valid (up to 256 cells each), 
 
 EMPTY → FILL → READY. Set ready for the rec after the last required return succeeds. SB can be sampled into R_OP on the next edge. The other snapshot can fill concurrently. After every core finishes using this ID's inputs and quiescent is true, the engine issues release and reclaims the bank. A non-OK, unknown, or duplicate return raises fault and cannot make the snapshot ready. quiescent becomes true only after the edge retiring the final obligation. Do not unpin early. Reset clears valid bits and preserves snapshot data.
 
-Load the next instruction into a nonzero bank. Check source lane wrap at n=31/32, independent queries from four cores, and isolation of the two IDs. Delay source return, release, and manager.unpin separately and check their handshake edges. Cover 1X/2X/4X and all legal s/V.
-
 <a id="scale-layout"></a>
 
 ### Scale layout and query types
@@ -63,4 +61,4 @@ Legal selections satisfy s+V≤4. A uses lanes0…31 and four columns. B uses th
 
 `tc_sb_query_t={id:58,block:6,n_base:8}` is 72 bits, with n_base=8×block. `tc_sb_view_t={valid:1,data:256}` is 257 bits. For j=0…7 and g=0…V−1, `data[32*j+8*g+:8]=SB(n_base+j,g)`. Zero unused factor bytes. Assert valid only for a matching ID, range, and valid bits. The core samples the densely packed data directly on the R_OP load edge.
 
-Use distinct values for each lane/column/byte to cover x=31/32, the final row/column, all N, and each s/V. When D overlaps the source, verify that all 64 dot lanes use the values sampled during PREP. [Scale A diagram](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/_images/tcgen05-mma-scale-factor-a-1x-dig.png) · [Scale B diagram](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/_images/tcgen05-mma-scale-factor-b-1x-dig.png)
+When D overlaps the source, all 64 dot lanes use the scale values captured during PREP. [Scale A diagram](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/_images/tcgen05-mma-scale-factor-a-1x-dig.png) · [Scale B diagram](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/_images/tcgen05-mma-scale-factor-b-1x-dig.png)

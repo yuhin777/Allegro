@@ -55,7 +55,7 @@ Management and RF commands require the issuer's low five bits to be zero, denoti
 
 ### RF data layout
 
-Support only converged warp ordinary `.32x32b`, LD x16/x32 and ST x16. Each RF beat carries one b32 per thread for a whole warp. For thread t=0…31 and register index j=0…R−1, lane=base.lane+t and column=base.column+j, using the full cell. Require base.lane=32×(warp%4) and final column≤511, checked in wide arithmetic. Warps 0/4/8… of one CTA share a physical partition and track their RF returns independently. There is no pack, unpack, or split offset. Verify the 32 cells of each beat independently and preserve unaccessed cells. [supported instruction table](../../proposals/supported_ptx.md) · [PTX LD](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#tcgen05-instructions-tcgen05-ld)
+Support only converged warp ordinary `.32x32b`, LD x16/x32 and ST x16. Each RF beat carries one b32 per thread for a whole warp. For thread t=0…31 and register index j=0…R−1, lane=base.lane+t and column=base.column+j, using the full cell. Require base.lane=32×(warp%4) and final column≤511, checked in wide arithmetic. Warps 0/4/8… of one CTA share a physical partition and track their RF returns independently. There is no pack, unpack, or split offset. Unaccessed cells retain their contents. [supported instruction table](../../proposals/supported_ptx.md) · [PTX LD](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#tcgen05-instructions-tcgen05-ld)
 
 ### Instruction acceptance and address precheck
 
@@ -97,10 +97,6 @@ A range/user violation discovered after registration, non-OK return, or wrong RF
 
 An RF ID/index/last protocol violation cannot update another context. An illegal or duplicate memory return cannot clear another atom's mask. Use full ID and token for all checks.
 
-### Acceptance
-
-- Fill LD with distinct values by lane and column. Sweep x16/x32 and all four b%4 values. Verify one read per `(id,lane,w)`, first/last byte_mask, and each thread/register value with index/last. Cover e=511 and out-of-range precheck.
-- Separately delay grants/returns for the current and next word and stall the current final RF beat. Check same-edge old sampling and new capture on word handoff and correct ownership of late prefetches. Hold an old ST ACK. Verify the next RF beat can replace the old one at final actual write acceptance. Filling both partition ACK frames then applies real credit backpressure.
-- Cover all four warp partitions and stall the two completion outputs independently. Late MEMORY raises fault without successful ACK settlement. The surrounding system reads an RF register only after actual beat writeback.
+The RF consumer can read a destination register after its beat writes back.
 
 Local fault is 1 bit. Non-OK, unknown, or duplicate memory/pin responses or a mismatched RF ID/index/last set it. See the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and in-flight responses.

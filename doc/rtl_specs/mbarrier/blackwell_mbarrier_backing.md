@@ -87,6 +87,6 @@ A misaligned or out-of-range internal address raises fault without issuing an ex
 
 On a normal epoch change, reset the token counter and establish the new context only in EMPTY with no held return or fault. Preserve SMEM. All legal returns from the previous epoch must already have retired. Do not discard them by comparing against the new epoch.
 
-### Assertions and acceptance
+### Writeback completion
 
-Interleave reads and writes to both 8 B objects in one 16 B line while stalling requests and returns. Check that each back_req settles exactly once and the unselected half stays intact. Inject a wrong tag, wrong direction, or MEMORY return and verify that the unit retains the dirty victim until a successful write ACK.
+Each accepted backing request settles once. A masked write preserves the adjacent object. The object unit retains a dirty victim until its writeback receives a successful ACK.

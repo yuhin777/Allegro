@@ -71,7 +71,7 @@ Prevent a mixed-direction cycle in which the head GMEM load return waits for a s
 
 ### Cycle timing and acceptance
 
-Let a denote tracker.allocate.fire. The fixture below assumes full lines, no contention, and GMEM responding one edge after request. Choose tags and slots from pre-edge free entries. A returned entry can be reallocated on the next edge.
+Let a denote tracker.allocate.fire. The timing below assumes full lines, no contention, and GMEM responding one edge after request. Choose tags and slots from pre-edge free entries. A returned entry can be reallocated on the next edge.
 
 | Edge event | load | store |
 |---|---|---|

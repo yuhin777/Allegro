@@ -42,7 +42,7 @@ The fabric instantiates four partitions. Internal part_rd/ret/wr/ack each expand
 
 Expand each client interface over 128 banks. A request drives only the accessed lane.
 
-Clients validate addresses against allocation and command and maintain authorization throughout the access lifetime. The fabric checks port client against tag.client, lane against port index, and epoch. Illegal requests must not reach SRAM. Integration assertions must catch the protocol violation.
+Clients validate addresses against allocation and command and maintain authorization throughout the access lifetime. The fabric checks port client against tag.client, lane against port index, and epoch. Illegal requests must not reach SRAM.
 
 <a id="tmem-layout"></a>
 
@@ -123,9 +123,9 @@ Each partition peaks at 512 B/cycle in each direction. Across four partitions th
 
 Unaligned D, general descriptors, and real contention may lower throughput. Preserve return order and identity under conflict. Per-bank retention allows partial partition acceptance.
 
-### Verification
+### Arbitration and faults
 
-When local C and another core's transposed A request the same readable bank, a fresh selection chooses C. If A is already held, deliver A first. Let two clients write different banks on one edge and stall their ACKs independently. Check partial retirement, original client/token, and held stability. Exhausting one bank's read credit or filling one partition's ACK frames blocks only affected requests. Advance round-robin only on actual acceptance.
+When local C and another core's transposed A request the same readable bank, a fresh selection chooses C. If A is already held, deliver A first. Each bank ACK retains its original client and token under independent backpressure. Exhausting one bank's read credit or filling one partition's ACK frames blocks only affected requests. Advance round-robin only on actual acceptance.
 
 Protocol faults add one bit `protocol_fault_q`. Set it for port/tag.client mismatch, lane index or epoch violation, or any partition fault. Follow the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and outstanding responses.
 

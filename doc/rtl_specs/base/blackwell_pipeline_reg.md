@@ -15,4 +15,4 @@ The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-p
 
 Before the edge, out_valid=valid_q, out_payload=payload_q, and `in_ready=!valid_q || out_ready`. Synchronous reset takes priority on the rising edge and clears valid. Otherwise, only when in_ready is asserted, set valid_q=in_valid and load payload if in_valid is 1. On simultaneous out.fire and in.fire, the downstream stage consumes the old value and the register holds the new one after the edge.
 
-An input accepted at t is visible after t and can transfer at t+1. Throughput is one item per cycle. There is no combinational fall-through data path or backup slot. Reset leaves payload untouched. Check empty, full and stalled, simultaneous input/output, and valid stability. The parent must avoid combinational ready loops.
+An input accepted at t is visible after t and can transfer at t+1. Throughput is one item per cycle. There is no combinational fall-through data path or backup slot. Reset leaves payload untouched. The parent must avoid combinational ready loops.

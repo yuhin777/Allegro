@@ -88,13 +88,13 @@ Each bank selects the oldest ACK frame in which it has not retired. ACKs in the 
 
 When deciding rd_req_fire and wr_req_fire at g, compare the words that would execute at g+1. For the same bank and word accept the write first, deassert read ready, and withhold its grant. Reads/writes granted at g−1 execute at g. Their conflicts were excluded on the preceding edge and old reads cannot be canceled. No actual macro sampling edge has same-word 1R+1W. Different words can proceed concurrently. Avoid undefined read-during-write behavior. Masked byte writes do not require an internal read-modify-write or consume a read port.
 
-### Reset, errors, and verification
+### Reset, errors, and credit conservation
 
 Reset clears valid, credit state, tag validity, and ACK state, preserving TMEM payload. Drain or isolate pre-reset transactions under the common lifecycle rules. An old return cannot attach to a new token after reset.
 
-Normal on-chip SRAM has no recoverable bus error. Illegal lane/word/tag is an interface violation, validated before issue and caught by assertions. If the integrated macro supports ECC errors, an error return still retires its credit with nonzero status and cannot supply false successful data.
+Normal on-chip SRAM has no recoverable bus error. Illegal lane/word/tag is an interface violation, detected before issue. If the integrated macro supports ECC errors, an error return still retires its credit with nonzero status and cannot supply false successful data.
 
-Drop ready on each successive edge after grant and check outstanding per bank equals the number of Q, return, and reserved read identities and is ≤3. A full bank can reuse credit on the edge an old entry retires. After two consecutive write frames stall a single bank ACK and observe write acceptance, actual write, and per-bank ACK separately. Across D generation changes, mixed clients, and all byte masks, an old ACK retires only its old identity.
+Outstanding reads per bank equal the Q, return, and reserved read identities and cannot exceed three. A retiring entry releases its credit for same-edge reuse. Each ACK retires only its original write identity, including across D generation changes.
 
 Protocol faults add one bit `protocol_fault_q`. Set it for an illegal partition lane, duplicate return/ACK control identity, or failure of credit conservation. Follow the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and outstanding responses.
 

@@ -69,8 +69,6 @@ For E2M1 0x3×0x2 with every other term and C zero, the result must be 0x3fc0000
 
 P=6. Edge l captures S0. S5 is visible after l+5 and the earliest output transfer is l+6. II=1. Each occupied stage holds its payload during a stall. Synchronous reset invalidates in-flight microtiles. The [array protocol](../tensor_core/blackwell_tc_dot_array.md#issue-order-result-selection-and-backpressure) defines retirement across families. Adjacent inputs may change dtype and MX mode. S0 captures the microtile's products, special classifications, and scale exponent. Later stages use only the in-flight fields.
 
-Verify all 25 dtype combinations, finite extrema/zero/subnormal/NaN as applicable, E5M2 Inf, UE8M0 0/254/255, and signed cancellation. Compare MX against a reference using exactly the same fixed-point alignment. With E5M2 A all zero, B[0]=0x7b, and FP32 C=0x00000001, verify that both unscaled and unit-scaled MX return C. Check truncation for large exponent differences between scaled finite products and C. Assert correct behavior under uniform backpressure across 64 lanes and fault injection with partial ready.
-
 RTL: [blackwell_f4f6f8_dot.sv](../../../rtl/dot/blackwell_f4f6f8_dot.sv).
 
 ## Submodules
