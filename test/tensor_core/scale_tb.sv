@@ -47,7 +47,9 @@ module scale_tb;
   end
   always_ff @(posedge clk) begin
     cycle <= cycle + 1;
-    if (fault_o || cycle > 20000) $fatal;
+    if (fault_o || cycle > 20000)
+      $fatal(1, "scale snapshot cycle=%0d cmd=%0d fault=%b ready=%b start_ready=%b",
+             cycle, start_payload.cmd.id.seq, fault_o, ready, start_ready);
   end
   initial begin
     repeat (2) @(negedge clk);

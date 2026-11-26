@@ -193,7 +193,9 @@ module b_loader_tb;
         end
         $display("PASS failed final B return suppresses all four deliveries and successful result");
         $finish;
-      end else if (tick > 500000 || fault_o) $fatal(1, "failed B stream at command %0d", retired);
+      end else if (tick > 500000 || fault_o)
+        $fatal(1, "B loader tick=%0d fault=%b retired=%0d/%0d issued=%0d blocks=%0d",
+               tick, fault_o, retired, nc, issued, total_blocks);
       @(negedge clk);
     end
     for (int i = 0; i < nc; i++)

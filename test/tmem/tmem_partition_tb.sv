@@ -1,6 +1,6 @@
 // All three independent read reservations can be occupied at one bank.
 // Check full-credit reuse without using any internal state as the oracle.
-module tb_tmem_partition;
+module tmem_partition_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
   logic clk = 0, rst_n = 0, halt_i = 0;

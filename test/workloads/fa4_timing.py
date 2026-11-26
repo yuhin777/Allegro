@@ -5,7 +5,7 @@ import cocotb
 import numpy as np
 
 from fa4_model import CASES, mma_payload, tile
-from fa4_replay import FrontEnd
+from frontend import FrontEnd
 
 
 class DotMonitor:

@@ -8,36 +8,27 @@ mkdir -p "$build"
 build=$(cd "$build" && pwd)
 jobs=${JOBS:-4}
 top=blackwell_async_subsystem_top
-run_sv() {
-    local bench=$1 name output
-    name=$(basename "$bench" .sv)
-    output="$build/$name"
-    verilator --binary --timing --assert -Wno-fatal -j "$jobs" --top-module "$name" \
-        --Mdir "$output" -f rtl/files.f "$bench"
-    (cd "$output" && "./V$name")
-}
-check_xml() {
-    python3 - "$1" <<'PYTHON'
-import sys
-from xml.etree.ElementTree import parse
-cases = parse(sys.argv[1]).findall(".//testcase")
-if not cases or any(case.find(tag) is not None for case in cases for tag in ("error", "failure", "skipped")):
-    raise SystemExit(f"Regression results missing, failed or skipped in {sys.argv[1]}")
-PYTHON
-}
 mode=${1:-all}
 case "$mode" in lint|unit|workloads|all) ;; *) echo 'usage: test/run.sh [all|lint|unit|workloads]' >&2; exit 2;; esac
 if [[ $mode == lint || $mode == all ]]; then
     verilator --lint-only --assert -Wno-fatal --top-module "$top" -f rtl/files.f
 fi
 if [[ $mode == unit || $mode == all ]]; then
-    for bench in test/tc/*_tb.sv test/tmem/tb_*.sv test/tma/*_tb.sv; do
-        run_sv "$bench"
+    mkdir -p "$build/b_loader_tb"
+    python3 test/tensor_core/b_loader_vectors.py > "$build/b_loader_tb/b_vectors.txt"
+    for bench in test/{base,tensor_core,tmem,tma}/*_tb.sv; do
+        flags=(-f rtl/files.f)
+        case "$bench" in
+            */b_loader_tb.sv|*/mma_engine_tb.sv) ;;
+            *) flags+=(-Wno-fatal) ;;
+        esac
+        test/run_sv.sh "$build" "$bench" "${flags[@]}"
+        if [[ $bench == */b_loader_tb.sv ]]; then
+            (cd "$build/b_loader_tb" && ./Vb_loader_tb +final_error)
+        fi
     done
-    test/tensor_core/run.sh
     test/dot/run.sh
     make -C test/tma SIM_BUILD="$build/tma_cocotb" COCOTB_RESULTS_FILE="$build/tma.xml" BUILD_ARGS="-j$jobs"
-    check_xml "$build/tma.xml"
 fi
 if [[ $mode == workloads || $mode == all ]]; then
     test/workloads/build.sh "$build/workload_top"

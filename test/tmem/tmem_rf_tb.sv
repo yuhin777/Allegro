@@ -1,6 +1,6 @@
 // Drive RF store/load against one physical 32-bank partition. Timing below is
 // counted at the receiving edge, and every lane has distinct data.
-module tb_tmem_rf;
+module tmem_rf_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
   logic clk = 0, rst_n = 0, halt_i = 0, stop_i = 0;

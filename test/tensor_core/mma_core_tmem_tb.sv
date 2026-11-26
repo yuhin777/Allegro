@@ -72,7 +72,8 @@ module mma_core_tmem_tb;
   always #5 clk = !clk;
   initial begin
     #100000;
-    $fatal(1, "core TMEM test timed out");
+    $fatal(1, "core TMEM timeout cmd=%0d D=%0d rows_ready=%b release_all=%b first_ready=%b",
+           first_id.seq, prepare_payload.cmd.d_tmem, dut.a_ready[0], release_all, first_ready);
   end
   task automatic tick;
     @(posedge clk);

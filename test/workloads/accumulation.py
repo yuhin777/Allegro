@@ -2,11 +2,8 @@
 import cocotb
 import numpy as np
 from fa4_model import CASES, pack
-from fa4_replay import FrontEnd
-
-
-def descriptor(start):
-    return (1 << 46) | (16 << 32) | (8 << 16) | (start >> 4)
+from frontend import FrontEnd
+from mma_driver import Accumulation, descriptor
 
 
 def command(op, start, destination=0, input_d=1):
@@ -17,65 +14,6 @@ def command(op, start, destination=0, input_d=1):
                 (32, destination), (32, 0), (32, 0))
 
 
-class Accumulation(FrontEnd):
-    def __init__(self, dut):
-        super().__init__(dut, CASES["F1"], "uniform")
-        self.observe = self.capture
-        self.active = False
-        self.first_dots = []
-        self.events = {}
-        self.first_for_id = {}
-
-    def capture(self):
-        if not self.active:
-            return
-        d = self.d
-        def core(name):
-            return d._id("cores[0].core."+name, extended=False)
-        if int(core("operand_valid").value) and int(core("operand_ready").value):
-            op = int(core("dot_command").value) >> 388
-            if op not in self.first_for_id:
-                self.first_for_id[op] = self.cycle
-                self.first_dots.append(self.cycle)
-        writes = int(core("tm_wr_req_valid").value) & int(core("tm_wr_req_ready").value)
-        writing = d._id("tmem.fabric.part[0].partition.writing", extended=False)
-        if int(writing.value) & 1:
-            self.events[self.last_write_id]["actual_write"] = self.cycle
-        if writes & 1:
-            self.last_write_id = int(core("tm_wr_req_payload")[0].value) >> 178
-            self.events.setdefault(self.last_write_id, {})["write"] = self.cycle
-        if int(core("tm_wr_ack_valid").value) & int(core("tm_wr_ack_ready").value) & 1:
-            op = int(core("tm_wr_ack_payload")[0].value) >> 24
-            self.events.setdefault(op, {})["ack"] = self.cycle
-        if self.read("engine_done_valid") and self.read("engine_done_ready"):
-            op = self.read("engine_done_payload") >> 4
-            self.events.setdefault(op, {})["tracker"] = self.cycle
-
-    async def write_panel(self, start, values):
-        # Each 128B half contains one 16B atom in every physical group.
-        for group in range(16):
-            for half in range(2):
-                valid = 255
-                tags = []
-                for lane in range(8):
-                    addr = start + 256*group + 128*half + 16*lane
-                    op = self.sign(256)
-                    tag = pack((58, op), (4, 12), (16, lane))
-                    atom = values[8*group+lane, 8*half:8*half+8].astype("<f2")
-                    data = int.from_bytes(atom.tobytes(), "little")
-                    self.d.smem_wr_payload[lane].value = pack((78, tag), (32, addr), (16, 65535), (128, data))
-                    self.written_atoms[tag] = addr
-                    tags.append(tag)
-                self.d.lsu_quiescent.value = 0
-                while valid:
-                    self.d.smem_wr_valid.value = valid
-                    valid &= ~await self.edge("smem_wr_ready")
-                self.d.smem_wr_valid.value = 0
-        while self.written_atoms:
-            await self.edge()
-        self.d.lsu_quiescent.value = 1
-
-
 @cocotb.test()
 async def eight_accumulations(dut):
     fe = Accumulation(dut)
@@ -83,8 +21,7 @@ async def eight_accumulations(dut):
     await fe.edge()
     dut.rst_n.value = 1
     await fe.send("open_req", 1)
-    while "open_rsp" not in fe.lifecycle:
-        await fe.edge()
+    await fe.wait_until(lambda: "open_rsp" in fe.lifecycle, f"open response for epoch {fe.epoch}")
     alloc = fe.sign(320)
     await fe.send("tmem_manage", pack((58, alloc), (2, 0), (32, 0), (10, 512)))
     await fe.result(alloc, "tmem_manage_rsp")

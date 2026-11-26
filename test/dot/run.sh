@@ -53,9 +53,6 @@ for shared in 1 0; do
         driver.cpp -Wl,--start-group "model-$shared/libVarray_tb.a" "model-$shared/libverilated.a" -Wl,--end-group -o dot-test
     ./dot-test
 done
-verilator --binary --assert -j "${JOBS:-4}" --Mdir primitives --top-module primitive_tb \
-    "${sources[@]}" "$project/test/dot/primitive_tb.sv"
-primitives/Vprimitive_tb
-verilator --binary --timing --assert -j "${JOBS:-4}" --Mdir int8 --top-module int8_tb \
-    "${sources[@]}" "$project/test/dot/int8_tb.sv"
-int8/Vint8_tb
+for bench in primitive_tb int8_tb; do
+    "$project/test/run_sv.sh" "$work" "$project/test/dot/$bench.sv" "${sources[@]}"
+done

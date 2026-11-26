@@ -119,7 +119,12 @@ class Fabric:
         await Timer(1, units="ns")
         d.clk.value = 0
         self.cycle += 1
-        assert self.cycle < 20000
+        if self.cycle >= 20000:
+            raise TimeoutError(
+                f"cycle {self.cycle}, probe={probe}, last sequence={self.seq}, "
+                f"pending TMA IDs={list(self.expected_tma_status)}, "
+                f"held reads={len(self.held_reads)}, held store ACKs={len(self.store_acks)}"
+            )
         return ready
 
     async def reset(self):

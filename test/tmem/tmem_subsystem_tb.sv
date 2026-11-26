@@ -1,4 +1,4 @@
-module tb_tmem_subsystem;
+module tmem_subsystem_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
   logic clk = 0, rst_n = 0, halt_i = 0, stop_i = 0;

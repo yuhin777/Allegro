@@ -13,7 +13,7 @@ export LIBPYTHON_LOC := $(shell cocotb-config --libpython)
 sim: $(SIM_BUILD)/Vtop
 	$(RM) "$(COCOTB_RESULTS_FILE)"
 	"$<"
-	python3 -c 'import os, xml.etree.ElementTree as E; cases=E.parse(os.environ["COCOTB_RESULTS_FILE"]).findall(".//testcase"); assert cases and all(c.find(t) is None for c in cases for t in ("error","failure","skipped"))'
+	python3 ../check_results.py "$(COCOTB_RESULTS_FILE)"
 
 $(SIM_BUILD)/Vtop: $(addprefix $(REPO)/,$(shell cat $(REPO)/rtl/files.f)) build.sh model.vlt blackwell_test_memory_ack.sv
 	./build.sh "$(SIM_BUILD)"

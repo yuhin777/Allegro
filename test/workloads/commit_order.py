@@ -2,7 +2,8 @@
 import cocotb
 import numpy as np
 from cocotb.triggers import Timer
-from accumulation import Accumulation, descriptor
+from linear_driver import LinearFrontEnd
+from mma_driver import Accumulation, descriptor
 from fa4_model import pack
 
 
@@ -22,8 +23,7 @@ async def exercise(d, fail):
     await fe.edge()
     d.rst_n.value = 1
     await fe.send("open_req", 1)
-    while "open_rsp" not in fe.lifecycle:
-        await fe.edge()
+    await fe.wait_until(lambda: "open_rsp" in fe.lifecycle, f"open response for epoch {fe.epoch}")
     a = fe.sign(320)
     await fe.send("tmem_manage", pack((58, a), (2, 0), (32, 0), (10, 512)))
     await fe.result(a, "tmem_manage_rsp")
@@ -83,15 +83,13 @@ async def old_write_error_after_younger_arrival(dut):
 
 @cocotb.test()
 async def empty_commits_and_lifecycle_exclusion(d):
-    from linear_replay import LinearFrontEnd
     fe = LinearFrontEnd(d)
     await fe.open()
     a, b = 256, 264
     await fe.result(await fe.barrier(b, 0, count=1), "bar_rsp")
     d.bar_rsp_ready.value = 0
     init = await fe.barrier(a, 0, count=1)
-    while not fe.read("bar_rsp_valid"):
-        await fe.edge()
+    await fe.wait_until(lambda: fe.read("bar_rsp_valid"), f"barrier response for {init}")
     held = fe.read("bar_rsp_payload")
     assert held >> 5 == init
 
@@ -107,8 +105,7 @@ async def empty_commits_and_lifecycle_exclusion(d):
             break
     assert other in fe.results
     d.bar_rsp_ready.value = 1
-    while not await fe.edge("tc_commit_ready"):
-        pass
+    await fe.wait_edge("tc_commit_ready", transaction=same)
     d.tc_commit_valid.value = 0
     await fe.result(init, "bar_rsp")
     for op in (other, same):
@@ -116,8 +113,7 @@ async def empty_commits_and_lifecycle_exclusion(d):
 
     d.order_req_ready.value = 0
     wait = await fe.barrier(a, 4)
-    while not fe.read("order_req_valid"):
-        await fe.edge()
+    await fe.wait_until(lambda: fe.read("order_req_valid"), f"order request for barrier wait {wait}")
     order = fe.read("order_req_payload")
     for _ in range(4):
         await fe.edge()
@@ -129,8 +125,7 @@ async def empty_commits_and_lifecycle_exclusion(d):
     # A held INVAL result reserves its address through its result handshake.
     d.bar_rsp_ready.value = 0
     inv = await fe.barrier(a, 1)
-    while not fe.read("bar_rsp_valid"):
-        await fe.edge()
+    await fe.wait_until(lambda: fe.read("bar_rsp_valid"), f"barrier response for {inv}")
     d.tc_commit_payload.value = pack((58, fe.sign(7)), (32, a))
     for _ in range(3):
         assert not await fe.edge("tc_commit_ready")
@@ -138,5 +133,4 @@ async def empty_commits_and_lifecycle_exclusion(d):
     await fe.result(inv, "bar_rsp")
     await fe.result(await fe.barrier(b, 1), "bar_rsp")
     await fe.send("close_req")
-    while "close_rsp" not in fe.lifecycle:
-        await fe.edge()
+    await fe.wait_until(lambda: "close_rsp" in fe.lifecycle, f"close response for epoch {fe.epoch}")
