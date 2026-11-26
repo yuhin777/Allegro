@@ -44,7 +44,8 @@ module blackwell_tma_setup
   localparam logic [3:0] ClipSectorProduct = 4'd10;
   logic [5:0] launched[2], completed[2];
   logic [2:0][32:0] highs[2];
-  logic [63:0] rows[2], elements[2];
+  logic [24:0] rows[2];  // Three outer box extents, each at most 256.
+  logic [63:0] elements[2];
   logic [75:0] low_addr[2], high_addr[2];
   logic compute_rr, found, chosen, publication, publication_slot, free_slot;
   logic [ 3:0] task_id;
@@ -53,9 +54,20 @@ module blackwell_tma_setup
   typedef struct packed {
     logic valid, slot;
     logic [3:0] task_id;
-    logic [75:0] value;
-  } product_t;
-  product_t pipe[4];
+  } product_tag_t;
+  product_tag_t pipe[4];
+
+  // S0 splits A at bit 16. High endpoints use up to 33 unsigned bits;
+  // negative low endpoints arrive sign-extended from the signed coordinate.
+  logic [15:0] a_lo_q;
+  logic signed [17:0] a_hi_q;
+  logic [39:0] b_q;
+  logic [35:0] ll_q, lh_q;
+  logic signed [37:0] hl_q, hh_q;
+  logic [55:0] lo_product_q;
+  logic signed [57:0] hi_product_q;
+  logic [11:0] bias_s1, bias_s2;
+  logic [75:0] product_value;
   function automatic tensor_decoded_t decode(input logic [1023:0] raw);
     tensor_decoded_t m;
     m = '0;
@@ -118,7 +130,7 @@ module blackwell_tma_setup
           found = 1;
           chosen = s;
           task_id = product_step[s];
-          mul_a = product_step[s] == 0 ? 64'd1 : rows[s];
+          mul_a = product_step[s] == 0 ? 64'd1 : 64'(rows[s]);
           mul_b = 40'(ctx[s].map.box[2'(product_step[s]+4'd1)]);
         end else begin
           for (int n = 0; n < 6; n++)
@@ -254,7 +266,7 @@ module blackwell_tma_setup
           if (!valid_geometry) fault <= 1;
           ctx[i].total_bytes <= total;
           ctx[i].inner_bytes <= linear ? '0 : inner[15:0];
-          ctx[i].row_count <= linear ? '0 : rows[i][24:0];
+          ctx[i].row_count <= linear ? '0 : rows[i];
           if (linear) ctx[i].gmem_origin <= ctx[i].cmd.global_addr;
           span[i].smem_empty <= empty_s;
           span[i].gmem_empty <= empty_g;
@@ -266,12 +278,23 @@ module blackwell_tma_setup
         end
       end
       for (int i = 1; i < 4; i++) pipe[i] <= pipe[i-1];
-      pipe[0] <= '{
-          valid: found,
-          slot: chosen,
-          task_id: task_id,
-          value: 76'(mul_a) * 76'(mul_b)
-      };
+      pipe[0] <= '{valid: found, slot: chosen, task_id: task_id};
+      a_lo_q <= mul_a[15:0];
+      a_hi_q <= $signed({mul_a[63], mul_a[32:16]});
+      b_q <= mul_b;
+      // S1 forms the four half-products; B halves are unsigned on both paths.
+      ll_q <= a_lo_q * b_q[19:0];
+      lh_q <= a_lo_q * b_q[39:20];
+      hl_q <= a_hi_q * $signed({1'b0, b_q[19:0]});
+      hh_q <= a_hi_q * $signed({1'b0, b_q[39:20]});
+      // For negative A the original unsigned 64-bit encoding adds 2^64.
+      // Only the low 12 bits of that correction survive in the 76-bit result.
+      bias_s1 <= a_hi_q[17] ? b_q[11:0] : '0;
+      // S2 joins B halves; S3 combines the two A halves at their bit weights.
+      lo_product_q <= 56'(ll_q) + {lh_q, 20'b0};
+      hi_product_q <= 58'(hl_q) + $signed({hh_q, 20'b0});
+      bias_s2 <= bias_s1;
+      product_value <= {bias_s2, 8'b0, lo_product_q} + (76'(hi_product_q) << 16);
       if (found) begin
         compute_rr <= !chosen;
         if (task_id < 4 || task_id == ClipSectorProduct) mult_busy[chosen] <= 1;
@@ -283,22 +306,22 @@ module blackwell_tma_setup
         s = pipe[3].slot;
         n = pipe[3].task_id;
         if (n == ClipSectorProduct) begin
-          last_sector[s] <= pipe[3].value[25:0] + 26'(last_local[s][clip_dim[s]]);
+          last_sector[s] <= product_value[25:0] + 26'(last_local[s][clip_dim[s]]);
           mult_busy[s] <= 0;
           if (clip_dim[s] == 1) stage[s] <= CHECK;
           else clip_dim[s] <= clip_dim[s] - 1'b1;
         end else if (n < 4) begin
-          if (n == 3) elements[s] <= pipe[3].value[63:0];
-          else rows[s] <= pipe[3].value[63:0];
+          if (n == 3) elements[s] <= product_value[63:0];
+          else rows[s] <= product_value[24:0];
           mult_busy[s] <= 0;
           product_step[s] <= n + 4'd1;
         end else begin
-          if (n[0]) high_addr[s] <= high_addr[s] + pipe[3].value;
+          if (n[0]) high_addr[s] <= high_addr[s] + product_value;
           else begin
             // Negative starts clip to zero for the checked span. Their signed
             // stride contributions still belong to the virtual walker origin.
-            ctx[s].gmem_origin <= ctx[s].gmem_origin + pipe[3].value[63:0];
-            if (!ctx[s].cmd.coord[(int'(n)-4)/2+1][31]) low_addr[s] <= low_addr[s] + pipe[3].value;
+            ctx[s].gmem_origin <= ctx[s].gmem_origin + product_value[63:0];
+            if (!ctx[s].cmd.coord[(int'(n)-4)/2+1][31]) low_addr[s] <= low_addr[s] + product_value;
           end
           completed[s][3'(n-4'd4)] <= 1;
         end

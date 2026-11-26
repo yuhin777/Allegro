@@ -16,3 +16,4 @@ rtl/tma/blackwell_tma_completion_tracker.sv
 rtl/tma/blackwell_tma_data_path.sv
 rtl/tma/blackwell_tma_unit.sv
 rtl/top/blackwell_smem_subsystem.sv
+test/tma/setup_product_check.sv
