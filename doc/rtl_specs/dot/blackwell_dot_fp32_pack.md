@@ -4,13 +4,13 @@
 
 This combinational encoder converts the final reduction `sum×2^base_exp` or a special result to FP32. Parameters are `SUM_W≥24, EXP_W≥2, CANONICAL_ZERO=1`.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| sum | Input | signed[SUM_W] | Parent reduction | Combinational finite sum |
-| base_exp | Input | signed[EXP_W] | Parent alignment control | Combinational, paired with sum |
-| special_valid | Input | 1 bit | Parent special-value logic | Combinational special_result select |
-| special_result | Input | bits[32] | Parent special-value logic | Used when special_valid is 1 |
-| result | Output | bits[32] | Parent result stage | Combinational output without clock or handshake |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `sum` | Input | signed SUM_W bits | Parent reduction | Combinational finite sum. |
+| `base_exp` | Input | signed EXP_W bits | Parent alignment control | Combinational, paired with sum. |
+| `special_valid` | Input | 1 bit | Parent special-value logic | Combinational special_result select. |
+| `special_result` | Input | 32 bits | Parent special-value logic | Used when special_valid is 1. |
+| `result` | Output | 32 bits | Parent result stage | Combinational output without clock or handshake. |
 
 ## Functionality
 

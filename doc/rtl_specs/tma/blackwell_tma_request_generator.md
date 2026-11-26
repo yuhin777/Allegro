@@ -4,11 +4,16 @@
 
 The single walker consumes ARMED setup slots in FIFO order and generates segments for the tracker. Each S0 segment acceptance advances its cursor. S1 and S2 may hold different tickets at the same time. [Address algorithm](blackwell_tma_setup.md#tensor-map) · [Segment definition](#segment)
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| head / context, walk_start / slot_release | Input [tma_context_ref_t](blackwell_tma_setup.md#context) / [tma_context_t](blackwell_tma_setup.md#context), two tma_context_ref_t outputs | TMA unit, setup | head is the armed FIFO head with begin complete and successful binding if required. First S0.fire pulses walk_start. A single segment may also assert slot_release on that edge. Release determines setup's final state. Pulse release once when the last segment or close marker fires into S0. The unit/setup must accept it. |
-| segment / generated | Output [tma_segment_t](#segment) / [tma_finish_t](blackwell_tma_completion_tracker.md#transfer-types) | tracker | S2 sends ordinary segments to allocate. The final allocate.fire also closes the ticket in the tracker. An empty enumeration passes a close-only marker through the same pipeline to generated and takes no tag. Both forms close each ticket exactly once. |
-| drained / fault | Output bit / bit | TMA unit | Cursor, three elastic stages, and held generated empty / sticky identity fault. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `head` | Input | [tma_context_ref_t](blackwell_tma_setup.md#context) (6 bits) | TMA unit | Select the armed FIFO head after begin and any required binding. Consume it on the first S0.fire. |
+| `context` | Input | [tma_context_t](blackwell_tma_setup.md#context) (1,008 bits) | Setup | Level. Read the selected slot before the S0 acceptance edge. |
+| `walk_start` | Output | tma_context_ref_t (6 bits) | TMA unit | Pulse on the first S0.fire. |
+| `slot_release` | Output | tma_context_ref_t (6 bits) | TMA unit | Pulse once on the last segment or close marker entering S0. May coincide with walk_start. Release determines the slot’s final state. |
+| `segment` | Output | [tma_segment_t](#segment) (193 bits) | tracker | On `segment.fire`, send an ordinary S2 segment to allocate. Its final handshake also closes enumeration. |
+| `generated` | Output | [tma_finish_t](blackwell_tma_completion_tracker.md#transfer-types) (5 bits) | tracker | On `generated.fire`, send the empty enumeration’s close-only marker without taking a tag. |
+| `drained` | Output | 1 bit | Top level | Assert with the cursor, three elastic stages and held generated event empty. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

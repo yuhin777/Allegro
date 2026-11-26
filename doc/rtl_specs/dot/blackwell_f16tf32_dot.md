@@ -4,10 +4,10 @@
 
 Computes one complete FP16/BF16 dot16 or TF32 dot8 using `C_eff+ΣA*B`. Each core computes 64 wide dot products in parallel. TF32 enables only the first eight terms. The other terms do not participate in special-value handling or emax. The core unpacks in logical K order. [dot array](../tensor_core/blackwell_tc_dot_array.md) applies negate, decodes each row or column, and broadcasts the result. See [input formats](blackwell_f16tf32_dot.md#formats) for numerical formats.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| req | Input | a[16],b[16] each contain `{class2,sign1,sig11,e:s8}` elements, plus c32 and scale_input_d4, 740 bits total | TC dot array | req.fire captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and element order |
-| rsp | Output | result32, 32bit | TC dot array | rsp.fire delivers the FP32 result |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `req` | Input | 740 bits (16 A and 16 B elements, each with 2-bit class, sign, 11-bit significand and signed 8-bit exponent plus 32-bit C and 4-bit scale_input_d) | TC dot array | `req.fire` captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and element order. |
+| `rsp` | Output | FP32 (32 bits) | TC dot array | `rsp.fire` delivers the FP32 result. |
 
 ```mermaid
 flowchart LR

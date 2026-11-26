@@ -4,10 +4,10 @@
 
 Computes a complete 32-term low-precision dot with any A/B combination of E4M3/E5M2/E3M2/E2M3/E2M1 and optional UE8M0 1X scale. Each core computes 64 K32 dots per issued microtile. The core places raw elements in the low bits of each byte. The array decodes and broadcasts elements and scales by row or column.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| req | Input | a[32],b[32] each contain `{class2,sign1,sig4,e:s5}` elements, plus c32 and one `{nan1,e:s8}` each for scale_a/scale_b, 818 bits total | TC dot array | req.fire captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and bit order |
-| rsp | Output | result32, 32bit | TC dot array | rsp.fire delivers the result |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `req` | Input | 818 bits (32 A and 32 B elements, each with 2-bit class, sign, 4-bit significand and signed 5-bit exponent plus 32-bit C and two scales, each with a NaN bit and signed 8-bit exponent) | TC dot array | `req.fire` captures S0. See [dot array](../tensor_core/blackwell_tc_dot_array.md) for class and bit order. |
+| `rsp` | Output | FP32 (32 bits) | TC dot array | `rsp.fire` delivers the result. |
 
 ```mermaid
 flowchart LR

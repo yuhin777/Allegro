@@ -4,16 +4,24 @@
 
 Track data commands by the general-purpose ticket already allocated by the unit. All unfinished commands share 64 segment tags. Match each segment return by {tag,phase}. Long-lived state is independent of setup slots.
 
-| Channel and direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| begin / owner_view[18] inputs | ticket5 / [tma_owner_view_t](blackwell_tma_unit.md#owner-view)[18] | TMA unit | begin initializes progress once for the specified ticket and may coincide with another command's allocate/retire. Read identity, direction, successful binding, and logical byte count combinationally by ticket. |
-| allocate / generated inputs | [tma_segment_t](blackwell_tma_request_generator.md#segment) / [tma_finish_t](#transfer-types) | walker | The final segment allocates and sets generated for its ticket on the same allocate.fire edge. A close-only marker handshakes separately. After closure, allocate no further segments for that ticket. |
-| start / tag_view[64] outputs | [tma_start_t](#transfer-types) / [tma_tag_t](#transfer-types) combinational view | data path | start delivers the segment and key. The view reflects pre-edge state. Address each event by key. |
-| event[20] / data_ref[64] inputs | [tma_xfer_event_t](#transfer-types) / 1-bit level per entry | data path | Register one event on the edge of each bus fire. data_ref indicates that the data path still references the tag. |
-| ticket_busy / target_visible outputs | One bit per general-purpose ticket on each output | TMA unit | busy spans begin to finish.fire. Set target_visible when generated and all segments' targets have received their required ACKs. Source progress, target visibility, and object acknowledgment release their respective dependencies separately. |
-| progress / finish outputs | [tma_progress_t](#transfer-types) / tma_finish_t | TMA unit | Deliver source progress once, full progress once, and the final result to the unit. Hold when stalled. |
-| producer_done output / producer_rsp input | [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) / op_done_t | Barrier front end (via unit) | One notification and one matching acknowledgment per bound load. |
-| drained / fault outputs | 1 bit each | TMA unit | No remaining transactions, held selections, or command obligations / sticky protocol error. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `begin` | Input | 5 bits | TMA unit | Initialize progress once on admission of the ticket. Another ticket may allocate or retire on that edge. |
+| `owner_view[18]` | Input | [tma_owner_view_t](blackwell_tma_unit.md#owner-view) (189 bits per ticket) | TMA unit | Level. Read identity, direction, binding and logical byte count by ticket. |
+| `allocate` | Input | [tma_segment_t](blackwell_tma_request_generator.md#segment) (193 bits) | walker | On `allocate.fire`, allocate an ordinary segment. The final segment also closes this ticket. |
+| `generated` | Input | [tma_finish_t](#transfer-types) (5 bits) | walker | On `generated.fire`, close an empty enumeration without allocating a tag. |
+| `start` | Output | [tma_start_t](#transfer-types) (200 bits) | data path | On `start.fire`, deliver the segment and its transaction key. |
+| `tag_view[64]` | Output | [tma_tag_t](#transfer-types) (66 bits per tag) | data path | Level. Use pre-edge tag state to resolve each event by key. |
+| `event[20]` | Input | [tma_xfer_event_t](#transfer-types) (13 bits per event) | data path | Register each valid event on the corresponding transfer edge. |
+| `data_ref[64]` | Input | 1 bit per tag | data path | Level. Sample outstanding data-path references before tag reuse. |
+| `ticket_busy` | Output | 1 bit per general ticket | TMA unit | Level. Assert from begin through `finish.fire`. |
+| `target_visible` | Output | 1 bit per general ticket | TMA unit | Level. Assert after generation and all required target ACKs. |
+| `progress` | Output | [tma_progress_t](#transfer-types) (7 bits) | TMA unit | On `progress.fire`, publish source and full progress once each. Hold until accepted. |
+| `finish` | Output | tma_finish_t (5 bits) | TMA unit | On `finish.fire`, deliver the final ticket result once and hold until accepted. |
+| `producer_done` | Output | [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (94 bits) | Barrier front end (via unit) | On `producer_done.fire`, notify once for the bound load. |
+| `producer_rsp` | Input | op_done_t (62 bits) | Barrier front end (via unit) | On `producer_rsp.fire`, settle the matching object update. |
+| `drained` | Output | 1 bit | Top level | Assert when no transactions, held selections or command obligations remain. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ```mermaid
 flowchart LR

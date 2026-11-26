@@ -4,16 +4,17 @@
 
 The 32 live records track LD/ST from registration through complete after ordinary done consumption. One ST wait snapshot waits only for unfinished stores of the same warp preceding its cutoff.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `alloc` | Input, [rf_track_alloc_t](#wait-types), 59 bits | Top-level R_RF_ISSUE | `{id:58,store:1}`, register before engine execution. |
-| `slot` | Output, [rf_track_slot_t](#wait-types), 63 bits | Top-level R_RF_ISSUE | Original ID and 5-bit live slot. |
-| `complete` | Input, [rf_track_done_t](#wait-types), 67 bits | LD/ST engine | `{slot:5,id:58,status:4}`, sent after ordinary done consumption. |
-| `wait_cmd` | Input, [tmem_wait_cmd_t](#wait-types), 58 bits | Software front end | Capture this warp's stores preceding the cutoff. |
-| `wait_done` | Output, [op_done_t](../top/blackwell_async_subsystem_top.md#identity), 62 bits | Software front end | Publish `{id,OK}` once pending reaches zero. |
-| `epoch_i` | Input, 16 bits, no handshake | Top level | Current CTA lifetime. |
-| `stop_i` | Input, 1 bit | Top level | Stop new alloc/wait. Registered slots, completes, and results continue. |
-| `drained_o` / `fault_o` | Output, 1 bit each | Top level | All live/wait/slot and held outputs empty / runtime fault. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `alloc` | Input | [rf_track_alloc_t](#wait-types) (59 bits) | Top-level R_RF_ISSUE | Transfer on `alloc.fire`. `{id:58,store:1}`, register before engine execution. |
+| `slot` | Output | [rf_track_slot_t](#wait-types) (63 bits) | Top-level R_RF_ISSUE | Transfer on `slot.fire`. Original ID and 5-bit live slot. |
+| `complete` | Input | [rf_track_done_t](#wait-types) (67 bits) | LD/ST engine | Transfer on `complete.fire`. `{slot:5,id:58,status:4}`, sent after ordinary done consumption. |
+| `wait_cmd` | Input | [tmem_wait_cmd_t](#wait-types) (58 bits) | Software front end | Transfer on `wait_cmd.fire`. Capture this warp's stores preceding the cutoff. |
+| `wait_done` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | Software front end | Transfer on `wait_done.fire`. Publish `{id,OK}` once pending reaches zero. |
+| `epoch_i` | Input | 16 bits | Top level | Level. Current CTA lifetime. |
+| `stop_i` | Input | 1 bit | Top level | Level. Stop new alloc/wait. Registered slots, completes, and results continue. |
+| `drained_o` | Output | 1 bit | Top level | Assert after live entries, waits, slot responses and held outputs drain. |
+| `fault_o` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ## Functionality
 

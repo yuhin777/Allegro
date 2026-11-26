@@ -4,15 +4,24 @@
 
 The TMA top level owns the command FIFO, ticket table, and bulk group member ages. Data commands enter one address generator in queue order. Issued commands may concurrently await source returns, destination write acknowledgments, or a barrier. Setup owns complete address-generation contexts, tickets own long-lived command identities, and the tracker owns segment state. [Supported PTX](../../proposals/supported_ptx.md)
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| cmd / rsp | Input [tma_cmd_t](#command) / output [tma_rsp_t](#command) | Software front end | Reserve a ticket at acceptance. Responses may reorder across issuers. Hold selection until delivery. |
-| gmem_req / gmem_rsp | Output [gmem_req_t](#gmem-types) / input [gmem_rsp_t](#gmem-types) | GMEM | Single 128 B bus. Route responses by class. |
-| smem_req[8] / smem_rsp[8] | Output [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) / input [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | Client8 port g directly connects to SMEM group g. Load writes and ACKs, store reads and returns handshake independently per group. |
-| order_req / order_rsp | Output [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) / input [op_done_t](../top/blackwell_async_subsystem_top.md#identity) | Ordering service | Explicit PROXY_FENCE instruction request and acknowledgment. |
-| bar_bind / bar_bind_rsp | Output [bar_bind_t](../mbarrier/blackwell_mbarrier_frontend.md#command) / input op_done_t | barrier frontend | Bind a load to the current phase after successful precheck. |
-| producer_done / producer_rsp | Output [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) / input op_done_t | barrier frontend | One load completion, followed by acknowledgment of the matching object update. |
-| stop / epoch / drained / fault | Input bit / input u16 / output bit / output bit | Top level | stop closes new external cmd and permits old tickets to proceed. drained includes held responses. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `cmd` | Input | [tma_cmd_t](#command) (478 bits) | Software front end | On `cmd.fire`, reserve a ticket for the command. |
+| `rsp` | Output | [tma_rsp_t](#command) (126 bits) | Software front end | On `rsp.fire`, deliver the held response. Responses may reorder across issuers. |
+| `gmem_req` | Output | [gmem_req_t](#gmem-types) (1,292 bits) | GMEM | On `gmem_req.fire`, issue on the shared 128 B bus. |
+| `gmem_rsp` | Input | [gmem_rsp_t](#gmem-types) (1,037 bits) | GMEM | On `gmem_rsp.fire`, route the return by class. |
+| `smem_req[8]` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | On `smem_req.fire`, issue independently per client 8 group for load writes and store reads. |
+| `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (211 bits) | SMEM fabric | On `smem_rsp.fire`, accept the matching group’s write ACK or read data. |
+| `order_req` | Output | [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) (163 bits) | Ordering service | On `order_req.fire`, submit the explicit PROXY_FENCE. |
+| `order_rsp` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | Ordering service | On `order_rsp.fire`, accept its ordering acknowledgment. |
+| `bar_bind` | Output | [bar_bind_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (90 bits) | barrier frontend | On `bar_bind.fire`, bind the load after successful precheck. |
+| `bar_bind_rsp` | Input | op_done_t (62 bits) | barrier frontend | On `bar_bind_rsp.fire`, capture the binding status. |
+| `producer_done` | Output | [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (94 bits) | barrier frontend | On `producer_done.fire`, submit the bound load’s completion once. |
+| `producer_rsp` | Input | op_done_t (62 bits) | barrier frontend | On `producer_rsp.fire`, accept the matching object update acknowledgment. |
+| `stop` | Input | 1 bit | Top level | Close new external commands. Accepted tickets continue. |
+| `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

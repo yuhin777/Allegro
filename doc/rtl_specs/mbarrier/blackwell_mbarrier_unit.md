@@ -4,18 +4,19 @@
 
 This module owns the sole four-entry object cache and updates objects atomically. Software commands, wait probes, TC arrival, and TMA complete-tx share the updater. A waiting thread does not occupy the update pipeline. See [mbarrier_object](blackwell_mbarrier_unit.md#object) for object formulas, [mbarrier_command](blackwell_mbarrier_frontend.md#command) for interface types, and [common](../top/blackwell_async_subsystem_top.md#common-protocol) for handshakes.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| `service_req` | Input | [bar_service_req_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | Caller has reserved the route/slot result position |
-| `service_rsp` | Output | [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | Atomic commit result, held until accepted |
-| `change` | Output | [bar_change_t](#change-type) + pulse | wait | Broadcast new phase/initialized on the commit edge without backpressure |
-| `back_req` | Output | [bar_back_req_t](blackwell_mbarrier_backing.md#backing-types) | backing | Request an 8 B fill or writeback |
-| `back_rsp` | Input | [bar_back_rsp_t](blackwell_mbarrier_backing.md#backing-types) | backing | Must match the sole outstanding backing operation |
-| `flush_req` | Input | Event without payload | Top level | Upstream has stopped new external commands |
-| `flush_rsp` | Output | status_t | Top level | OK after successful ACKs for every dirty write |
-| `epoch` | Input | 16bit | Top level | Current CTA lifetime |
-| `stop` | Input | 1 | Top level | Drain indication. Does not block services derived from accepted commands or flush |
-| `drained` / `fault` | Output | 1 bit each | Top level | Transactions drained / protocol fault requiring isolated reset |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `service_req` | Input | [bar_service_req_t](blackwell_mbarrier_frontend.md#command) (199 bits) | barrier frontend | Transfer on `service_req.fire`. Caller has reserved the route/slot result position. |
+| `service_rsp` | Output | [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) (72 bits) | barrier frontend | Transfer on `service_rsp.fire`. Atomic commit result, held until accepted. |
+| `change` | Output | [bar_change_t](#change-type) (34 bits) | wait | Broadcast new phase/initialized on the commit edge without backpressure. |
+| `back_req` | Output | [bar_back_req_t](blackwell_mbarrier_backing.md#backing-types) (97 bits) | backing | Transfer on `back_req.fire`. Request an 8 B fill or writeback. |
+| `back_rsp` | Input | [bar_back_rsp_t](blackwell_mbarrier_backing.md#backing-types) (68 bits) | backing | Transfer on `back_rsp.fire`. Must match the sole outstanding backing operation. |
+| `flush_req` | Input | Event without payload | Top level | Transfer on `flush_req.fire`. Upstream has stopped new external commands. |
+| `flush_rsp` | Output | status_t (4 bits) | Top level | Transfer on `flush_rsp.fire`. OK after successful ACKs for every dirty write. |
+| `epoch` | Input | 16 bits | Top level | Level. Current CTA lifetime. |
+| `stop` | Input | 1 bit | Top level | Level. Drain indication. Does not block services derived from accepted commands or flush. |
+| `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ```mermaid
 flowchart LR

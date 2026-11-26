@@ -4,17 +4,18 @@
 
 Instance parameter `PARTITION_ID=0…3` selects 32 consecutive TMEM banks. Each bank has 128 words ×128 bits and 1R1W. Capacity is 64 KiB per partition and 256 KiB across four partitions.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `clk`, `rst_n` | Input, 1 bit | Top-level clock domain | Clear control without initializing SRAM data. |
-| `rd_req[32]` | Input channel, [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | tag78, global lane7, word7, byte_mask16. |
-| `rd_rsp[32]` | Output channel, [tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | tag78, data128, status4. |
-| `wr_req[32]` | Input channel, [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | tag, lane, word, byte mask, data128. |
-| `wr_ack[32]` | Output channel, [tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | Tag/status corresponding to an actual write. |
-| `read_credit_o[32]` | Output, 2 bits each, no handshake | TMEM fabric | 0…3 free return reservations. |
-| `write_credit_o` | Output, 2 bits, no handshake | TMEM fabric | Number of ACK identity frames available for new R_W acceptance, 0…2. |
-| `drained_o` | Output, 1 bit, no handshake | TMEM fabric | No granted read, return, R_W, or ACK. |
-| `fault_o` | Output, 1 bit, no handshake | TMEM fabric | Protocol fault level aggregated at the top. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `clk` | Input | 1 bit | Top-level clock domain | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | Top-level clock domain | Sample low on a rising edge. Clear control without initializing SRAM data. |
+| `rd_req[32]` | Input | [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions) (108 bits) | TMEM fabric | Transfer on `rd_req.fire`. tag78, global lane7, word7, byte_mask16. |
+| `rd_rsp[32]` | Output | [tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) (210 bits) | TMEM fabric | Transfer on `rd_rsp.fire`. tag78, data128, status4. |
+| `wr_req[32]` | Input | [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions) (236 bits) | TMEM fabric | Transfer on `wr_req.fire`. tag, lane, word, byte mask, data128. |
+| `wr_ack[32]` | Output | [tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) (82 bits) | TMEM fabric | Transfer on `wr_ack.fire`. Tag/status corresponding to an actual write. |
+| `read_credit_o[32]` | Output | 2 bits each | TMEM fabric | Level. 0…3 free return reservations. |
+| `write_credit_o` | Output | 2 bits | TMEM fabric | Level. Number of ACK identity frames available for new R_W acceptance, 0…2. |
+| `drained_o` | Output | 1 bit | TMEM fabric | Level. No granted read, return, R_W, or ACK. |
+| `fault_o` | Output | 1 bit | TMEM fabric | Level. Protocol fault level aggregated at the top. |
 
 ```mermaid
 flowchart LR

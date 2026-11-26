@@ -4,12 +4,12 @@
 
 This combinational aligner implements rounding toward zero by shifting the unsigned magnitude right before applying the sign. Parameters are `MAG_W≥1, TERM_W=MAG_W+1, EXP_W≥2`.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| term_valid, term_sign | Input | 1 bit each | Dot alignment stage | Combinational valid and sign |
-| term_mag | Input | unsigned MAG_W | Dot alignment stage | Combinational unsigned magnitude |
-| term_exp, emax | Input | Signed EXP_W each | Dot alignment stage | Combinational signed exponents |
-| term | Output | signed TERM_W | Dot alignment stage | Combinational aligned term |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `term_valid`, `term_sign` | Input | 1 bit each | Dot alignment stage | Combinational valid and sign. |
+| `term_mag` | Input | unsigned MAG_W bits | Dot alignment stage | Combinational unsigned magnitude. |
+| `term_exp`, `emax` | Input | signed EXP_W bits each | Dot alignment stage | Combinational signed exponents. |
+| `term` | Output | signed TERM_W bits | Dot alignment stage | Combinational aligned term. |
 
 ## Functionality
 

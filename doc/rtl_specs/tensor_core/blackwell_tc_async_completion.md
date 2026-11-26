@@ -4,15 +4,17 @@
 
 One R_COMMIT converts a commit whose cutoff set is satisfied into one barrier arrival. After software consumes the result, the module returns the original slot to the tracker.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| `ready_commit` | Input | [tc_ready_commit_t](blackwell_tc_completion_tracker.md#commit-contract), 93 | TC tracker | pending=0 and issuer order eligible |
-| `tc_bar_req` | Output | [tc_bar_req_t](../mbarrier/blackwell_mbarrier_frontend.md#command), 90 | barrier frontend | `{id:58,addr:32}`, fixed ARRIVE(1) |
-| `tc_bar_rsp` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity), 62 | barrier frontend | OK confirms atomic object update. An error raises fault |
-| `commit_done` | Output | op_done_t, 62 | Software front end | Software-consumable commit result |
-| `commit_retire` | Output | [tc_commit_retire_t](blackwell_tc_completion_tracker.md#commit-contract), 61 | TC tracker | `{slot:3,id:58}`, releases the tracker slot |
-| `epoch/stop` | Input | 16/1 | Top level | Current CTA / drain indication. Continue accepting internal ready_commit |
-| `drained/fault` | Output | 1 bit each | Top level | No held transaction or result / response protocol fault |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `ready_commit` | Input | [tc_ready_commit_t](blackwell_tc_completion_tracker.md#commit-contract) (93 bits) | TC tracker | Transfer on `ready_commit.fire`. pending=0 and issuer order eligible. |
+| `tc_bar_req` | Output | [tc_bar_req_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (90 bits) | barrier frontend | Transfer on `tc_bar_req.fire`. `{id:58,addr:32}`, fixed ARRIVE(1) |
+| `tc_bar_rsp` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | barrier frontend | Transfer on `tc_bar_rsp.fire`. OK confirms atomic object update. An error raises fault. |
+| `commit_done` | Output | op_done_t (62 bits) | Software front end | Transfer on `commit_done.fire`. Software-consumable commit result. |
+| `commit_retire` | Output | [tc_commit_retire_t](blackwell_tc_completion_tracker.md#commit-contract) (61 bits) | TC tracker | Transfer on `commit_retire.fire`. `{slot:3,id:58}`, releases the tracker slot. |
+| `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `stop` | Input | 1 bit | Top level | Drain level. Continue accepting internal ready_commit work. |
+| `drained` | Output | 1 bit | Top level | Level asserted when no transaction or result is held. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ## Functionality
 

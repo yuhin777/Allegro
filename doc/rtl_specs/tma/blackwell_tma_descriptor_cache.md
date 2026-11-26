@@ -4,11 +4,15 @@
 
 Supplies the unit with read-only project [Tensor Map](blackwell_tma_setup.md#tensor-map) for this CTA/epoch. Demand and explicit prefetch.tensormap share the same resources. Prefetch handles descriptors only. One miss creates exactly one GMEM line read. The image is read-only throughout the epoch.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| lookup, result | Input [tma_desc_req_t](#descriptor-types), output [tma_desc_rsp_t](#descriptor-types) | TMA unit | Parameters map to an aligned address. Hold ticket/status/raw until unit fire. |
-| gmem_req/rsp | Output gmem_req_t, input gmem_rsp_t | GMEM (via unit) | READ128 with all mask bits set. The 9-bit ID uses class=1, tag=0, and the current sole miss owner's phase. Drive ready per the [unit return handshake](blackwell_tma_unit.md#gmem-types). |
-| epoch, drained, fault | Input u16, output bit, output bit | TMA unit | A normal epoch transition clears valid only after outstanding work drains. fault covers GMEM errors and protocol violations. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `lookup` | Input | [tma_desc_req_t](#descriptor-types) (128 bits) | TMA unit | On `lookup.fire`, capture the aligned descriptor address and ticket. |
+| `result` | Output | [tma_desc_rsp_t](#descriptor-types) (1,033 bits) | TMA unit | On `result.fire`, deliver ticket, status and raw descriptor. Hold until consumed. |
+| `gmem_req` | Output | gmem_req_t (1,292 bits) | GMEM (via unit) | On `gmem_req.fire`, issue READ128 with a full mask and class 1, tag 0 and the miss owner’s phase. |
+| `gmem_rsp` | Input | gmem_rsp_t (1,037 bits) | GMEM (via unit) | On `gmem_rsp.fire`, accept the matching miss return under the [unit return protocol](blackwell_tma_unit.md#gmem-types). |
+| `epoch` | Input | 16 bits | Top level | Sample the new epoch after outstanding work drains to invalidate descriptor lines. |
+| `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
+| `fault` | Output | 1 bit | Top level | Sticky GMEM or protocol error level. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

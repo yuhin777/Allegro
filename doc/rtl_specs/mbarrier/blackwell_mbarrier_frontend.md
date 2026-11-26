@@ -4,16 +4,34 @@
 
 The front end arbitrates software commands, wait probes, TC commits, and TMA producers. It owns the software queue, TC slot, and producer binding table. All object updates go to [unit](blackwell_mbarrier_unit.md). The [wait unit](blackwell_mbarrier_wait.md) owns wait records.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| sw_cmd/sw_rsp, wait_cmd/wait_rsp | In/out, out/in [bar_cmd_t](#command)/[bar_rsp_t](#command) | Software front end, wait unit | Forward TRY_WAIT to wait. Return other software responses under their original IDs. |
-| bind_req/bind_rsp, producer_done/producer_rsp | In/out [bar_bind_t](#command)/[op_done_t](../top/blackwell_async_subsystem_top.md#identity), in/out [bar_producer_done_t](#command)/op_done_t | TMA unit | One TMA producer class. Reserve the binding and both result positions. |
-| tc_req/tc_rsp | In/out [tc_bar_req_t](#command)/op_done_t | TC completion bridge | Separate slot for a TC commit already registered in the tracker. |
-| service_req/service_rsp, wait_probe_req/rsp | Out/in, in/out [bar_service_req_t](#command)/[bar_service_rsp_t](#command) | Object unit, wait unit | The unit serializes updates. Each route/slot reserves one unique return position. |
-| release_req/release_rsp | Out/in [order_req_t](../top/blackwell_async_subsystem_top.md#ordering)/[order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) | Ordering service | Software update release and FENCE_INIT share a finite outstanding budget. |
-| wait_busy_addr/wait_addr_busy, commit_busy_addr/commit_addr_busy | Two combinational queries, 32-bit input / 1-bit output each | wait, TC tracker | Check existing references to the INIT/INVAL address. |
-| commit_candidate_addr/commit_blocked | 32-bit input / 1-bit output, combinational | Top-level commit ingress | The top queries lifecycle exclusivity at the candidate commit's address. The result gates new commit fire. |
-| epoch, stop, drained, fault | Input u16, input bit, output bit, output bit | Top level | Drain on normal shutdown. Notify the top level of runtime faults. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `sw_cmd` | Input | [bar_cmd_t](#command) (192 bits) | Software front end | On `sw_cmd.fire`, accept the software command and route TRY_WAIT to the wait unit. |
+| `sw_rsp` | Output | [bar_rsp_t](#command) (63 bits) | Software front end | On `sw_rsp.fire`, deliver the held status and predicate under the original ID. |
+| `wait_cmd` | Output | [bar_cmd_t](#command) (192 bits) | Wait unit | On `wait_cmd.fire`, forward TRY_WAIT. |
+| `wait_rsp` | Input | [bar_rsp_t](#command) (63 bits) | Wait unit | On `wait_rsp.fire`, accept the wait result for the software response. |
+| `bind_req` | Input | [bar_bind_t](#command) (90 bits) | TMA unit | On `bind_req.fire`, reserve the producer binding and both result positions. |
+| `bind_rsp` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | TMA unit | On `bind_rsp.fire`, return the binding status. |
+| `producer_done` | Input | [bar_producer_done_t](#command) (94 bits) | TMA unit | On `producer_done.fire`, accept completion from the bound TMA producer with a reserved result position. |
+| `producer_rsp` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | TMA unit | On `producer_rsp.fire`, return the status of the matching object update. |
+| `tc_req` | Input | [tc_bar_req_t](#command) (90 bits) | TC completion bridge | On `tc_req.fire`, accept ARRIVE for an already registered commit into its separate slot. |
+| `tc_rsp` | Output | op_done_t (62 bits) | TC completion bridge | On `tc_rsp.fire`, return the matching commit status. |
+| `service_req` | Output | [bar_service_req_t](#command) (199 bits) | Object unit | On `service_req.fire`, submit one routed object operation with a reserved return position. |
+| `service_rsp` | Input | [bar_service_rsp_t](#command) (72 bits) | Object unit | On `service_rsp.fire`, accept the serialized result by route and slot. |
+| `wait_probe_req` | Input | [bar_service_req_t](#command) (199 bits) | Wait unit | On `wait_probe_req.fire`, accept the wait unit’s QUERY. |
+| `wait_probe_rsp` | Output | [bar_service_rsp_t](#command) (72 bits) | Wait unit | On `wait_probe_rsp.fire`, return the sampled object state to the reserved wait slot. |
+| `release_req` | Output | [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) (163 bits) | Ordering service | On `release_req.fire`, issue ordering for a software release or FENCE_INIT within the shared outstanding budget. |
+| `release_rsp` | Input | [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) (62 bits) | Ordering service | On `release_rsp.fire`, settle the matching ordering operation. |
+| `wait_busy_addr` | Output | 32 bits | Wait unit | Level. Present the INIT/INVAL address to check for active wait references. |
+| `wait_addr_busy` | Input | 1 bit | Wait unit | Level. Observe whether a wait entry references that address. |
+| `commit_busy_addr` | Output | 32 bits | TC tracker | Level. Present the INIT/INVAL address to check for unretired commits. |
+| `commit_addr_busy` | Input | 1 bit | TC tracker | Level. Observe whether a commit references that address. |
+| `commit_candidate_addr` | Input | 32 bits | Top-level commit ingress | Level. Address of the proposed commit. |
+| `commit_blocked` | Output | 1 bit | Top-level commit ingress | Level. Lifecycle exclusion gates new commit acceptance. |
+| `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `stop` | Input | 1 bit | Top level | Close new software operations and drain accepted work, including internal producer and commit traffic. |
+| `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

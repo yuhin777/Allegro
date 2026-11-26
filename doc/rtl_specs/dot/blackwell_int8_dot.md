@@ -4,10 +4,10 @@
 
 Computes one complete 32-term S8/U8 integer dot plus S32 C, with independent A/B signedness. Each core's integer array has 64 copies. Logical K=32 and all terms participate in a single reduction.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| req | Input | a[32],b[32] each contain signed9 elements, plus c32 and saturate1, 609 bits total | TC dot array | req.fire captures S0. Element k=0 occupies the low 9 bits |
-| rsp | Output | result32,overflow1, 33bit | TC dot array | rsp.fire delivers the result |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `req` | Input | 609 bits (32 A and 32 B signed 9-bit elements, 32-bit C and 1-bit saturate) | TC dot array | `req.fire` captures S0. Element k=0 occupies the low 9 bits. |
+| `rsp` | Output | 33 bits (32-bit result and 1-bit overflow) | TC dot array | `rsp.fire` delivers the result. |
 
 ```mermaid
 flowchart LR

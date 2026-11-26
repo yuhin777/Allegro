@@ -4,17 +4,18 @@
 
 Connects TMEM clients to four 32-bank partitions, arbitrates per bank, combines nonconflicting requests, and routes by identity. The partitions exclusively own TMEM data, SRAM read outputs, backup returns, R_W, and ACKs. The fabric adds no duplicate payload buffer.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `clk`, `rst_n` | Input, 1 bit | Top level | Reset arbitration control. |
-| `epoch_i` | Input, 16 bits, no handshake | Top level | Current single-CTA lifetime. Change only after old outstanding transactions are isolated. |
-| `rd_req[6][128]` | Input channel, [tmem_rd_req_t](#transactions) | Four cores, scale B, LD/ST | Clients0…5. Each entry has tag78, lane7, word7, and byte_mask16. |
-| `rd_rsp[6][128]` | Output channel, [tmem_rd_rsp_t](#transactions) | Four cores, scale B, LD/ST | Return tag78, data128, and status4 to the original client/lane. |
-| `wr_req[6][128]` | Input channel, [tmem_wr_req_t](#transactions) | Four cores, LD/ST | Each atom contains tag, lane, word, mask, and data128. |
-| `wr_ack[6][128]` | Output channel, [tmem_wr_ack_t](#transactions) | Four cores, LD/ST | Original tag and status4 for an actual write only. |
-| `live[3]` | Input, {valid1,rec2,id58} in age order | MMA engine | Connected through the top. Per-bank arbitration is independent of this port. |
-| `drained_o` | Output, 1 bit, no handshake | Top level | All four partitions drained and no held arbitrated request. |
-| `fault_o` | Output, 1 bit, no handshake | Top level | Protocol fault level aggregated at the top. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `clk` | Input | 1 bit | Top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | Top level | Sample low on a rising edge. Reset arbitration control. |
+| `epoch_i` | Input | 16 bits | Top level | Level. Current single-CTA lifetime. Change only after old outstanding transactions are isolated. |
+| `rd_req[6][128]` | Input | [tmem_rd_req_t](#transactions) (108 bits) | Four cores, scale B, LD/ST | Transfer on `rd_req.fire`. Clients0…5. Each entry has tag78, lane7, word7, and byte_mask16. |
+| `rd_rsp[6][128]` | Output | [tmem_rd_rsp_t](#transactions) (210 bits) | Four cores, scale B, LD/ST | Transfer on `rd_rsp.fire`. Return tag78, data128, and status4 to the original client/lane. |
+| `wr_req[6][128]` | Input | [tmem_wr_req_t](#transactions) (236 bits) | Four cores, LD/ST | Transfer on `wr_req.fire`. Each atom contains tag, lane, word, mask, and data128. |
+| `wr_ack[6][128]` | Output | [tmem_wr_ack_t](#transactions) (82 bits) | Four cores, LD/ST | Transfer on `wr_ack.fire`. Original tag and status4 for an actual write only. |
+| `live[3]` | Input | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | MMA engine | Level. Connected through the top. Per-bank arbitration is independent of this port. |
+| `drained_o` | Output | 1 bit | Top level | Level. All four partitions drained and no held arbitrated request. |
+| `fault_o` | Output | 1 bit | Top level | Level. Protocol fault level aggregated at the top. |
 
 ```mermaid
 flowchart LR

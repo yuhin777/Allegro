@@ -4,13 +4,22 @@
 
 One instance per backend stores scale B snapshots for two active input contexts and provides eight columns of factors by ID to all four cores through combinational views. Of the 4×1 KiB physical storage, banks 0/1 correspond to engine-assigned input banks. The other two are reserved. Each bank has 32 rows ×8 cells ×4 B. Selecting a physical snapshot bank does not change the TMEM source.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| start / release | Input prepare_t 449 bits / input async_id_t 58 bits | MMA engine | The [engine](blackwell_tc_mma_engine.md) starts after pin and cross-instruction address dependencies are satisfied. Release by ID. |
-| rd_req[128] / rd_rsp[128] | Output tmem_rd_req_t (108 bits) / input tmem_rd_rsp_t (210 bits) | TMEM fabric | client4, source lane=x%32. |
-| query[4] / view[4] | Input / output, 72-bit query / 257-bit view | Four cores | Find READY snapshot by ID. Different columns can be read on the same edge. |
-| ready[3] / quiescent[3] | Output, 1 bit per rec for each signal | MMA engine | quiescent means the ID has no held/pending requests and will create no new read. |
-| live[3], clk, rst_n, epoch_i / drained_o, fault_o | Input, 61 bits per live entry, clk/rst_n/epoch 1/1/16 bits. Status outputs 1 bit each | Engine, top level | Match by ID/rec. drained includes active snapshots and held requests. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `start` | Input | prepare_t (449 bits) | MMA engine | On `start.fire`, start after pin and cross-instruction dependencies clear. |
+| `release` | Input | async_id_t (58 bits) | MMA engine | On `release.fire`, release the snapshot by ID. |
+| `rd_req[128]` | Output | tmem_rd_req_t (108 bits) | TMEM fabric | On `rd_req.fire`, issue for client 4 on source lane x modulo 32. |
+| `rd_rsp[128]` | Input | tmem_rd_rsp_t (210 bits) | TMEM fabric | On `rd_rsp.fire`, accept the matching read return. |
+| `query[4]` | Input | 72 bits per core | Four cores | Level. Look up a READY snapshot by ID and column. |
+| `view[4]` | Output | 257 bits per core | Four cores | Level. Return the matching column independently to each core. |
+| `ready[3]` | Output | 1 bit per record | MMA engine | Level. Assert when all required returns succeed. |
+| `quiescent[3]` | Output | 1 bit per record | MMA engine | Level. No held or pending requests for the ID and no further reads to issue. |
+| `live[3]` | Input | 61 bits per entry | MMA engine | Level. Match command ID and record. |
+| `clk` | Input | 1 bit | MMA engine / top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | MMA engine / top level | Sample low on a rising edge to reset control. |
+| `epoch_i` | Input | 16 bits | MMA engine / top level | Level identifying the active CTA lifetime. |
+| `drained_o` | Output | 1 bit | MMA engine / top level | Level covering active snapshots and held requests. |
+| `fault_o` | Output | 1 bit | MMA engine / top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

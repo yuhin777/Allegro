@@ -4,12 +4,12 @@
 
 This combinational tree finds the maximum valid exponent. Parameters are `TERM_N≥1, EXP_W≥2, DEFAULT_EXP`. All exponents are signed. There is no clock, reset, or registered valid/ready channel.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| term_valid | Input | TERM_N | Dot exponent selection stage | Combinational valid bit per term |
-| term_exp | Input | TERM_N×EXP_W | Dot exponent selection stage | Combinational signed exponents |
-| result_valid | Output | 1 | Dot exponent selection stage | Combinational output, at least one term valid |
-| result_exp | Output | EXP_W | Dot exponent selection stage | Combinational output, DEFAULT_EXP when all terms are invalid |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `term_valid` | Input | TERM_N bits | Dot exponent selection stage | Combinational valid bit per term. |
+| `term_exp` | Input | TERM_N × EXP_W bits (signed exponents) | Dot exponent selection stage | Combinational signed exponents, one per valid-mask position. |
+| `result_valid` | Output | 1 bit | Dot exponent selection stage | Combinational output, at least one term valid. |
+| `result_exp` | Output | signed EXP_W bits | Dot exponent selection stage | Combinational output, DEFAULT_EXP when all terms are invalid. |
 
 ## Functionality
 

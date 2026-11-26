@@ -4,19 +4,20 @@
 
 Manages the full TMEM allocation exclusively owned by one CTA (128 lanes ×512 columns), this epoch's allocation permit, and references for five fixed users. The [fabric](blackwell_tmem_fabric.md#tmem-layout) defines data addressing.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `manage_cmd` | Input, [tmem_manage_cmd_t](#management-types), 102 bits | Management front end | ALLOC, DEALLOC, and relinquish allocation permit. |
-| `alloc_credit_o` | Output, 1 bit | Management front end | `permit && !allocated`, sampled before selecting ALLOC. [Ingress arbitration](#alloc-admission) |
-| `manage_rsp` | Output, [tmem_manage_rsp_t](#management-types), 94 bits | Management front end | Original ID, status, and ALLOC base. Return base=0 for other operations. |
-| `pin_req` / `pin_rsp` | Input 61 bits / output 62 bits | MMA engine, LD/ST | `{id58,user3}` acquires a reference and receives `op_done_t`. |
-| `unpin` | Input 61 bits | MMA engine, LD/ST | `{id58,user3}`, fire releases the user's reference. |
-| `epoch_i` | Input, 16 bits, no handshake | Top level | Current CTA lifetime. |
-| `stop_i` | Input, 1 bit, no handshake | Top level | Stop new external management commands. Continue pins, unpins, and responses for accepted work. |
-| `epoch_end` | Input event, no payload | Top level | The top has finished flush/ordering and all pins have returned. Atomically clear the old allocation and close the epoch. |
-| `empty_o` | Output, 1 bit | Top level | No allocation, references, or held responses. |
-| `drained_o` | Output, 1 bit | Top level | No references or outstanding responses. |
-| `fault_o` | Output, 1 bit | Top level | Protocol fault such as unknown/duplicate unpin. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `manage_cmd` | Input | [tmem_manage_cmd_t](#management-types) (102 bits) | Management front end | Transfer on `manage_cmd.fire`. ALLOC, DEALLOC, and relinquish allocation permit. |
+| `alloc_credit_o` | Output | 1 bit | Management front end | `permit && !allocated`, sampled before selecting ALLOC. [Ingress arbitration](#alloc-admission) |
+| `manage_rsp` | Output | [tmem_manage_rsp_t](#management-types) (94 bits) | Management front end | Transfer on `manage_rsp.fire`. Original ID, status, and ALLOC base. Return base=0 for other operations. |
+| `pin_req` | Input | 61 bits (58-bit ID and 3-bit user) | MMA engine, LD/ST | On `pin_req.fire`, acquire the fixed user reference. |
+| `pin_rsp` | Output | op_done_t (62 bits) | MMA engine, LD/ST | On `pin_rsp.fire`, return the authorization status by ID. |
+| `unpin` | Input | 61 bits | MMA engine, LD/ST | On `unpin.fire`, release the reference for the supplied 58-bit ID and 3-bit user. |
+| `epoch_i` | Input | 16 bits | Top level | Level. Current CTA lifetime. |
+| `stop_i` | Input | 1 bit | Top level | Level. Stop new external management commands. Continue pins, unpins, and responses for accepted work. |
+| `epoch_end` | Input | no payload | Top level | Transfer on `epoch_end.fire`. The top has finished flush/ordering and all pins have returned. Atomically clear the old allocation and close the epoch. |
+| `empty_o` | Output | 1 bit | Top level | Level. No allocation, references, or held responses. |
+| `drained_o` | Output | 1 bit | Top level | Level. No references or outstanding responses. |
+| `fault_o` | Output | 1 bit | Top level | Level. Protocol fault such as unknown/duplicate unpin. |
 
 ## Functionality
 

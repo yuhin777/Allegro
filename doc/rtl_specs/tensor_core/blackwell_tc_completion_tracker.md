@@ -4,17 +4,20 @@
 
 The 32 operation records accept MMA completion by ID. Eight commit records snapshot unfinished predecessors of the same issuer. See [Identity and cutoffs](../top/blackwell_async_subsystem_top.md#identity) for the issuer definition and cutoff edges.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| `register_op` | Input | [async_id_t](../top/blackwell_async_subsystem_top.md#identity), 58 | Top-level MMA ingress | Atomic acceptance with the actual TC execution command |
-| `engine_done` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity), 62 | MMA engine | Reads, arithmetic, actual write ACKs, and resource returns for this ID have all settled |
-| `op_done` | Output | op_done_t, 62 | Software front end | Software completion for one execution command |
-| `commit_cmd` | Input | [tc_commit_t](#commit-contract), 90 | Software front end | Independent acceptance and snapshot resources |
-| `ready_commit` | Output | [tc_ready_commit_t](#commit-contract), 93 | TC completion bridge | `{commit:90,slot:3}` |
-| `commit_retire` | Input | [tc_commit_retire_t](#commit-contract), 61 | TC completion bridge | `{slot:3,id:58}`, bridge completion result consumed |
-| `busy_addr/addr_busy` | Input/output | 32bit/1bit | barrier frontend | Any valid commit targeting this barrier address asserts busy |
-| `epoch/stop` | Input | 16/1 | Top level | Current CTA / stop new registrations and commits |
-| `drained/fault` | Output | 1 bit each | Top level | All operations, commits, and held outputs retired / runtime fault |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `register_op` | Input | [async_id_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | Top-level MMA ingress | Transfer on `register_op.fire`. Atomic acceptance with the actual TC execution command. |
+| `engine_done` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | MMA engine | Transfer on `engine_done.fire`. Reads, arithmetic, actual write ACKs, and resource returns for this ID have all settled. |
+| `op_done` | Output | op_done_t (62 bits) | Software front end | Transfer on `op_done.fire`. Software completion for one execution command. |
+| `commit_cmd` | Input | [tc_commit_t](#commit-contract) (90 bits) | Software front end | Transfer on `commit_cmd.fire`. Independent acceptance and snapshot resources. |
+| `ready_commit` | Output | [tc_ready_commit_t](#commit-contract) (93 bits) | TC completion bridge | Transfer on `ready_commit.fire`. `{commit:90,slot:3}`. |
+| `commit_retire` | Input | [tc_commit_retire_t](#commit-contract) (61 bits) | TC completion bridge | Transfer on `commit_retire.fire`. `{slot:3,id:58}`, bridge completion result consumed. |
+| `busy_addr` | Input | 32 bits | barrier frontend | Level. Address presented for the reference query. |
+| `addr_busy` | Output | 1 bit | barrier frontend | Level. Assert for any valid commit targeting the address. |
+| `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `stop` | Input | 1 bit | Top level | Level closing new registrations and commits. |
+| `drained` | Output | 1 bit | Top level | Assert after all operations, commits and held outputs retire. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ```mermaid
 flowchart LR

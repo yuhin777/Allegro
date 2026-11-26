@@ -4,10 +4,10 @@
 
 This module connects adjacent pipeline stages. A `WIDTH≥1`-bit data register and a valid bit form a one-entry elastic stage.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| in | Input | bits[WIDTH] | Upstream | in.fire captures input |
-| out | Output | bits[WIDTH] | Downstream | out.fire consumes the registered output |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `in` | Input | WIDTH bits | Upstream | `in.fire` captures input. |
+| `out` | Output | WIDTH bits | Downstream | `out.fire` consumes the registered output. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

@@ -4,10 +4,10 @@
 
 Computes a complete 64-term E2M1 dot. Reduce four groups of 16 terms, apply each group scale, and accumulate with FP32 C. Each core has 64 copies, each with a 32-bit FP32 result.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| req | Input | a[64],b[64] each contain `{sign1,q4}` elements, plus c32 and `{nan1,sig4,e:s9}` per element of scale_a[4],scale_b[4], 784 bits total | TC dot array | req.fire captures S0. Pack each side's elements from low bits in k order and scales in 16-term group order h |
-| rsp | Output | result32 | TC dot array | rsp.fire delivers the result |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `req` | Input | 784 bits (64 A and 64 B elements, each with a sign and 4-bit magnitude code plus 32-bit C and four scales per operand, each with a NaN bit, 4-bit significand and signed 9-bit exponent) | TC dot array | `req.fire` captures S0. Pack each side's elements from low bits in k order and scales in 16-term group order h. |
+| `rsp` | Output | FP32 (32 bits) | TC dot array | `rsp.fire` delivers the result. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

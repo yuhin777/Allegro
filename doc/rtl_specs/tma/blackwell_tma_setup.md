@@ -4,12 +4,19 @@
 
 Setup accepts linear or tiled copies from the TMA unit and builds immutable, range-checked contexts for the walker. Two slots share one four-stage multiply pipeline. Setup may prepare the next command while the current one enumerates.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| request / result | Input [tma_setup_req_t](#context) (1507 bits) / output [tma_setup_rsp_t](#context) (74 bits) | TMA unit | Reserve a free slot and result position at acceptance. Hold result until consumed. |
-| arm / walk_start / slot_release | Each input [tma_context_ref_t](#context) (6 bits) | TMA unit | The unit moves a checked and admitted slot from READY to ARMED, relays walk_start from the first S0.fire, and forwards the walker's release from its final S0.fire unchanged. |
-| ctx[2] / slot_state[2] / slot_ticket[2] / span[2] | Output per slot: [context](#context) 1,008 bits, five-state enum, ticket u5, [access spans](#copy-span) | TMA unit, walker | The unit copies long-lived fields in READY. The walker selects only a pre-edge ARMED slot or one already enumerating. The release edge still reads old values. |
-| drained / fault | Output bit / bit | TMA unit | Both slots empty and no computation/result / runtime fault cleared only by reset. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `request` | Input | [tma_setup_req_t](#context) (1,507 bits) | TMA unit | On `request.fire`, reserve a free slot and result position. |
+| `result` | Output | [tma_setup_rsp_t](#context) (74 bits) | TMA unit | On `result.fire`, deliver the held setup result. |
+| `arm` | Input | [tma_context_ref_t](#context) (6 bits) | TMA unit | On admission of a checked READY slot, mark it ARMED. |
+| `walk_start` | Input | [tma_context_ref_t](#context) (6 bits) | TMA unit | Sample the relayed first S0.fire. |
+| `slot_release` | Input | [tma_context_ref_t](#context) (6 bits) | TMA unit | Sample the relayed final S0.fire, including a single-segment walk. |
+| `ctx[2]` | Output | [context](#context) (1,008 bits per slot) | TMA unit, walker | Level. The unit copies long-lived fields in READY. The walker sees the old context on release. |
+| `slot_state[2]` | Output | Five-state enum per slot | TMA unit, walker | Level. Select a pre-edge ARMED slot or continue its active walk. |
+| `slot_ticket[2]` | Output | 5 bits per slot | TMA unit, walker | Level. Identify the pre-edge owner. |
+| `span[2]` | Output | [Access spans](#copy-span) (138 bits per slot) | TMA unit, walker | Level. Copy the checked spans in READY. |
+| `drained` | Output | 1 bit | Top level | Assert with both slots empty and no computation or held result. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

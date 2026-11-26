@@ -4,12 +4,18 @@
 
 The shared SMEM fabric provides eight independent 16 B atom group ports to TC, TMA, barrier backing, and the external LSU. It owns 32 1R1W banks (1,824×32 bits each, 228 KiB total), read return queues, and write ACK slots. Peak bandwidth is 128 B/cycle in each direction.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| rd_req[16][8] / rd_rsp[16][8] | Input [smem_rd_req_t](#transactions) / output [smem_rd_rsp_t](#transactions) | TC, TMA, backing, LSU | One candidate per client per group. Each group has independent valid/ready. |
-| wr_req[16][8] / wr_ack[16][8] | Input [smem_wr_req_t](#transactions) / output [smem_wr_ack_t](#transactions) | TMA, backing, LSU | Same group index. One ACK per original transaction. |
-| live[3] | Input, {valid1,rec2,id58} in acceptance order | MMA engine | The top connects the engine's live list for MMA candidate age. External service is independent of MMA activity. |
-| clk, rst_n, epoch_i / drained_o, fault_o | epoch_i input u16, clock and reset bit inputs, status bit outputs | Top level | drained covers R_BREQ, macro Q, primary/backup returns, ACKs, and held selections. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `rd_req[16][8]` | Input | [smem_rd_req_t](#transactions) (126 bits) | TC, TMA, backing, LSU | On `rd_req.fire`, accept one candidate per client and group on its own handshake. |
+| `rd_rsp[16][8]` | Output | [smem_rd_rsp_t](#transactions) (210 bits) | TC, TMA, backing, LSU | On `rd_rsp.fire`, deliver the tagged result on the matching group channel. |
+| `wr_req[16][8]` | Input | [smem_wr_req_t](#transactions) (254 bits) | TMA, backing, LSU | On `wr_req.fire`, accept the write in its addressed group. |
+| `wr_ack[16][8]` | Output | [smem_wr_ack_t](#transactions) (82 bits) | TMA, backing, LSU | On `wr_ack.fire`, deliver one acknowledgment per original transaction on the same group index. |
+| `live[3]` | Input | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | MMA engine | Level. The top connects the engine's live list for MMA candidate age. External service is independent of MMA activity. |
+| `clk` | Input | 1 bit | Top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | Top level | Sample low on a rising edge to reset control. |
+| `epoch_i` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `drained_o` | Output | 1 bit | Top level | Level covering R_BREQ, macro Q, primary and backup returns, ACKs and held selections. |
+| `fault_o` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

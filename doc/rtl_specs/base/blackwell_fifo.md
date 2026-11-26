@@ -4,11 +4,11 @@
 
 This synchronous FIFO delivers data from producer to consumer in acceptance order. Its parameters are `WIDTH≥1, DEPTH≥1`. A combinational read of the register array supplies the head.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| push | Input | bits[WIDTH] | Upstream | push.fire writes the tail |
-| pop | Output | bits[WIDTH] | Downstream | pop.fire consumes the pre-edge head |
-| occupancy | Output | ceil(log2(DEPTH+1)) bit | Parent module | Number of occupied entries |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `push` | Input | WIDTH bits | Upstream | `push.fire` writes the tail. |
+| `pop` | Output | WIDTH bits | Downstream | `pop.fire` consumes the pre-edge head. |
+| `occupancy` | Output | ceil(log2(DEPTH+1)) bits | Parent module | Combinational count of occupied entries. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

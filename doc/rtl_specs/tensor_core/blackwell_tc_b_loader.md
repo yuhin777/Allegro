@@ -6,13 +6,19 @@ One loader per backend reads B from SMEM on ordinary or WS MMA misses, assembles
 
 <a id="types"></a>
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| load / result | Input [b_load_t](#types)={id58,b_desc64,b_type4,kind3,transpose_b1,n_code2}, 132 bits / output [b_result_t](#types)={id58,status4}, 62 bits | MMA engine | One result per load. Two stream descriptor positions support cross-command prefetch. The engine's same-ID record reserves result space. |
-| data[4] | Output [b_data_t](#types)={id58,block5,data2048}, 2111 bits | Four cores | Independently handshake the same column-ordered payload to all four cores. See wire order below. The engine sends b_select separately to each core. An unbound destination can apply backpressure. |
-| sm_rd_req[8] / sm_rd_rsp[8] | Output / input [SMEM atom](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | Original logical address indexed by group, tag.client=6. Match returns by (id,block,piece,part). |
-| live[3] | Input, 61 bits per entry | MMA engine | Match the full ID and rec from [engine](blackwell_tc_mma_engine.md#engine-ports). |
-| clk, rst_n, epoch_i / drained_o, fault_o | epoch_i input u16, clock and reset bit inputs, status bit outputs | MMA engine, top level | drained covers descriptors, presented requests, both slots, and held results. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `load` | Input | [b_load_t](#types) (132 bits) | MMA engine | On `load.fire`, allocate a stream descriptor. Two positions support cross-command prefetch. |
+| `result` | Output | [b_result_t](#types) (62 bits) | MMA engine | On `result.fire`, return one result per load to the reserved same-ID engine record. |
+| `data[4]` | Output | [b_data_t](#types)={id58,block5,data2048} (2,111 bits) | Four cores | Each destination samples its column-ordered block on its own handshake. An unbound core may stall until it receives b_select from the engine. |
+| `sm_rd_req[8]` | Output | [smem_rd_req_t](../smem/blackwell_smem_fabric.md#transactions) (126 bits) | SMEM fabric | On `sm_rd_req.fire`, submit the original logical address on its atom group with client 6. |
+| `sm_rd_rsp[8]` | Input | [smem_rd_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (210 bits) | SMEM fabric | On `sm_rd_rsp.fire`, match each return by ID, block, piece and part. |
+| `live[3]` | Input | 61 bits per entry | MMA engine | Level. Match the full ID and rec from [engine](blackwell_tc_mma_engine.md#engine-ports). |
+| `clk` | Input | 1 bit | MMA engine / top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | MMA engine / top level | Sample low on a rising edge to reset control. |
+| `epoch_i` | Input | 16 bits | MMA engine / top level | Level identifying the active CTA lifetime. |
+| `drained_o` | Output | 1 bit | MMA engine / top level | Level asserted after descriptors, presented requests, both slots and held results drain. |
+| `fault_o` | Output | 1 bit | MMA engine / top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

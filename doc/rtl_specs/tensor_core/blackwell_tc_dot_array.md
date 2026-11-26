@@ -4,12 +4,12 @@
 
 One array per core feeds eight A rows, eight B columns, and 64 C cells from core.R_OP to 64 complete dot lanes. Order results by (row×8+col). One input produces one 8×8 microtile with its original identity. The [MMA command](blackwell_tc_mma_engine.md#mma-command) defines legal kinds and types. The [arithmetic rules](blackwell_tc_dot_array.md#numeric-routing) define special values, alignment, and final encoding.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| cmd_i | Input, [mma_cmd_t](blackwell_tc_mma_engine.md#mma-command) | MMA core | The core selects control from its live record by R_OP.tag.id. cmd_i handshakes with the operand. Hold both during stalls |
-| operand | Input channel, `{tag:tile_tag_t,data:tc_operand_t}` | MMA core | [core](blackwell_tc_mma_core.md) owns R_OP, with 832 B of prepared data and one 76-bit identity |
-| result | Output channel, `{tag:tile_tag_t,cell[64]:bits32}` | MMA core | FP32/S32. The entire microtile handshakes and holds together under backpressure |
-| empty_o | Output, 1 bit | MMA core | All native stages and matching tags empty |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `cmd_i` | Input | [mma_cmd_t](blackwell_tc_mma_engine.md#mma-command) (446 bits) | MMA core | Sample the command with `operand.fire` and hold it with the operand during stalls. |
+| `operand` | Input | `{tag:tile_tag_t,data:tc_operand_t}` (6,732 bits) | MMA core | Transfer on `operand.fire`. [core](blackwell_tc_mma_core.md) owns R_OP, with 832 B of prepared data and one 76-bit identity. |
+| `result` | Output | `{tag:tile_tag_t,cell[64]:bits32}` (2,124 bits) | MMA core | Transfer on `result.fire`. FP32/S32. The entire microtile handshakes and holds together under backpressure. |
+| `empty_o` | Output | 1 bit | MMA core | Level. All native stages and matching tags empty. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

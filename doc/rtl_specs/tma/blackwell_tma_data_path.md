@@ -4,13 +4,19 @@
 
 Moves data between a 128 B GMEM line and eight 16 B SMEM atom groups. All active tickets share 16 RAM rows, RD/Q/R_OUT, and external ports. Each segment's owner ticket determines direction and cache policy.
 
-| Channel and direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| start / tag_view[64] / owner_view[18] inputs | [tma_start_t](blackwell_tma_completion_tracker.md#transfer-types) / [tma_tag_t](blackwell_tma_completion_tracker.md#transfer-types)[64] / [tma_owner_view_t](blackwell_tma_unit.md#owner-view)[18] | tracker, TMA unit | start.segment.ticket assigns the new segment. Subsequent accesses follow live key → tag.ticket for command ID, direction, and policy, so the original setup slot can be reused. |
-| event[20] / data_ref[64] outputs | [tma_xfer_event_t](blackwell_tma_completion_tracker.md#transfer-types) / 1 bit per entry | tracker | Report normal memory fire by key on its handshake edge. data_ref covers row, held, and pipeline references. |
-| gmem_req output / gmem_rsp input | [gmem_req_t / gmem_rsp_t](blackwell_tma_unit.md#gmem-types) | GMEM (via unit) | Class0. Route reads and write ACKs to the transaction key. Each direction supports one transfer per cycle. |
-| smem_req[8] outputs / smem_rsp[8] inputs | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) / [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | Client8 lane g connects to physical group g, which responds independently by original key and group. |
-| drained / fault outputs | 1 bit each | TMA unit | Rows, held selections, and pipeline empty / runtime fault. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `start` | Input | [tma_start_t](blackwell_tma_completion_tracker.md#transfer-types) (200 bits) | Tracker | On `start.fire`, bind the segment and transaction key to its owner ticket. |
+| `tag_view[64]` | Input | [tma_tag_t](blackwell_tma_completion_tracker.md#transfer-types) (66 bits per tag) | Tracker | Level. Use the live key to read its ticket. |
+| `owner_view[18]` | Input | [tma_owner_view_t](blackwell_tma_unit.md#owner-view) (189 bits per ticket) | TMA unit | Level. Read the command ID, direction and policy after setup slot reuse. |
+| `event[20]` | Output | [tma_xfer_event_t](blackwell_tma_completion_tracker.md#transfer-types) (13 bits per event) | tracker | Report the key on the corresponding memory handshake or local zero/no-access event edge. |
+| `data_ref[64]` | Output | 1 bit per tag | tracker | Level. Assert while a RAM row, held transfer or pipeline stage references the tag. |
+| `gmem_req` | Output | [gmem_req_t](blackwell_tma_unit.md#gmem-types) (1,292 bits) | GMEM (via unit) | On `gmem_req.fire`, issue a class-0 transaction, up to one per cycle. |
+| `gmem_rsp` | Input | [gmem_rsp_t](blackwell_tma_unit.md#gmem-types) (1,037 bits) | GMEM (via unit) | On `gmem_rsp.fire`, accept a read return or write ACK by key, up to one per cycle. |
+| `smem_req[8]` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | On `smem_req.fire`, issue independently on client 8 port g to SMEM group g. |
+| `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (211 bits) | SMEM fabric | On `smem_rsp.fire`, accept each group’s return by original key and group. |
+| `drained` | Output | 1 bit | Top level | Assert when all RAM rows, held selections and pipeline stages are empty. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ```mermaid
 flowchart LR

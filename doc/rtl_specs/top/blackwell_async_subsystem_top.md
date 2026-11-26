@@ -2,27 +2,49 @@
 
 ## Description
 
-Allegro v1 uses `SHARE_FP_DOT_ADDER_TREE=1` on all four MMA cores. The [dot array](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) defines storage, issue credits and retirement timing for this configuration. Setting the elaboration parameter to 0 selects an experimental independent-tree configuration outside v1 acceptance.
-
 Connects one SM100a single-CTA asynchronous backend to the warp instruction front end, RF, LSU, GMEM, and ordering services. The top level handles joint acceptance, shared port routing, and CTA lifetime. The surrounding system handles decode, warp convergence, and program order. See [Supported PTX](../../proposals/supported_ptx.md) for ingress commands.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| mma_cmd / tc_op_done | Input [mma_cmd_t](../tensor_core/blackwell_tc_mma_engine.md#mma-command) / output [op_done_t](#identity) | Warp front end | Each acceptance in the three command records registers atomically with tracker.register_op. Each ID completes once |
-| tc_commit / tc_commit_done | Input [tc_commit_t](../tensor_core/blackwell_tc_completion_tracker.md#commit-contract) / output op_done_t | Warp front end | Capture the current issuer's earlier operations and submit once to the target local object |
-| tmem_manage / tmem_manage_rsp | Input/output [tmem_manage_cmd_t](../tmem/blackwell_tmem_manager.md#management-types) / [tmem_manage_rsp_t](../tmem/blackwell_tmem_manager.md#management-types) | Management front end | The management front end handles the ordinary weak SMEM write to ALLOC [dst] and same-address order |
-| tmem_alloc_credit | Output, 1-bit level | Management front-end warp arbiter | Connect directly to manager.alloc_credit_o. The arbiter filters ALLOC before driving tmem_manage.valid. DEALLOC is independently eligible. [Admission and release edges](../tmem/blackwell_tmem_manager.md#alloc-admission) |
-| tmem_ldst / tmem_ldst_done, rf_store / rf_load | Input/output [tmem_ldst_cmd_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) / op_done_t and input/output [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) | Warp front end, RF | The external system reserves each RF destination. Settle the read dependency only after final load beat acceptance |
-| tmem_wait / tmem_wait_done | Input [tmem_wait_cmd_t](../tmem/blackwell_tmem_wait_tracker.md#wait-types) / output op_done_t | Warp front end | Software wait::st covers same-warp stores before its cutoff |
-| tma_cmd / tma_rsp | Input [tma_cmd_t](../tma/blackwell_tma_unit.md#command) / output [tma_rsp_t](../tma/blackwell_tma_unit.md#command) | Warp front end | load, store, prefetch.tensormap, bulk group |
-| bar_cmd / bar_rsp | Input [bar_cmd_t](../mbarrier/blackwell_mbarrier_frontend.md#command) / output [bar_rsp_t](../mbarrier/blackwell_mbarrier_frontend.md#command) | Warp front end | init, arrive, try_wait, inval, and their visibility operations |
-| smem_rd/rsp, smem_wr/ack [8] | Request input/return output, each an SMEM atom type | External LSU | External LSU client12. Ordinary accesses must not bypass the authoritative active barrier object |
-| gmem_req / gmem_rsp | Output/input [gmem_req_t](../tma/blackwell_tma_unit.md#gmem-types) / [gmem_rsp_t](../tma/blackwell_tma_unit.md#gmem-types) | GMEM | TMA data and descriptors share a 128 B channel. A 9-bit ID routes out-of-order replies. gmem_rsp_ready is independent of gmem_req_ready |
-| order_req / order_rsp | Output/input [order_req_t](#ordering) / [order_rsp_t](#ordering) | Ordering service | release/acquire/proxy/init fence and final CTA_CLOSE |
-| close_req/rsp, open_req/rsp | Event input/status output, epoch16 input/status output | CTA controller | Complete close transaction, open new epoch after isolation |
-| lsu_quiescent, isolated | Bit input | External LSU, isolation control | Old LSU work and its visibility obligations complete / external responses isolated before reset |
-| epoch, stopped, drained, fault | Outputs 16/1/1/1 bits | CTA controller | Current epoch, normal closure, outstanding work drained, and run termination (sticky). |
-| clk, rst_n | Inputs, 1 bit each | External clock and reset | Rising-edge sampling, active-low synchronous reset. |
+Allegro v1 uses `SHARE_FP_DOT_ADDER_TREE=1` on all four MMA cores. The [dot array](../tensor_core/blackwell_tc_dot_array.md#floating-point-storage) defines storage, issue credits and retirement timing for this configuration. Setting the elaboration parameter to 0 selects an experimental independent-tree configuration outside v1 acceptance.
+
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `mma_cmd` | Input | [mma_cmd_t](../tensor_core/blackwell_tc_mma_engine.md#mma-command) (446 bits) | Warp front end | On `mma_cmd.fire`, allocate one of three records atomically with tracker.register_op. |
+| `tc_op_done` | Output | [op_done_t](#identity) (62 bits) | Warp front end | On `tc_op_done.fire`, deliver one completion per accepted ID. |
+| `tc_commit` | Input | [tc_commit_t](../tensor_core/blackwell_tc_completion_tracker.md#commit-contract) (90 bits) | Warp front end | On `tc_commit.fire`, capture the issuer’s earlier operations for one arrival. |
+| `tc_commit_done` | Output | op_done_t (62 bits) | Warp front end | On `tc_commit_done.fire`, deliver the original commit ID and status. |
+| `tmem_manage` | Input | [tmem_manage_cmd_t](../tmem/blackwell_tmem_manager.md#management-types) (102 bits) | Management front end | On `tmem_manage.fire`, accept a management operation from the front end responsible for same-address ordering. |
+| `tmem_manage_rsp` | Output | [tmem_manage_rsp_t](../tmem/blackwell_tmem_manager.md#management-types) (94 bits) | Management front end | On `tmem_manage_rsp.fire`, return the status and ALLOC base for the front end’s weak SMEM write. |
+| `tmem_alloc_credit` | Output | 1 bit | Management front-end warp arbiter | Connect directly to manager.alloc_credit_o. The arbiter filters ALLOC before driving tmem_manage.valid. DEALLOC is independently eligible. [Admission and release edges](../tmem/blackwell_tmem_manager.md#alloc-admission) |
+| `tmem_ldst` | Input | [tmem_ldst_cmd_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) (92 bits) | Warp front end | On `tmem_ldst.fire`, accept the warp LD/ST command. |
+| `tmem_ldst_done` | Output | op_done_t (62 bits) | Warp front end | On `tmem_ldst_done.fire`, deliver final status by ID. |
+| `rf_store` | Input | [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) (1,090 bits) | RF | On `rf_store.fire`, accept the next RF source beat. |
+| `rf_load` | Output | [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) (1,090 bits) | RF | On `rf_load.fire`, write the reserved RF destination. The final beat settles the read dependency. |
+| `tmem_wait` | Input | [tmem_wait_cmd_t](../tmem/blackwell_tmem_wait_tracker.md#wait-types) (58 bits) | Warp front end | On `tmem_wait.fire`, capture the issuing warp’s preceding stores at its cutoff. |
+| `tmem_wait_done` | Output | op_done_t (62 bits) | Warp front end | On `tmem_wait_done.fire`, deliver the wait result after the captured stores settle. |
+| `tma_cmd` | Input | [tma_cmd_t](../tma/blackwell_tma_unit.md#command) (478 bits) | Warp front end | On `tma_cmd.fire`, accept a load, store, descriptor prefetch or bulk-group command. |
+| `tma_rsp` | Output | [tma_rsp_t](../tma/blackwell_tma_unit.md#command) (126 bits) | Warp front end | On `tma_rsp.fire`, deliver the matching ticket’s software result. |
+| `bar_cmd` | Input | [bar_cmd_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (192 bits) | Warp front end | On `bar_cmd.fire`, accept init, arrive, try_wait, inval or the associated visibility command. |
+| `bar_rsp` | Output | [bar_rsp_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (63 bits) | Warp front end | On `bar_rsp.fire`, deliver the command’s status and applicable predicate. |
+| `smem_rd[8]` | Input | [smem_rd_req_t](../smem/blackwell_smem_fabric.md#transactions) (126 bits) | External LSU | On `smem_rd.fire`, accept a client 12 read on its group subject to barrier-object exclusion. |
+| `smem_rd_rsp[8]` | Output | [smem_rd_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (210 bits) | External LSU | On `smem_rd_rsp.fire`, return the matching read data and status. |
+| `smem_wr[8]` | Input | [smem_wr_req_t](../smem/blackwell_smem_fabric.md#transactions) (254 bits) | External LSU | On `smem_wr.fire`, accept a client 12 write on its group subject to barrier-object exclusion. |
+| `smem_wr_ack[8]` | Output | [smem_wr_ack_t](../smem/blackwell_smem_fabric.md#transactions) (82 bits) | External LSU | On `smem_wr_ack.fire`, return one acknowledgment for the accepted write. |
+| `gmem_req` | Output | [gmem_req_t](../tma/blackwell_tma_unit.md#gmem-types) (1,292 bits) | GMEM | On `gmem_req.fire`, issue a TMA data or descriptor transaction on the shared 128 B bus. |
+| `gmem_rsp` | Input | [gmem_rsp_t](../tma/blackwell_tma_unit.md#gmem-types) (1,037 bits) | GMEM | On `gmem_rsp.fire`, match out-of-order returns by 9-bit ID. Response ready is independent of request ready. |
+| `order_req` | Output | [order_req_t](#ordering) (163 bits) | Ordering service | On `order_req.fire`, issue release, acquire, proxy/init fence or CTA_CLOSE. |
+| `order_rsp` | Input | [order_rsp_t](#ordering) (62 bits) | Ordering service | On `order_rsp.fire`, settle the matching visibility operation. |
+| `close_req` | Input | Event without payload | CTA controller | On `close_req.fire`, begin closing the active CTA. |
+| `close_rsp` | Output | status_t (4 bits) | CTA controller | On `close_rsp.fire`, deliver close status after drain and close processing. |
+| `open_req` | Input | 16 bits | CTA controller | On `open_req.fire`, accept the new epoch after isolation under the lifetime protocol. |
+| `open_rsp` | Output | status_t (4 bits) | CTA controller | On `open_rsp.fire`, deliver open status. |
+| `lsu_quiescent` | Input | 1 bit | External LSU | Level. Observe completion of old LSU work and visibility obligations. |
+| `isolated` | Input | 1 bit | Isolation control | Level. Observe isolation of external responses for reset and epoch control. |
+| `epoch` | Output | 16 bits | CTA controller | Current epoch level, updated on an accepted open. |
+| `stopped` | Output | 1 bit | CTA controller | Level indicating closure of normal issue. |
+| `drained` | Output | 1 bit | CTA controller | Level asserted after outstanding work and held transfers drain. |
+| `fault` | Output | 1 bit | CTA controller | Sticky runtime fault level, cleared by isolated reset. |
+| `clk` | Input | 1 bit | External clock and reset | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | External clock and reset | Sample low on a rising edge to reset control. |
 
 ```mermaid
 flowchart LR

@@ -4,10 +4,10 @@
 
 This combinational tree sums the signed fixed-point terms supplied by its parent. Parameters are `TERM_N≥1, TERM_W≥1, SUM_W≥TERM_W`.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| term[TERM_N] | Input | signed[TERM_W] per term | Parent fixed-point data path | Combinational, term 0 at the lowest index |
-| sum | Output | signed[SUM_W] | Parent result stage | Combinational, no clock or handshake |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `term[TERM_N]` | Input | TERM_N × TERM_W bits (signed terms) | Parent fixed-point data path | Combinational. Term 0 occupies the low TERM_W bits. |
+| `sum` | Output | signed SUM_W bits | Parent result stage | Combinational, no clock or handshake. |
 
 ## Functionality
 

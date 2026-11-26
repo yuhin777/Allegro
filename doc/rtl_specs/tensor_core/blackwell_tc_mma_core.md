@@ -4,16 +4,37 @@
 
 Core i handles global rows 32i…32i+31 and all N columns. Issue order is (cmd,j,r), with four eight-row groups r in each block j. The core owns A, B, C, D, scale A, R_OP, and local write accounting. All four cores use the [engine](blackwell_tc_mma_engine.md) for command order and partition selection.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| prepare / b_select | Input [prepare_t](blackwell_tc_mma_engine.md#engine-ports) / [b_select_t](blackwell_tc_mma_engine.md#engine-ports), 449/63 bits | MMA engine | From the engine. Bind by rec, ID, and bank and initialize only this command. Normal b_select follows prepare. |
-| first_id / first_ready / launch | Input {valid1,id58} / output bit / input bit | MMA engine | Check first microtile of selected new ID, previous final microtile loaded, old R_OP able to issue, and dot family eligibility. Shared launch loads the first microtile on all four cores on one edge. |
-| input_free[3] / writes_done[3] / local_done | Output, 1 bit / 1 bit per rec, plus one op_done_t62 | MMA engine | Sample input release and write completion levels per rec. Final handshake carries original ID. |
-| live[3] / older_writes_clear[3] | Input, 61 / 4 bits per entry | MMA engine | live={valid1,rec2,id58}. The permissions cover A, scale A, scale B, and offset-overlapping C/D respectively. The engine uses the scale B permission. [engine interface](blackwell_tc_mma_engine.md#engine-ports) |
-| data | Input [b_data_t](blackwell_tc_b_loader.md#types), 2111 bits | B loader | Loader destination for this core. Match b_select by ID/j. Write the block only on fire. Pack eight consecutive 32 B logical columns from the low bits in column order. |
-| sm_rd_req/sm_rd_rsp[8], tm_rd_req/tm_rd_rsp, tm_wr_req/tm_wr_ack[128] | Request outputs, response inputs. SMEM reads 126/210 bits, TMEM reads 108/210 and writes 236/82 bits | SMEM, TMEM fabric | client=i. Index SMEM by 16 B atom group and TMEM by lane. Retain tag through delivery. |
-| sb_query / sb_view, operand / cmd_i / result / empty_o | Query output/view input 72/257 bits. operand/cmd_i outputs 6732/446 bits. result/empty_o inputs 2124/1 bits | scale B snapshot, dot array | Combinational scale lookup by ID. Select arithmetic control by R_OP.tag.id and handshake with the input. |
-| clk, rst_n, epoch_i / idle_o, drained_o, fault_o | epoch_i input u16, clock and reset bit inputs, status bit outputs | MMA engine, top level | Reset clears control and valid bits. The engine has authority to clear static B residency. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `prepare` | Input | [prepare_t](blackwell_tc_mma_engine.md#engine-ports) (449 bits) | MMA engine | On `prepare.fire`, bind the command by record, ID and bank. |
+| `b_select` | Input | [b_select_t](blackwell_tc_mma_engine.md#engine-ports) (63 bits) | MMA engine | On `b_select.fire`, select the physical B range for the prepared ID. |
+| `first_id` | Input | 59 bits (valid and 58-bit ID) | MMA engine | Level. Select the new command for first-microtile admission. |
+| `first_ready` | Output | 1 bit | MMA engine | Level. Assert when selected operands, prior issue order, R_OP space and dot path permit launch. |
+| `launch` | Input | 1 bit | MMA engine | On the shared launch edge all four cores load the first microtile. |
+| `input_free[3]` | Output | 1 bit per record | MMA engine | Level. Assert when the input context can be released. |
+| `writes_done[3]` | Output | 1 bit per record | MMA engine | Level. Assert after all write obligations settle. |
+| `local_done` | Output | op_done_t (62 bits) | MMA engine | On `local_done.fire`, report the settled record by its original ID. |
+| `live[3]` | Input | 61 bits per entry (valid, record, ID) | MMA engine | Level. Select by command age. |
+| `older_writes_clear[3]` | Input | 4 bits per record | MMA engine | Level. Gate TMEM A, scale A, scale B and offset-overlapping C/D respectively. The engine applies scale B permission. See the [engine interface](blackwell_tc_mma_engine.md#engine-ports). |
+| `data` | Input | [b_data_t](blackwell_tc_b_loader.md#types) (2,111 bits) | B loader | On `data.fire`, write the block matching the selected ID and block index. Pack eight consecutive 32 B columns from the low bits in column order. |
+| `sm_rd_req[8]` | Output | 126 bits | SMEM fabric | On `sm_rd_req.fire`, issue the client’s read by 16 B atom group. |
+| `sm_rd_rsp[8]` | Input | 210 bits | SMEM fabric | On `sm_rd_rsp.fire`, accept the return with the original tag. |
+| `tm_rd_req[128]` | Output | 108 bits | TMEM fabric | On `tm_rd_req.fire`, issue the client’s read by lane. |
+| `tm_rd_rsp[128]` | Input | 210 bits | TMEM fabric | On `tm_rd_rsp.fire`, accept the tagged return on its lane. |
+| `tm_wr_req[128]` | Output | 236 bits | TMEM fabric | On `tm_wr_req.fire`, issue the write on its lane. |
+| `tm_wr_ack[128]` | Input | 82 bits | TMEM fabric | On `tm_wr_ack.fire`, settle the original write by tag. |
+| `sb_query` | Output | 72 bits | Scale B snapshot | Level. Select the scale B snapshot by ID. |
+| `sb_view` | Input | 257 bits | Scale B snapshot | Capture the matching scale view on op_load. |
+| `operand` | Output | 6,732 bits | Dot array | On `operand.fire`, issue the microtile with its tag. |
+| `cmd_i` | Output | 446 bits | Dot array | Sample with `operand.fire` from the record selected by R_OP.tag.id. |
+| `result` | Input | 2,124 bits | Dot array | On `result.fire`, capture the microtile into the matching D slot. |
+| `empty_o` | Input | 1 bit | Dot array | Level. Observe whether the array has drained. |
+| `clk` | Input | 1 bit | MMA engine / top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | MMA engine / top level | Sample low on a rising edge to clear control and valid bits. The engine controls clearance of static B residency. |
+| `epoch_i` | Input | 16 bits | MMA engine / top level | Level identifying the active CTA lifetime. |
+| `idle_o` | Output | 1 bit | MMA engine / top level | Level indicating idle execution. |
+| `drained_o` | Output | 1 bit | MMA engine / top level | Level asserted after outstanding work and held transfers drain. |
+| `fault_o` | Output | 1 bit | MMA engine / top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 

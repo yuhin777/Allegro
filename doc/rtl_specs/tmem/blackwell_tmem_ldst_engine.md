@@ -4,19 +4,23 @@
 
 One context per direction supports ordinary 32x32b LD x16/x32 and ST x16. Expand addresses only according to [TMEM layout](blackwell_tmem_fabric.md#tmem-layout).
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `issue` | Input, local ldst_issue_t, 97 bits | Top-level R_RF_ISSUE | `{cmd:tmem_ldst_cmd_t,slot:5}`. The top has already allocated the live slot. |
-| `rf_store` | Input, [rf_beat_t](#rf-types), 1090 bits | External RF | One store beat for a complete warp. |
-| `rf_load` | Output, rf_beat_t, 1090 bits | External RF | One load beat for a complete warp. |
-| `rd_req[128]` / `rd_rsp[128]` | Output/input, [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions)/[tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | Independent atom channels indexed by global lane. |
-| `wr_req[128]` / `wr_ack[128]` | Output/input, [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions)/[tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | At most one candidate per bank per cycle. |
-| `pin_req` / `pin_rsp` | Output/input, [tmem_pin_req_t](blackwell_tmem_manager.md#management-types)/[tmem_pin_rsp_t](blackwell_tmem_manager.md#management-types) | TMEM manager | This engine prechecks range. The manager authorizes fixed users 3/4. Route ID back to LD/ST. |
-| `unpin` | Output, [tmem_unpin_t](blackwell_tmem_manager.md#management-types) | TMEM manager | Release the respective use bit after all data effects complete. |
-| `track_done` | Output, [rf_track_done_t](blackwell_tmem_wait_tracker.md#wait-types), 67 bits | TMEM wait tracker | Original slot/ID and final status. |
-| `done` | Output, [op_done_t](../top/blackwell_async_subsystem_top.md#identity), 62 bits | Software front end | Final command response, held independently of track_done. |
-| `stop_i` / `drained_o` | Input/output, 1 bit | Top level | Do not block derived issues already accepted by the top. Top-level stop closes new external LDST. Drain includes RF, ACK, pin, and completion outputs. |
-| `fault_o` | Output, 1 bit, no handshake | Top level | Protocol fault level aggregated at the top. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `issue` | Input | local ldst_issue_t (97 bits) | Top-level R_RF_ISSUE | Transfer on `issue.fire`. `{cmd:tmem_ldst_cmd_t,slot:5}`. The top has already allocated the live slot. |
+| `rf_store` | Input | [rf_beat_t](#rf-types) (1,090 bits) | External RF | Transfer on `rf_store.fire`. One store beat for a complete warp. |
+| `rf_load` | Output | rf_beat_t (1,090 bits) | External RF | Transfer on `rf_load.fire`. One load beat for a complete warp. |
+| `rd_req[128]` | Output | [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions) (108 bits) | TMEM fabric | On `rd_req.fire`, issue independently by global lane. |
+| `rd_rsp[128]` | Input | [tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) (210 bits) | TMEM fabric | On `rd_rsp.fire`, capture the matching atom by lane. |
+| `wr_req[128]` | Output | [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions) (236 bits) | TMEM fabric | On `wr_req.fire`, issue at most one write candidate per bank each cycle. |
+| `wr_ack[128]` | Input | [tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) (82 bits) | TMEM fabric | On `wr_ack.fire`, settle the matching actual write by tag. |
+| `pin_req` | Output | [tmem_pin_req_t](blackwell_tmem_manager.md#management-types) (61 bits) | TMEM manager | On `pin_req.fire`, request authorization after range precheck for fixed user 3 or 4. |
+| `pin_rsp` | Input | [tmem_pin_rsp_t](blackwell_tmem_manager.md#management-types) (62 bits) | TMEM manager | On `pin_rsp.fire`, match the returned ID to the LD/ST operation. |
+| `unpin` | Output | [tmem_unpin_t](blackwell_tmem_manager.md#management-types) (61 bits) | TMEM manager | Transfer on `unpin.fire`. Release the respective use bit after all data effects complete. |
+| `track_done` | Output | [rf_track_done_t](blackwell_tmem_wait_tracker.md#wait-types) (67 bits) | TMEM wait tracker | Transfer on `track_done.fire`. Original slot/ID and final status. |
+| `done` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | Software front end | Transfer on `done.fire`. Final command response, held independently of track_done. |
+| `stop_i` | Input | 1 bit | Top level | Level closing external admission at the top. Continue derived issues already accepted there. |
+| `drained_o` | Output | 1 bit | Top level | Assert when RF, ACK, pin and completion obligations drain. |
+| `fault_o` | Output | 1 bit | Top level | Level. Protocol fault level aggregated at the top. |
 
 ```mermaid
 flowchart LR

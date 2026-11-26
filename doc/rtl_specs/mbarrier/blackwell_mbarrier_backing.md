@@ -4,16 +4,16 @@
 
 Converts 8 B object cache fills and writebacks into masked 16 B transactions on the shared SMEM fabric. It has no additional object cache and does not modify counts. See [common](../top/blackwell_async_subsystem_top.md#common-protocol) for interfaces, [mbarrier_object](blackwell_mbarrier_unit.md#object) for objects, and [memory_transaction](../top/blackwell_async_subsystem_top.md#memory-routing) for transactions.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| `back_req` | Input | [bar_back_req_t](#backing-types), 97 | Object unit | One object read or write |
-| `back_rsp` | Output | [bar_back_rsp_t](#backing-types), 68 | Object unit | Successful reads return 8 B. Writes return value=0 |
-| `smem_req` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions), 255 | SMEM fabric | client=11, 16 B aligned |
-| `smem_rsp` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions), 211 | SMEM fabric | Accept only the current live tag as a match |
-| `epoch` | Input | 16-bit static configuration | Top level | Change only after drain |
-| `stop` | Input | 1 | Top level | Drain indication. Does not gate internal back_req |
-| `drained` | Output | 1 | Top level | No pending request, external transaction, or held response |
-| `fault` | Output | 1 sticky | Top level | External protocol error, cleared by reset |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `back_req` | Input | [bar_back_req_t](#backing-types) (97 bits) | Object unit | Transfer on `back_req.fire`. One object read or write. |
+| `back_rsp` | Output | [bar_back_rsp_t](#backing-types) (68 bits) | Object unit | Transfer on `back_rsp.fire`. Successful reads return 8 B. Writes return value=0. |
+| `smem_req` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | Transfer on `smem_req.fire`. client=11, 16 B aligned. |
+| `smem_rsp` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (211 bits) | SMEM fabric | Transfer on `smem_rsp.fire`. Accept only the current live tag as a match. |
+| `epoch` | Input | 16 bits | Top level | Level. Change only after drain. |
+| `stop` | Input | 1 bit | Top level | Level. Drain indication. Does not gate internal back_req. |
+| `drained` | Output | 1 bit | Top level | Level. No pending request, external transaction, or held response. |
+| `fault` | Output | 1 bit (sticky) | Top level | Level. External protocol error, cleared by reset. |
 
 ```mermaid
 flowchart LR

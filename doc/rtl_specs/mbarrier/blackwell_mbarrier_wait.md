@@ -4,14 +4,21 @@
 
 Holds up to 32 unretired TRY_WAIT.parity observations. The [unit](blackwell_mbarrier_unit.md) exclusively owns object state. Waiters do not pin its cache. See [command objects](blackwell_mbarrier_frontend.md#command) for input and return types.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| wait_cmd/rsp | Input [bar_cmd_t](blackwell_mbarrier_frontend.md#command) / output [bar_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | Allocate one entry per command. Hold the full ID and completed/status until response consumption. |
-| probe_req/rsp | Output [bar_service_req_t](blackwell_mbarrier_frontend.md#command) / input [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) | barrier frontend | QUERY, route=1, slot5. Reserve the return position beforehand. |
-| change | Input [bar_change_t](blackwell_mbarrier_unit.md#change-type) + pulse | Object unit | Broadcast on the unit's object commit edge. All unresolved matching-address entries may sample without backpressure. |
-| acquire_req/rsp | Output [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) / input [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) | Ordering service | One outstanding transaction, scope=CTA, async→generic, bytes=0. |
-| busy_addr/addr_busy | 32-bit input / bit output, combinational | barrier frontend | Any non-FREE entry matching the address. |
-| epoch, stop / drained, fault | Input u16, bit / output bit, bit | Top level | Normal stop drains. A fault notifies the top level to terminate the run. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `wait_cmd` | Input | [bar_cmd_t](blackwell_mbarrier_frontend.md#command) (192 bits) | barrier frontend | On `wait_cmd.fire`, allocate one wait entry. |
+| `wait_rsp` | Output | [bar_rsp_t](blackwell_mbarrier_frontend.md#command) (63 bits) | barrier frontend | On `wait_rsp.fire`, deliver the held ID, predicate and status. |
+| `probe_req` | Output | [bar_service_req_t](blackwell_mbarrier_frontend.md#command) (199 bits) | barrier frontend | On `probe_req.fire`, issue QUERY with route 1 and a reserved return position (5-bit slot). |
+| `probe_rsp` | Input | [bar_service_rsp_t](blackwell_mbarrier_frontend.md#command) (72 bits) | barrier frontend | On `probe_rsp.fire`, accept the QUERY result for that slot. |
+| `change` | Input | [bar_change_t](blackwell_mbarrier_unit.md#change-type) (34 bits) | Object unit | Broadcast on the unit's object commit edge. All unresolved matching-address entries may sample without backpressure. |
+| `acquire_req` | Output | [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) (163 bits) | Ordering service | On `acquire_req.fire`, issue the single outstanding CTA acquire, async to generic, with zero bytes. |
+| `acquire_rsp` | Input | [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) (62 bits) | Ordering service | On `acquire_rsp.fire`, accept the matching ordering acknowledgment. |
+| `busy_addr` | Input | 32 bits | barrier frontend | Level. Query the reference set by address. |
+| `addr_busy` | Output | 1 bit | barrier frontend | Level. Assert for any matching non-FREE entry. |
+| `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `stop` | Input | 1 bit | Top level | Level closing new external work while accepted obligations drain. |
+| `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
+| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
