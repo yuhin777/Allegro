@@ -31,14 +31,6 @@ class LinearFrontEnd(FrontEnd):
                 assert value & 15 == 0 and tag not in self.atoms
                 self.atoms[tag] = ((value >> 4) & ((1 << 128) - 1)).to_bytes(16, "little")
 
-    async def open(self):
-        await self.edge()
-        await self.edge()
-        self.d.rst_n.value = 1
-        await self.send("open_req", self.epoch)
-        await self.wait_until(lambda: "open_rsp" in self.lifecycle, f"open response for epoch {self.epoch}")
-        self.lifecycle.discard("open_rsp")
-
     async def load(self, origin, target, size, barrier):
         op = self.sign(0)
         await self.send("tma_cmd", pack((58, op), (3, 2), (64, 0), (32, target), (64, origin),

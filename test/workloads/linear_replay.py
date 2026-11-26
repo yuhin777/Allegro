@@ -140,9 +140,8 @@ async def close_flushes_both_halves_before_ordering(dut):
     await fe.edge()
     # Normal reopen changes epoch without resetting storage. Read the actual
     # SMEM line through LSU to check both masked dirty writebacks.
-    await fe.send("open_req", 2)
-    await fe.wait_until(lambda: "open_rsp" in fe.lifecycle, f"open response for epoch {fe.epoch}")
     fe.epoch = 2
+    await fe.open(release_reset=False)
     data = await fe.read_line(base)
     objects = unpack("<QQ", data[:16])
     assert objects == tuple((1 << 62) | (count << 20) | (count-1) for count in (3, 5))

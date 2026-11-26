@@ -17,11 +17,7 @@ def command(op, start, destination=0, input_d=1):
 @cocotb.test()
 async def eight_accumulations(dut):
     fe = Accumulation(dut)
-    await fe.edge()
-    await fe.edge()
-    dut.rst_n.value = 1
-    await fe.send("open_req", 1)
-    await fe.wait_until(lambda: "open_rsp" in fe.lifecycle, f"open response for epoch {fe.epoch}")
+    await fe.open()
     alloc = fe.sign(320)
     await fe.send("tmem_manage", pack((58, alloc), (2, 0), (32, 0), (10, 512)))
     await fe.result(alloc, "tmem_manage_rsp")

@@ -31,7 +31,6 @@ if [[ $mode == unit || $mode == all ]]; then
     make -C test/tma SIM_BUILD="$build/tma_cocotb" COCOTB_RESULTS_FILE="$build/tma.xml" BUILD_ARGS="-j$jobs"
 fi
 if [[ $mode == workloads || $mode == all ]]; then
-    test/workloads/build.sh "$build/workload_top"
     for module in linear_replay commit_order accumulation fa4_timing fa4_replay; do
         make -C test/workloads MODULE="$module" SIM_BUILD="$build/workload_top" \
             COCOTB_RESULTS_FILE="$build/$module.xml"

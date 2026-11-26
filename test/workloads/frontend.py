@@ -335,11 +335,17 @@ class FrontEnd:
         self.acks.difference_update(tags)
         self.d.lsu_quiescent.value=1
 
-    async def lifecycle_start(self,barriers):
-        await self.edge(); await self.edge()
-        self.d.rst_n.value=1
-        await self.send("open_req",self.epoch)
+    async def open(self, *, release_reset=True):
+        if release_reset:
+            await self.edge()
+            await self.edge()
+            self.d.rst_n.value = 1
+        await self.send("open_req", self.epoch)
         await self.wait_until(lambda: "open_rsp" in self.lifecycle, f"open response for epoch {self.epoch}")
+        self.lifecycle.remove("open_rsp")
+
+    async def lifecycle_start(self,barriers):
+        await self.open()
         for name in NAMES:
             await self.result(await self.tma(name,6,0,(),issuer=0),"tma_rsp")
         for addr,count in barriers.items():

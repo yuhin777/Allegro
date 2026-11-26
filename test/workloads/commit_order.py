@@ -19,11 +19,7 @@ async def exercise(d, fail):
     fe = Accumulation(d)
     def probe(name):
         return d._id("ack_client[0].ack_route[0].observed.probe."+name, extended=False)
-    await fe.edge()
-    await fe.edge()
-    d.rst_n.value = 1
-    await fe.send("open_req", 1)
-    await fe.wait_until(lambda: "open_rsp" in fe.lifecycle, f"open response for epoch {fe.epoch}")
+    await fe.open()
     a = fe.sign(320)
     await fe.send("tmem_manage", pack((58, a), (2, 0), (32, 0), (10, 512)))
     await fe.result(a, "tmem_manage_rsp")

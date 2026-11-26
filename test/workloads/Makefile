@@ -15,5 +15,6 @@ sim: $(SIM_BUILD)/Vtop
 	"$<"
 	python3 ../check_results.py "$(COCOTB_RESULTS_FILE)"
 
-$(SIM_BUILD)/Vtop: $(addprefix $(REPO)/,$(shell cat $(REPO)/rtl/files.f)) build.sh model.vlt blackwell_test_memory_ack.sv
+$(SIM_BUILD)/Vtop: $(REPO)/rtl/files.f $(addprefix $(REPO)/,$(shell cat $(REPO)/rtl/files.f)) build.sh model.vlt blackwell_test_memory_ack.sv
 	./build.sh "$(SIM_BUILD)"
+	@touch -c "$@"
