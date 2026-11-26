@@ -39,7 +39,7 @@ Reference byte addresses follow the FP16 host layout, with logical dimensions or
 
 At rows=128, the D128 QK subblock byte offsets are `0/32/64/96/16384/16416/16448/16480`. The MN-major PV descriptor has LBO=16384 and SBO=1024. D64 QK subblock offsets are 0/32/64/96 B, and PV accesses one panel. [Upstream FA4 descriptor example](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L29-L51)
 
-The additional wide-head case uses smem_base=0 and rows=128. For row0/b=128 the address is 16384, for row1/b=0 it is 144, and for row127/b=255 it is 32655 (32767 before swizzle). Neither panel aliases the next row. This checks the project's published layout. It does not establish the byte ABI of the original CUDA descriptor. [Flash wide-head test](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L156-L165) · [CUDA tiled map API](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html)
+The additional wide-head case uses smem_base=0 and rows=128. For row0/b=128 the address is 16384, for row1/b=0 it is 144, and for row127/b=255 it is 32655 (32767 before swizzle). Neither panel aliases the next row. The original CUDA descriptor’s byte ABI is outside the scope of this address calculation. [Flash wide-head test](https://github.com/FlashGPU-Sim/FlashGPU-Sim/blob/7a48f7685d604d71da3692fb1b24825fdb7cc79c/tests/src/unit/fa4_opaque_tensormap_test.cc#L156-L165) · [CUDA tiled map API](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html)
 
 ### Repeating four-cycle QK window
 

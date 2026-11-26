@@ -7,7 +7,7 @@ The single walker consumes ARMED setup slots in FIFO order and generates segment
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
 | `head` | Input | [tma_context_ref_t](blackwell_tma_setup.md#context) (6 bits) | TMA unit | Select the armed FIFO head after begin and any required binding. Consume it on the first S0.fire. |
-| `context` | Input | [tma_context_t](blackwell_tma_setup.md#context) (1,008 bits) | Setup | Level. Read the selected slot before the S0 acceptance edge. |
+| `ctx[2]` | Input | [tma_context_t](blackwell_tma_setup.md#context) (1,008 bits per slot) | Setup | On S0.fire, sample the slot indexed by the head reference for the first segment or by the saved reference for subsequent segments. |
 | `walk_start` | Output | tma_context_ref_t (6 bits) | TMA unit | Pulse on the first S0.fire. |
 | `slot_release` | Output | tma_context_ref_t (6 bits) | TMA unit | Pulse once on the last segment or close marker entering S0. May coincide with walk_start. Release determines the slot’s final state. |
 | `segment` | Output | [tma_segment_t](#segment) (193 bits) | tracker | On `segment.fire`, send an ordinary S2 segment to allocate. Its final handshake also closes enumeration. |

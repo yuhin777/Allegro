@@ -11,10 +11,10 @@ Setup accepts linear or tiled copies from the TMA unit and builds immutable, ran
 | `arm` | Input | [tma_context_ref_t](#context) (6 bits) | TMA unit | On admission of a checked READY slot, mark it ARMED. |
 | `walk_start` | Input | [tma_context_ref_t](#context) (6 bits) | TMA unit | Sample the relayed first S0.fire. |
 | `slot_release` | Input | [tma_context_ref_t](#context) (6 bits) | TMA unit | Sample the relayed final S0.fire, including a single-segment walk. |
-| `ctx[2]` | Output | [context](#context) (1,008 bits per slot) | TMA unit, walker | Level. The unit copies long-lived fields in READY. The walker sees the old context on release. |
-| `slot_state[2]` | Output | Five-state enum per slot | TMA unit, walker | Level. Select a pre-edge ARMED slot or continue its active walk. |
-| `slot_ticket[2]` | Output | 5 bits per slot | TMA unit, walker | Level. Identify the pre-edge owner. |
-| `span[2]` | Output | [Access spans](#copy-span) (138 bits per slot) | TMA unit, walker | Level. Copy the checked spans in READY. |
+| `ctx[2]` | Output | [tma_context_t](#context) (1,008 bits per slot) | TMA unit, walker | Level. Both contexts are available to the walker. On a release edge, S0 samples the context of the pre-edge owner. |
+| `slot_state[2]` | Output | Five-state enum per slot | TMA unit | Level. Present each slot’s pre-edge state. |
+| `slot_ticket[2]` | Output | 5 bits per slot | TMA unit | Level. Identify the pre-edge owner. |
+| `span[2]` | Output | [Access spans](#copy-span) (138 bits per slot) | TMA unit | Level. Copy the checked spans in READY. |
 | `drained` | Output | 1 bit | TMA unit | Assert with both slots empty and no computation or held result. |
 | `fault` | Output | 1 bit | TMA unit | Sticky runtime fault level, cleared by isolated reset. |
 
