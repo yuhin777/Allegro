@@ -14,6 +14,26 @@ Run these commands from the repository root on the RTX 5080 verification host. T
 
 Set `JOBS` to control build parallelism. Set `ALLEGRO_BUILD_DIR` to select the regression output directory. The [dot suite](dot/run.sh) also accepts `MMA_SIM_VECTORS`, a file of additional raw-bit transactions in the [reference generator's format](dot/reference.py). External finite cases must share the decode, zero-term, alignment and packing rules of the DUT. [MMA-Sim finite accumulation reference](https://github.com/yuhin777/Allegro/blob/ac5b2a4/MMA-Sim/mmasim/simulator/arithmetic.py)
 
+## Testbench architecture
+
+Place a module interface or pipeline-edge test beside the benches for that DUT. Use the workload suite for commands that cross subsystem boundaries, memory visibility and kernel replay. The module test plan below links each specification to its executable checks and pass conditions.
+
+| Responsibility | What the test author supplies |
+| --- | --- |
+| Scenario | A legal initial state, an ordered sequence of transactions, the exact backpressure or fault point, and the observable outcome that would expose a defect. |
+| Environment and driver | Assemble the DUT and its external services. Encode requests, hold each offer until acceptance, and bound waits for a response. The top-level driver owns clock advancement. |
+| Monitor | Sample accepted transfers on the specified edge. Record identity, payload and cycle for each event used in a check. |
+| Reference and checker | Derive the expected value or ordering from the specification and compare it with the observed event. Track write acceptance, write ACK and software completion separately when the contract distinguishes them. |
+| Runner | Select suites and configurations, build the model, run the named cases and report their results. Specify stimulus phases and timing conditions inside the test. |
+
+A workload supplies its memory model and owns its address layout, input generation and service assumptions. Shared protocol code depends only on the DUT interface. Before sharing a helper, compare field widths and signedness, reset behavior, sampling phase and the edge that consumes a response.
+
+A small SV bench can own all these responsibilities in one file. In the base bench, each input holds its pending byte independently. The reference queues advance on handshakes and predict occupancy and head data even while a FIFO is full. A reviewer can trace the simultaneous pop and push from stimulus to the comparison on the next edge. [FIFO and pipeline bench](base/base_tb.sv)
+
+For a top-level example, the linear environment supplies a read-only GMEM model. The scenario issues four copies in each of two phases, waits for the barrier, reads the destination through LSU and compares each word with the expected sequence. The same scenario checks the observed ordering requests through close. [Linear environment](workloads/linear_driver.py) · [Linear replay](workloads/linear_replay.py)
+
+For larger environments, OpenTitan SPI_HOST illustrates separate stimulus, monitoring and scoreboarding. The cocotb AXI FIFO example assembles a master and a RAM model and checks the destination bytes under backpressure. [OpenTitan SPI_HOST verification](https://opentitan.org/book/hw/ip/spi_host/dv/index.html) · [AXI FIFO cocotb bench](https://github.com/alexforencich/verilog-axi/blob/master/tb/axi_fifo/test_axi_fifo.py)
+
 ## Writing and interpreting tests
 
 - Start with a rule in the owning specification. Give the legal starting state, stimulus and observable pass condition. Use an SV bench for a module's signal or edge contract and cocotb for cross-module transactions, memory contents and kernel replay. The tables identify the executable checks. A **planned** item names a check that still needs a dedicated executable case. [OpenTitan verification methodology](https://opentitan.org/book/doc/contributing/dv/methodology/index.html)
