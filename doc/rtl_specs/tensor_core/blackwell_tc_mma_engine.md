@@ -90,7 +90,7 @@ Match requests and results by the full 58-bit ID. Array indices select wiring on
 | a_ref, b_desc | 64 each | For SMEM A, a_ref is a descriptor. For TMEM A, the upper 32 bits of a_ref are zero and the lower 32 bits are taddr. B always uses [SMEM descriptor](blackwell_tc_mma_engine.md#matrix-descriptor) |
 | d_tmem, scale_a, scale_b | 32 each | See [scale layout](blackwell_tc_scale_b_snapshot.md#scale-layout) for taddr, scale addresses, and IDs |
 
-During decode, front-end simulation assertions check the raw instruction fields that normalization drops, including M, K, dense form, D dtype and reserved instruction bits. When the front end presents `mma_cmd_t`, engine ingress assertions check its ID and epoch, kind and N encoding, operand combinations, modifiers and retained SMEM matrix descriptor fields.
+Before packing the command, front-end simulation assertions check the requested shape, dense form, D dtype and reserved instruction bits against the raw instruction encoding. When the front end presents `mma_cmd_t`, engine ingress assertions check its ID and epoch, kind and N encoding, operand combinations, modifiers and retained SMEM matrix descriptor fields.
 
 #### Command preconditions
 

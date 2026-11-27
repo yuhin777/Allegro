@@ -35,7 +35,7 @@ Hold ID and address in SEND until fire, then wait only for the matching response
 
 Ordinary arrival has count 1 and leaves tx-count unchanged. Before ready_commit is presented, every covered MMA has retired all actual write ACKs. The tracker establishes this condition. The bridge cannot relax it.
 
-The tc_bar_rsp handshake indicates arrival committed atomically in the cache. It may flip phase and wake a wait. The cache owns the dirty object until writeback.
+The barrier unit atomically updates the cached object on its COMMIT edge. If the arrival completes the phase, waiters can observe the change from that update. The later `tc_bar_rsp.fire` acknowledges the committed arrival to the bridge. The cache owns the dirty object until writeback. [Barrier update timing](../mbarrier/blackwell_mbarrier_unit.md#functionality)
 
 Software observes phase through `mbarrier.try_wait.parity`. A successful observation also needs an acquire ACK before returning true to software. [Wait and acquire](../mbarrier/blackwell_mbarrier_wait.md)
 
@@ -43,7 +43,7 @@ Software observes phase through `mbarrier.try_wait.parity`. A successful observa
 
 For ready_commit accepted at g, the earliest tc_bar_req is g+1. With bar_rsp accepted at r, commit_done can deliver at r+1 and retire at r+2. On that edge the next eligible ready_commit may be sampled while old register contents supply the old retire.
 
-While commit_done is stalled, retain the tracker slot so later commits from the same issuer cannot overtake the result. Accepted operations of different issuers can continue executing and completing. Backpressure new commands only when tracker capacity fills.
+While commit_done is stalled, retain the tracker slot so later commits from the same issuer cannot overtake the result. Accepted operations of different issuers can continue executing and completing. Other eligible commits can still register in free tracker slots. Once all eight are occupied, commit registration stalls. [Tracker registration and completion](blackwell_tc_completion_tracker.md#registration-and-completion)
 
 Hold R_COMMIT if retire is blocked. The tracker determines retire ready by matching the old slot/ID, independently of new ready_commit. A ready record from another issuer may replace it on the same edge. A commit from the same issuer remains gated by older commits in the tracker.
 
