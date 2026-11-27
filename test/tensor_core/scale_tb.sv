@@ -27,7 +27,8 @@ module scale_tb;
   for (genvar l = 0; l < 128; l++) begin
     always_comb begin
       rd_req_ready[l] = cycle % 5 != 2 && (!outstanding[l] || cycle % 3 != 1);
-      rd_rsp_valid[l] = outstanding[l] && cycle % 3 != 1;
+      rd_rsp_valid[l] = (outstanding[l] && cycle % 3 != 1) ||
+          (l == 32 && rst_n && $test$plusargs("upper_lane"));
       rd_rsp_payload[l].tag = saved[l].tag;
       for (int b = 0; b < 16; b++)
       rd_rsp_payload[l].data[b*8+:8] = pattern(l, 4 * int'(saved[l].word) + b / 4, b % 4);

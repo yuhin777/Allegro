@@ -38,6 +38,7 @@ if [[ $mode == unit || $mode == all ]]; then
         test/run_sv.sh "$build" "$bench" "${flags[@]}"
         case "$bench" in
             */b_loader_tb.sv) expect_assertion b_loader_tb bad_return TC_B_RETURN ;;
+            */scale_tb.sv) expect_assertion scale_tb upper_lane TC_SCALE_B_RETURN_LANE ;;
             */tmem_a_tb.sv) expect_assertion tmem_a_tb wrong_lane TC_A_TMEM_RETURN ;;
             */tmem_control_tb.sv) expect_assertion tmem_control_tb dealloc_pinned TMEM_DEALLOC_LIFETIME ;;
             */tmem_rf_tb.sv)

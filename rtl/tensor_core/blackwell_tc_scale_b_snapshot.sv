@@ -59,6 +59,7 @@ module blackwell_tc_scale_b_snapshot
   always_ff @(posedge clk) if (rst_n) begin
     if (start_valid) assert (legal_start);
     if (release_valid) assert ($onehot(release_match));
+    assert (rd_rsp_valid[127:32] == 0) else $fatal(1, "TC_SCALE_B_RETURN_LANE");
   end
 `endif
   always_comb begin
@@ -149,24 +150,24 @@ module blackwell_tc_scale_b_snapshot
         held_atom <= req_atom;
         if (rd_req_ready[7'(req_lane)]) sent[req_bank][req_lane][req_atom] <= 1;
       end
-      for (int l = 0; l < 128; l++) begin
+      for (int l = 0; l < 32; l++) begin
         if (rd_rsp_valid[l]) begin
           logic b;
           logic [1:0] a;
           b = active[1] && rd_rsp_payload[l].tag.id == ctx[1].id;
           a = rd_rsp_payload[l].tag.token[1:0];
 `ifndef SYNTHESIS
-          assert (l < 32 && active[b] && ctx[b].id == rd_rsp_payload[l].tag.id &&
+          assert (active[b] && ctx[b].id == rd_rsp_payload[l].tag.id &&
                   rd_rsp_payload[l].tag.client == 4 && rd_rsp_payload[l].tag.token[15:2] == 14'(l) &&
-                  a < 3 && sent[b][l%32][a] && !received[b][l%32][a]);
+                  a < 3 && sent[b][l][a] && !received[b][l][a]);
 `endif
-          received[b][l%32][a] <= 1;
+          received[b][l][a] <= 1;
           for (int c = 0; c < 8; c++)
           if (c < ctx[b].columns && (int'(ctx[b].base[1:0]) + c) / 4 == int'(a))
             for (int g = 0; g < 4; g++)
             cells[{
               1'b0, b
-            }][l%32][c][g*8+:8] <= g < ctx[b].factors ? rd_rsp_payload[l].data[
+            }][l][c][g*8+:8] <= g < ctx[b].factors ? rd_rsp_payload[l].data[
                 8*(4*((int'(ctx[b].base[1:0])+c)%4)+int'(ctx[b].scale_id)+g)+:8] : 0;
         end
       end
