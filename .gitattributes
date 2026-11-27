@@ -1,0 +1,5 @@
+# Unified diffs preserve context prefixes and upstream whitespace verbatim.
+*.patch whitespace=-blank-at-eol
+
+# Archived CSV evidence retains the original CRLF line endings.
+doc/archive/accel_sim_experiment/results/*.csv whitespace=cr-at-eol

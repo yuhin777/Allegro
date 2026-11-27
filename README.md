@@ -1,8 +1,23 @@
 # Allegro
 
-Allegro 是一个多精度 dot-product RTL 实验仓库，当前重点是 `dot_cluster_top` 以及面向 NVIDIA-style Tensor Core 数据格式的 bit-accurate 验证。RTL 使用 SystemVerilog，参考模型使用本仓库 vendor 的 `MMA-Sim`。
+Allegro contains the [Blackwell asynchronous subsystem](#blackwell-asynchronous-subsystem) and the [standalone dot-product RTL](#standalone-dot-product-rtl).
 
-## Repository Layout
+## Blackwell asynchronous subsystem
+
+Allegro models a single-CTA asynchronous subsystem for SM100a. It includes the Tensor Core, TMEM, shared SMEM, TMA, and mbarrier. The surrounding system provides warp scheduling, RF, GMEM, and visibility services.
+
+- See [Supported PTX](doc/proposals/supported_ptx.md) for instructions, operands, completion semantics, and the three target kernels.
+- The [Microarch Brief](doc/proposals/microarch_brief.md) describes the backend, the capacity and reuse rules of the [Tensor Core Buffer](doc/proposals/microarch_brief.md#tc-buffer), and scheduling for each asynchronous instruction class. [Four-core data path](doc/images/tensor_core_tmem/tensor_core_tmem_pipeline.svg)
+- The 35 [RTL module specifications](doc/rtl_specs/top/blackwell_async_subsystem_top.md#module-index) define interfaces, state, timing, and acceptance criteria. The top level defines cross-module [handshakes and reset](doc/rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol), [identity](doc/rtl_specs/top/blackwell_async_subsystem_top.md#identity), and [ordering](doc/rtl_specs/top/blackwell_async_subsystem_top.md#ordering).
+- The [Cross-MMA pipeline design record](doc/proposals/mma_inter_instruction_pipeline.md) preserves the actual descriptors, instruction sequences, address formulas, and cycle-by-cycle derivations for both FA4 kernels.
+
+The implementation starts at the [RTL top level](rtl/top/blackwell_async_subsystem_top.sv). Acceptance covers the results and synchronization order of the three target kernels and the specified handshake edges under the stated service conditions. Total kernel cycles are recorded for observation.
+
+## Standalone dot-product RTL
+
+The standalone design starts at `dot_cluster_top`. Its cocotb tests use the vendored [MMA-Sim reference model](MMA-Sim/README.md) for bit-accurate verification.
+
+### Repository Layout
 
 - `src/main/`: synthesizable SystemVerilog RTL。
 - `src/main/utils/`: dot-product 共享组合逻辑和通用流水寄存器，例如 FP32 pack、reduction tree、emax tree、align helper。
@@ -11,9 +26,7 @@ Allegro 是一个多精度 dot-product RTL 实验仓库，当前重点是 `dot_c
 - `MMA-Sim/`: vendored MMA-Sim reference model，保留原始 MIT license。
 - `doc/`: datapath、格式和验证说明。
 
-后端综合实验文件不再作为仓库内容维护；本仓库当前只保留 RTL、验证、文档和 reference model。
-
-## Current RTL Structure
+### Current RTL Structure
 
 `dot_cluster_top` 当前有两级请求侧流水：
 
@@ -35,7 +48,7 @@ top request
 
 `dot_cluster_top` 对 B operand 支持结构化 sparse compaction。A operand 不做 sparse selection。`outstanding_q` 和 `active_share_group_q` 用于 share-group admission，避免同一物理流水里跨模式乱序。
 
-## Environment Setup
+### Environment Setup
 
 建议使用本地 Python virtual environment：
 
@@ -67,7 +80,7 @@ export COCOTB_BIN="$ALLEGRO_ROOT/.venv/bin"
 export PYTHON_BIN="$ALLEGRO_ROOT/.venv/bin/python"
 ```
 
-## RTL Quick Checks
+### RTL Quick Checks
 
 Verilator lint：
 
@@ -109,7 +122,7 @@ vvp /tmp/dot_cluster_top_tb.vvp
 
 Icarus 可能打印 `constant selects in always_* processes are not fully supported`，这是 Icarus 的敏感列表限制；只要编译退出码为 0 且 testbench PASS 即可。
 
-## cocotb + MMA-Sim Joint Verification
+### cocotb + MMA-Sim Joint Verification
 
 先进入 cocotb 目录：
 
@@ -149,6 +162,6 @@ make TOPLEVEL=f16tf32_dot_prod COCOTB_TEST_MODULES=test_f16tf32_dot
 NUM_CASES=200 RANDOM_SEED=1234 make TOPLEVEL=fp4_dot_prod COCOTB_TEST_MODULES=test_nvfp4_dot
 ```
 
-## MMA-Sim License
+### MMA-Sim License
 
 `MMA-Sim` 以源码形式 vendor 在本仓库中，仅用于 bit-accurate reference。其 license 保留在 `MMA-Sim/LICENSE.txt`，当前为 MIT License。
