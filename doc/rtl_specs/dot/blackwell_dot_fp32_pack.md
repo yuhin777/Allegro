@@ -4,13 +4,13 @@
 
 This combinational encoder converts the final reduction `sum×2^base_exp` or a special result to FP32. Parameters are `SUM_W≥24, EXP_W≥2, CANONICAL_ZERO=1`.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| sum | Input | signed[SUM_W] | Parent reduction | Combinational finite sum |
-| base_exp | Input | signed[EXP_W] | Parent alignment control | Combinational, paired with sum |
-| special_valid | Input | 1 bit | Parent special-value logic | Combinational special_result select |
-| special_result | Input | bits[32] | Parent special-value logic | Used when special_valid is 1 |
-| result | Output | bits[32] | Parent result stage | Combinational output without clock or handshake |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `sum` | Input | signed SUM_W bits | Parent reduction | Combinational finite sum. |
+| `base_exp` | Input | signed EXP_W bits | Parent alignment control | Combinational, paired with sum. |
+| `special_valid` | Input | 1 bit | Parent special-value logic | Combinational special_result select. |
+| `special_result` | Input | 32 bits | Parent special-value logic | Used when special_valid is 1. |
+| `result` | Output | 32 bits | Parent result stage | Combinational output without clock or handshake. |
 
 ## Functionality
 
@@ -22,9 +22,9 @@ sum=0 produces +0. For other finite values let s be the sign, a the exact absolu
 - e<−149 gives signed zero, or +0 when CANONICAL_ZERO=1.
 - When special_valid=1, return special_result in preference to the finite result.
 
-F16 and the low-precision path set CANONICAL_ZERO=1. FP4 sets it to 0. Exact cancellation always produces +0.
+The wide and K32 paths use CANONICAL_ZERO=1. The native K64 FP4 path uses CANONICAL_ZERO=0 and preserves the sign when a nonzero reduction sum underflows to zero. Exact cancellation produces +0 in every family.
 
-The parent captures the result at its final stage without an extra pipeline stage. Verify that sum=3 and base_exp=0 give 0x40400000. Also check negative powers of two, the most negative sum, normal/subnormal boundaries, e=−149/−150, e=127/128, and special-result priority.
+The parent captures the result at its final stage without an extra pipeline stage.
 
 For sum=2^24+3 and base_exp=−24 the retained 24-bit significand is 0x800001 and the FP32 result is 0x3f800001. The discarded 1 does not increment the result.
 

@@ -4,17 +4,17 @@
 
 Connects TMEM clients to four 32-bank partitions, arbitrates per bank, combines nonconflicting requests, and routes by identity. The partitions exclusively own TMEM data, SRAM read outputs, backup returns, R_W, and ACKs. The fabric adds no duplicate payload buffer.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `clk`, `rst_n` | Input, 1 bit | Top level | Reset arbitration control. |
-| `epoch_i` | Input, 16 bits, no handshake | Top level | Current single-CTA lifetime. Change only after old outstanding transactions are isolated. |
-| `rd_req[6][128]` | Input channel, [tmem_rd_req_t](#transactions) | Four cores, scale B, LD/ST | Clients0…5. Each entry has tag78, lane7, word7, and byte_mask16. |
-| `rd_rsp[6][128]` | Output channel, [tmem_rd_rsp_t](#transactions) | Four cores, scale B, LD/ST | Return tag78, data128, and status4 to the original client/lane. |
-| `wr_req[6][128]` | Input channel, [tmem_wr_req_t](#transactions) | Four cores, LD/ST | Each atom contains tag, lane, word, mask, and data128. |
-| `wr_ack[6][128]` | Output channel, [tmem_wr_ack_t](#transactions) | Four cores, LD/ST | Original tag and status4 for an actual write only. |
-| `live[3]` | Input, {valid1,rec2,id58} in age order | MMA engine | Connected through the top. Per-bank arbitration is independent of this port. |
-| `drained_o` | Output, 1 bit, no handshake | Top level | All four partitions drained and no held arbitrated request. |
-| `fault_o` | Output, 1 bit, no handshake | Top level | Protocol fault level aggregated at the top. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `clk` | Input | 1 bit | Top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | Top level | Sample low on a rising edge. Reset arbitration control. |
+| `epoch_i` | Input | 16 bits | Top level | Level. Current single-CTA lifetime. Change only after old outstanding transactions are isolated. |
+| `rd_req[6][128]` | Input | [tmem_rd_req_t](#transactions) (108 bits) | Four cores, scale B, LD/ST | Transfer on `rd_req.fire`. Clients0…5. Each entry has tag78, lane7, word7, and byte_mask16. |
+| `rd_rsp[6][128]` | Output | [tmem_rd_rsp_t](#transactions) (206 bits) | Four cores, scale B, LD/ST | Transfer on `rd_rsp.fire`. Return tag78 and data128 to the original client/lane. |
+| `wr_req[6][128]` | Input | [tmem_wr_req_t](#transactions) (236 bits) | Four cores, LD/ST | Transfer on `wr_req.fire`. Each atom contains tag, lane, word, mask, and data128. |
+| `wr_ack[6][128]` | Output | [tmem_wr_ack_t](#transactions) (78 bits) | Four cores, LD/ST | Transfer on `wr_ack.fire`. Original tag for an actual write only. |
+| `live[3]` | Input | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | MMA engine | Level. Connected through the top. Per-bank arbitration is independent of this port. |
+| `drained_o` | Output | 1 bit | Top level | Level. All four partitions drained and no held arbitrated request. |
 
 ```mermaid
 flowchart LR
@@ -41,7 +41,7 @@ The fabric instantiates four partitions. Internal part_rd/ret/wr/ack each expand
 
 Expand each client interface over 128 banks. A request drives only the accessed lane.
 
-Clients validate addresses against allocation and command and maintain authorization throughout the access lifetime. The fabric checks port client against tag.client, lane against port index, and epoch. Illegal requests must not reach SRAM. Integration assertions must catch the protocol violation.
+Clients retain authorization throughout the access lifetime. Simulation asserts that each address lies within the command’s allocation, tag.client matches the client port, the lane matches the bank port and the epoch is current.
 
 <a id="tmem-layout"></a>
 
@@ -49,7 +49,7 @@ Clients validate addresses against allocation and command and maintain authoriza
 
 #### Addresses and storage
 
-`tmem_addr_t` is 32 bits. The high 16 bits encode lane and the low 16 column. Valid lanes are 0…127 and columns 0…511. Widen before checking and do not truncate high bits. Each cell is 32 bits, with `bank=lane, word=column//4, cell=column%4` and a 128-bit bank word.
+`tmem_addr_t` is 32 bits. The high 16 bits encode lane and the low 16 column. Valid lanes are 0…127 and columns 0…511. Simulation checks the full fields before narrowing to physical bank and word indices. Each cell is 32 bits, with `bank=lane, word=column//4, cell=column%4` and a 128-bit bank word.
 
 Every allocation covers all 128 lanes and is divided only by column. `warp_id%4` selects the RF-visible warp partition. Warps 0/4/8… of one CTA access the same partition. High warp bits do not add TMEM capacity.
 
@@ -57,7 +57,7 @@ Every allocation covers all 128 lanes and is divided only by column. `warp_id%4`
 
 Ordinary and WS share M128 and layout D. Global output (m,n) maps to lane=m, column=Dbase+n. Each core covers 32 contiguous lanes and all N columns. C and D share an address and use the full 32-bit cell. Dbase is the column field of d_tmem. M128 requires d_tmem.lane=0 and Dbase+N≤512.
 
-A TMEM A row stores K elements in order. FP16/BF16 use 16 bits, TF32 uses 32, and i8 and f8f6f4 use 8-bit containers (low six bits for FP6, [5:2] for ordinary E2M1). mxf4/mxf4nvf4 use packed 4-bit nibbles. Element e has row bit offset e×container width. Let Aref contain lane0/col0 and w be the width. Without transpose, element (m,k) has lane=lane0+m and bit_index=k×w. Where transpose is allowed use lane=lane0+k and bit_index=m×w. column=col0+floor(bit_index/32) and bit within cell=bit_index%32. Widen before checking every lane<128, column<512, and allocation. Nontransposed M128 therefore requires lane0=0. Native FP4 forbids transpose. [MMA command](../tensor_core/blackwell_tc_mma_engine.md#mma-command) · [core](../tensor_core/blackwell_tc_mma_core.md)
+A TMEM A row stores K elements in order. FP16/BF16 use 16 bits, TF32 uses 32, and i8 and f8f6f4 use 8-bit containers (low six bits for FP6, [5:2] for ordinary E2M1). mxf4/mxf4nvf4 use packed 4-bit nibbles. Element e has row bit offset e×container width. Let Aref contain lane0/col0 and w be the width. Without transpose, element (m,k) has lane=lane0+m and bit_index=k×w. Where transpose is allowed use lane=lane0+k and bit_index=m×w. column=col0+floor(bit_index/32) and bit within cell=bit_index%32. Simulation checks expanded addresses in widened arithmetic against lane<128, column<512 and the live allocation. Nontransposed M128 therefore requires lane0=0. Native FP4 forbids transpose. [MMA command](../tensor_core/blackwell_tc_mma_engine.md#mma-command) · [core](../tensor_core/blackwell_tc_mma_core.md)
 
 #### Client-to-partition connections
 
@@ -80,12 +80,12 @@ Each bank arbitrates independently within a partition. Different clients accessi
 |---|---|---:|
 | `tmem_rd_req_t` | tag78, lane7, word7, byte_mask16 | 108 |
 | `tmem_wr_req_t` | tag78, lane7, word7, byte_mask16, data128 | 236 |
-| `tmem_rd_rsp_t` | tag78, data128, status4 | 210 |
-| `tmem_wr_ack_t` | tag78, status4 | 82 |
+| `tmem_rd_rsp_t` | tag78, data128 | 206 |
+| `tmem_wr_ack_t` | tag78 | 78 |
 
 Mask bit b selects data[8b+:8] in a 16 B atom. Unselected bytes retain their values on writes and return zero on reads. See top-level memory-routing for tag78. Every write ACK must establish actual commit.
 
-Each client can present 128 independent bank atoms. `bank_frame<T,N>` expands N channels without extra payload storage. Partial acceptance clears only the accepted entries. Hold the other atoms. A write cycle's ACK identity frame retains per-bank tag/status without copying write data.
+Each client can present 128 independent bank atoms. `bank_frame<T,N>` expands N channels without extra payload storage. Partial acceptance clears only the accepted entries. Hold the other atoms. A write cycle's ACK identity frame retains per-bank tags without copying write data.
 
 ### Per-bank selection and conflict arbitration
 
@@ -122,11 +122,9 @@ Each partition peaks at 512 B/cycle in each direction. Across four partitions th
 
 Unaligned D, general descriptors, and real contention may lower throughput. Preserve return order and identity under conflict. Per-bank retention allows partial partition acceptance.
 
-### Verification
+### Arbitration under backpressure
 
-When local C and another core's transposed A request the same readable bank, a fresh selection chooses C. If A is already held, deliver A first. Let two clients write different banks on one edge and stall their ACKs independently. Check partial retirement, original client/token, and held stability. Exhausting one bank's read credit or filling one partition's ACK frames blocks only affected requests. Advance round-robin only on actual acceptance.
-
-Protocol faults add one bit `protocol_fault_q`. Set it for port/tag.client mismatch, lane index or epoch violation, or any partition fault. Follow the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and outstanding responses.
+When local C and another core's transposed A request the same readable bank, a fresh selection chooses C. If A is already held, deliver A first. Each bank ACK retains its original client and token under independent backpressure. Exhausting one bank's read credit or filling one partition's ACK frames blocks only affected requests. Advance round-robin only on actual acceptance.
 
 ## Submodules
 

@@ -4,17 +4,17 @@
 
 Instance parameter `PARTITION_ID=0…3` selects 32 consecutive TMEM banks. Each bank has 128 words ×128 bits and 1R1W. Capacity is 64 KiB per partition and 256 KiB across four partitions.
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `clk`, `rst_n` | Input, 1 bit | Top-level clock domain | Clear control without initializing SRAM data. |
-| `rd_req[32]` | Input channel, [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | tag78, global lane7, word7, byte_mask16. |
-| `rd_rsp[32]` | Output channel, [tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | tag78, data128, status4. |
-| `wr_req[32]` | Input channel, [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | tag, lane, word, byte mask, data128. |
-| `wr_ack[32]` | Output channel, [tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | Tag/status corresponding to an actual write. |
-| `read_credit_o[32]` | Output, 2 bits each, no handshake | TMEM fabric | 0…3 free return reservations. |
-| `write_credit_o` | Output, 2 bits, no handshake | TMEM fabric | Number of ACK identity frames available for new R_W acceptance, 0…2. |
-| `drained_o` | Output, 1 bit, no handshake | TMEM fabric | No granted read, return, R_W, or ACK. |
-| `fault_o` | Output, 1 bit, no handshake | TMEM fabric | Protocol fault level aggregated at the top. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `clk` | Input | 1 bit | Top-level clock domain | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | Top-level clock domain | Sample low on a rising edge. Clear control without initializing SRAM data. |
+| `rd_req[32]` | Input | [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions) (108 bits) | TMEM fabric | Transfer on `rd_req.fire`. tag78, global lane7, word7, byte_mask16. |
+| `rd_rsp[32]` | Output | [tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) (206 bits) | TMEM fabric | Transfer on `rd_rsp.fire`. tag78, data128. |
+| `wr_req[32]` | Input | [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions) (236 bits) | TMEM fabric | Transfer on `wr_req.fire`. tag, lane, word, byte mask, data128. |
+| `wr_ack[32]` | Output | [tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) (78 bits) | TMEM fabric | Transfer on `wr_ack.fire`. Tag corresponding to an actual write. |
+| `read_credit_o[32]` | Output | 2 bits each | TMEM fabric | Level. 0…3 free return reservations. |
+| `write_credit_o` | Output | 2 bits | TMEM fabric | Level. Number of ACK identity frames available for new R_W acceptance, 0…2. |
+| `drained_o` | Output | 1 bit | TMEM fabric | Level. No granted read, return, R_W, or ACK. |
 
 ```mermaid
 flowchart LR
@@ -30,11 +30,11 @@ flowchart LR
 
 ## Functionality
 
-Address mapping is `bank=lane`, `word=column//4`, and `cell=column%4`. See [TMEM layout](blackwell_tmem_fabric.md#tmem-layout) for details. This module owns physical SRAM and all return/write acceptance state. The fabric arbitrates and routes.
+The global lane selects partition `lane // 32` and local bank `lane % 32`. Within that bank, `word=column//4` and `cell=column%4`. See [TMEM layout](blackwell_tmem_fabric.md#tmem-layout) for details. This module owns physical SRAM and all return/write acceptance state. The fabric arbitrates and routes.
 
 Each atom channel has independent valid/ready. See [common interfaces](../top/blackwell_async_subsystem_top.md#common-protocol) and [memory transaction](../top/blackwell_async_subsystem_top.md#memory-routing) for definitions and byte order.
 
-lane must belong to this partition and match the port index. word ranges from 0…127. byte_mask bit b selects byte b of data. Return zero for unselected read bytes and preserve stored values for unselected write bytes.
+For local port p, the request carries global lane 32 × PARTITION_ID + p. word ranges from 0…127. byte_mask bit b selects byte b of data. Return zero for unselected read bytes and preserve stored values for unselected write bytes.
 
 ### Partition data and in-flight slots
 
@@ -45,10 +45,10 @@ lane must belong to this partition and match the port index. word ranges from 0�
 | R_RESP | 512 B | One primary return per bank. |
 | R_BACKUP | 512 B | One additional return per bank to absorb an irrevocable read. |
 | Read tag/credit | Three metadata entries per bank | Cover every granted but undelivered read without additional payload storage. |
-| R_W | 512 B | One write payload. Count the 32-bank mask, word, tag, and byte mask separately. |
-| R_ACK | Two identity frames | Each holds a bank mask and per-bank tag/status without write data. |
+| R_W | 512 B | One write payload with a 32-bank valid mask and a word address, tag and byte mask for each selected bank. |
+| R_ACK | Two identity frames | Each holds a bank mask and per-bank tags without write data. |
 
-R_RESP+R_BACKUP total 1 KiB per partition. SRAM_Q is the third physical place to hold a return. If the macro cannot hold its output with read enable low, place an equivalent Q outside the macro and reclassify it in the physical resource table. Do not add another Q.
+R_RESP+R_BACKUP total 1 KiB per partition. SRAM_Q is the third physical place to hold a return. A macro whose output cannot hold with read enable low uses one external register for this Q position.
 
 ### Read credit, sampling, and delivery
 
@@ -87,15 +87,15 @@ Each bank selects the oldest ACK frame in which it has not retired. ACKs in the 
 
 When deciding rd_req_fire and wr_req_fire at g, compare the words that would execute at g+1. For the same bank and word accept the write first, deassert read ready, and withhold its grant. Reads/writes granted at g−1 execute at g. Their conflicts were excluded on the preceding edge and old reads cannot be canceled. No actual macro sampling edge has same-word 1R+1W. Different words can proceed concurrently. Avoid undefined read-during-write behavior. Masked byte writes do not require an internal read-modify-write or consume a read port.
 
-### Reset, errors, and verification
+### Reset and credit conservation
 
 Reset clears valid, credit state, tag validity, and ACK state, preserving TMEM payload. Drain or isolate pre-reset transactions under the common lifecycle rules. An old return cannot attach to a new token after reset.
 
-Normal on-chip SRAM has no recoverable bus error. Illegal lane/word/tag is an interface violation, validated before issue and caught by assertions. If the integrated macro supports ECC errors, an error return still retires its credit with nonzero status and cannot supply false successful data.
+Simulation asserts that a request’s lane belongs to the partition and matches the port and that its word is in range.
 
-Drop ready on each successive edge after grant and check outstanding per bank equals the number of Q, return, and reserved read identities and is ≤3. A full bank can reuse credit on the edge an old entry retires. After two consecutive write frames stall a single bank ACK and observe write acceptance, actual write, and per-bank ACK separately. Across D generation changes, mixed clients, and all byte masks, an old ACK retires only its old identity.
+Outstanding reads per bank equal the Q, return, and reserved read identities and cannot exceed three. A retiring entry releases its credit for same-edge reuse. Each ACK retires only its original write identity, including across D generation changes.
 
-Protocol faults add one bit `protocol_fault_q`. Set it for an illegal partition lane, duplicate return/ACK control identity, or failure of credit conservation. Follow the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and outstanding responses.
+Simulation checks credit conservation and asserts that each transferred return or ACK matches an outstanding request and retires once.
 
 ## Submodules
 

@@ -4,24 +4,22 @@
 
 Converts 8 B object cache fills and writebacks into masked 16 B transactions on the shared SMEM fabric. It has no additional object cache and does not modify counts. See [common](../top/blackwell_async_subsystem_top.md#common-protocol) for interfaces, [mbarrier_object](blackwell_mbarrier_unit.md#object) for objects, and [memory_transaction](../top/blackwell_async_subsystem_top.md#memory-routing) for transactions.
 
-| Signal / channel | Direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- | --- |
-| `back_req` | Input | [bar_back_req_t](#backing-types), 97 | Object unit | One object read or write |
-| `back_rsp` | Output | [bar_back_rsp_t](#backing-types), 68 | Object unit | Successful reads return 8 B. Writes return value=0 |
-| `smem_req` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions), 255 | SMEM fabric | client=11, 16 B aligned |
-| `smem_rsp` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions), 211 | SMEM fabric | Accept only the current live tag as a match |
-| `epoch` | Input | 16-bit static configuration | Top level | Change only after drain |
-| `stop` | Input | 1 | Top level | Drain indication. Does not gate internal back_req |
-| `drained` | Output | 1 | Top level | No pending request, external transaction, or held response |
-| `fault` | Output | 1 sticky | Top level | External protocol error, cleared by reset |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `back_req` | Input | [bar_back_req_t](#backing-types) (97 bits) | Object unit | Transfer on `back_req.fire`. One object read or write. |
+| `back_rsp` | Output | [bar_back_rsp_t](#backing-types) (64 bits) | Object unit | Transfer on `back_rsp.fire`. Reads return 8 B. Writes return value=0. |
+| `smem_req` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | Transfer on `smem_req.fire`. client=11, 16 B aligned. |
+| `smem_rsp` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (207 bits) | SMEM fabric | Transfer on `smem_rsp.fire`. The read result or write ACK carries the live tag. |
+| `epoch` | Input | 16 bits | Top level | Level. Change only after drain. |
+| `stop` | Input | 1 bit | Top level | Level. Drain indication. Does not gate internal back_req. |
+| `drained` | Output | 1 bit | Top level | Level. No pending request, external transaction, or held response. |
 
 ```mermaid
 flowchart LR
   C["Object cache"] --> R[R_REQ: addr/value/write]
   R --> A["Generate 16 B address and 8 B mask"]
   A --> S["Shared SMEM fabric"]
-  S --> V["Tag and status check"]
-  V --> O[R_RSP: 8B/status]
+  S --> O[R_RSP: 8 B]
   O --> C
 ```
 
@@ -31,21 +29,21 @@ flowchart LR
 
 ### Internal backing types
 
-`bar_back_req_t={write:1,addr:32,value:64}` is 97 bits and `bar_back_rsp_t={status:4,value:64}` is 68 bits. Only one transaction can be outstanding. Each SMEM request still carries its full token.
+`bar_back_req_t={write:1,addr:32,value:64}` is 97 bits and `bar_back_rsp_t={value:64}` is 64 bits. Only one transaction can be outstanding. Each SMEM request still carries its full token.
 
 ### Request and result storage
 
 | Item | Capacity | Purpose |
 |---|---:|---|
 | R_REQ | 97bit | Accepted object operation, held until external completion |
-| R_RSP | 68bit | Result returned to the unit |
+| R_RSP | 64bit | Result returned to the unit |
 | live tag | 78bit | Identifies the single external transaction |
 | token counter | 16bit | Token incremented within this client |
-| State/valid/fault | Control bits | No second 128-bit return buffer |
+| State/valid | Control bits | No second 128-bit return buffer |
 
 Only one external transaction may be outstanding. At read return handshake, extract the required 64 bits directly into R_RSP. No full-line backup is required. Reserve R_RSP before receiving the external return so that the output can tolerate backpressure.
 
-States are EMPTY, ISSUE, WAIT_MEM, and RESP. In EMPTY without fault, accept back_req, including requests servicing earlier operations or flush during stop. After range and alignment checks, enter ISSUE. An illegal internal address raises fault. External fire enters WAIT_MEM, a matching return enters RESP, and consumption of back_rsp returns to EMPTY.
+States are EMPTY, ISSUE, WAIT_MEM, and RESP. In EMPTY, back_req.fire captures the aligned object address and enters ISSUE, including during stop for an earlier operation or flush. External fire enters WAIT_MEM, a matching return enters RESP, and consumption of back_rsp returns to EMPTY.
 
 ### Addresses, masks, and return matching
 
@@ -61,15 +59,15 @@ Preserve the logical byte address. The SMEM fabric maps 4 B words to banks and c
 
 `tag.client=11` and `tag.id={epoch,issuer=0,seq=0}` are fixed context for this internal client. They do not denote an accepted external command or publish op_done. Increment the token modulo 2^16 after back_rsp retires. Do not reuse the tag of the one live transaction. Once the old request receives its final ACK and retires, its token may be reused. Counter wrap must not prevent a required flush. The external protocol guarantees exactly one return per request.
 
-The write bit on read or write responses must match R_REQ and the full tag must match. Never route another client's response here. If an unknown tag or wrong direction arrives, consume it and raise fault without assigning it to the current transaction. Recovery requires isolation and reset under the top-level contract.
+The fabric returns the direction from R_REQ and the full live tag for that transaction. A simulation assertion checks both on smem_rsp.fire.
 
 ### Request-to-response timing
 
 For an object request accepted at g, the earliest SMEM request acceptance is g+1. The fabric defines SMEM service latency. If the matching return is accepted at r, back_rsp can be consumed at r+1 at the earliest. Each operation produces at most one external request and one internal response.
 
-A non-OK read return or write ACK raises fault immediately and suppresses successful back_rsp. Only a successful actual write ACK permits the unit to clear dirty or release the victim.
+A write response reaches the object unit only after its masked SMEM write commits and the fabric returns the ACK.
 
-INVAL and flush wait for a successful write response here. smem_req fire alone is insufficient. Local updates of dirty object counts can proceed while backing is busy until eviction or explicit flush requires a save.
+The [object unit](blackwell_mbarrier_unit.md#miss-eviction-and-init) serializes service through the entire miss. While a dirty victim write awaits its ACK, the unit retains the victim and the original service request. A request for another resident object waits at service ingress. On `back_rsp.fire` for the write, the unit can reuse the victim for an INIT or proceed to target fill for an ordinary miss. INVAL and flush also wait for their masked writes to be acknowledged.
 
 ### Arbitration and stalls
 
@@ -77,16 +75,14 @@ stop does not block back_req or its completion. The front end blocks new externa
 
 Other fabric clients can use nonconflicting banks concurrently. mbarrier has no exclusive claim on SMEM. Progress requires fair fabric arbitration, eventual external return, and eventual consumption of back_rsp by the unit.
 
-During unit flush, process up to four dirty entries in sequence and confirm each write ACK separately. Failed and unsaved entries remain dirty. Flush must not return OK.
+During unit flush, process up to four dirty entries in sequence and confirm each write ACK separately.
 
-### Reset and exceptions
+### Reset and epoch transition
 
-Synchronous reset clears state, valid, fault, and counters and leaves SMEM intact. Cancel or isolate external transactions before reset so old tags cannot reappear afterward.
+Synchronous reset clears control, valid bits, and counters and leaves SMEM intact. The surrounding system isolates outstanding external transactions before reset.
 
-A misaligned or out-of-range internal address raises fault without issuing an external transaction. An epoch change outside EMPTY is PROTOCOL. Integration must observe drained first.
+On a normal epoch change, reset the token counter and establish the new context only in EMPTY with no held return. Preserve SMEM. All legal returns from the previous epoch must already have retired. Do not discard them by comparing against the new epoch.
 
-On a normal epoch change, reset the token counter and establish the new context only in EMPTY with no held return or fault. Preserve SMEM. All legal returns from the previous epoch must already have retired. Do not discard them by comparing against the new epoch.
+### Writeback completion
 
-### Assertions and acceptance
-
-Interleave reads and writes to both 8 B objects in one 16 B line while stalling requests and returns. Check that each back_req settles exactly once and the unselected half stays intact. Inject a wrong tag, wrong direction, or MEMORY return and verify that the unit retains the dirty victim until a successful write ACK.
+Each accepted backing request settles once. A masked write preserves the adjacent object. The object unit retains a dirty victim until its writeback receives a successful ACK.

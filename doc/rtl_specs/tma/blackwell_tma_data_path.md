@@ -4,13 +4,18 @@
 
 Moves data between a 128 B GMEM line and eight 16 B SMEM atom groups. All active tickets share 16 RAM rows, RD/Q/R_OUT, and external ports. Each segment's owner ticket determines direction and cache policy.
 
-| Channel and direction | Type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| start / tag_view[64] / owner_view[18] inputs | [tma_start_t](blackwell_tma_completion_tracker.md#transfer-types) / [tma_tag_t](blackwell_tma_completion_tracker.md#transfer-types)[64] / [tma_owner_view_t](blackwell_tma_unit.md#owner-view)[18] | tracker, TMA unit | start.segment.ticket assigns the new segment. Subsequent accesses follow live key → tag.ticket for command ID, direction, and policy, so the original setup slot can be reused. |
-| event[20] / data_ref[64] outputs | [tma_xfer_event_t](blackwell_tma_completion_tracker.md#transfer-types) / 1 bit per entry | tracker | Report normal memory fire by key on its handshake edge. data_ref covers row, held, and pipeline references. |
-| gmem_req output / gmem_rsp input | [gmem_req_t / gmem_rsp_t](blackwell_tma_unit.md#gmem-types) | GMEM (via unit) | Class0. Route reads and write ACKs to the transaction key. Each direction supports one transfer per cycle. |
-| smem_req[8] outputs / smem_rsp[8] inputs | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) / [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) | SMEM fabric | Client8 lane g connects to physical group g, which responds independently by original key and group. |
-| drained / fault outputs | 1 bit each | TMA unit | Rows, held selections, and pipeline empty / runtime fault. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `start` | Input | [tma_start_t](blackwell_tma_completion_tracker.md#transfer-types) (200 bits) | Tracker | On `start.fire`, bind the segment and transaction key to its owner ticket. |
+| `tag_view[64]` | Input | [tma_tag_t](blackwell_tma_completion_tracker.md#transfer-types) (66 bits per tag) | Tracker | Level. Use the live key to read its ticket. |
+| `owner_view[18]` | Input | [tma_owner_view_t](blackwell_tma_unit.md#owner-view) (189 bits per ticket) | TMA unit | Level. Read the command ID, direction and policy after setup slot reuse. |
+| `event[20]` | Output | [tma_xfer_event_t](blackwell_tma_completion_tracker.md#transfer-types) (13 bits per event) | tracker | Report the key on the corresponding memory handshake or local zero/no-access event edge. |
+| `data_ref[64]` | Output | 1 bit per tag | tracker | Level. Assert while a RAM row, held transfer or pipeline stage references the tag. |
+| `gmem_req` | Output | [gmem_req_t](blackwell_tma_unit.md#gmem-types) (1,292 bits) | GMEM (via unit) | On `gmem_req.fire`, issue a class-0 transaction, up to one per cycle. |
+| `gmem_rsp` | Input | [tma_gmem_return_t](blackwell_tma_unit.md#gmem-types) (1,033 bits) | GMEM (via unit) | On `gmem_rsp.fire`, accept a read return or write ACK by key, up to one per cycle. |
+| `smem_req[8]` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | On `smem_req.fire`, issue independently on client 8 port g to SMEM group g. |
+| `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (207 bits) | SMEM fabric | On `smem_rsp.fire`, accept each group’s return by original key and group. |
+| `drained` | Output | 1 bit | TMA unit | Assert when all RAM rows, held selections and pipeline stages are empty. |
 
 ```mermaid
 flowchart LR
@@ -36,11 +41,11 @@ flowchart LR
 | Macro Q / R_OUT | Each holds one row with its own valid bit | 128 B / 128 B |
 | **Total** | Shared between both directions | **2,304 B** |
 
-Account for control separately. Each row directory entry holds valid, owner key, claimed, and zero. A store also retains destination gmem_line[63:7] and ordinal until write request acceptance. Read SMEM sector, source/destination offsets, length, and xor_group from the owner's tag_view. Each issued store source read has already reserved its row and event positions for actual group returns. Match a store source return against the unique owner in the 16-entry directory to select its local word. Load and store write ACKs index the tag table directly. Other control comprises a held load read request (key and line address, with mask derived from live fields), held store source read selections per group, round-robin pointers, and key, slot, and group pending in RD/Q/R_OUT. The 1,024-bit store write payload comes directly from R_OUT. The slot index stays local.
+Each row directory entry holds valid, owner key, claimed, and zero. A store also retains destination gmem_line[63:7] and ordinal until write request acceptance. Read SMEM sector, source/destination offsets, length, and xor_group from the owner's tag_view. Each issued store source read has already reserved its row and event positions for actual group returns. Match a store source return against the unique owner in the 16-entry directory to select its local word. Load and store write ACKs index the tag table directly. Other control comprises a held load read request (key and line address, with mask derived from live fields), held store source read selections per group, round-robin pointers, and key, slot, and group pending in RD/Q/R_OUT. The 1,024-bit store write payload comes directly from R_OUT. The slot index stays local.
 
 ### Load GMEM returns and SMEM writes
 
-1. **Source read.** For an in-bounds segment, start.fire latches line address and key in a one-entry read request register that can send old and accept new on the same edge. Consecutive requests may use different tags. Each entry retains how to scatter returned bytes while waiting for L2. On reply verify class, live key, direction, sent, and unfinished status first.
+1. **Source read.** For an in-bounds segment, start.fire latches line address and key in a one-entry read request register that can send old and accept new on the same edge. Consecutive requests may use different tags. Each entry retains how to scatter returned bytes while waiting for L2. Simulation asserts the class, live key, direction and outstanding request on each reply.
 2. **Receive and allocate.** Assert ready for a matched normal read return only with a pre-edge free slot, RAM write capacity, and room to record the event. On fire take the lowest free slot, write owner and valid bytes, report GMEM_RSP on the same edge, and finish the source. Use the [segment formula](blackwell_tma_request_generator.md#segment) to write GMEM lane `goff+j` to its swizzled group and byte lane. An all-OOB load requests a row on start.fire, sets zero, and emits LOCAL_ZERO. It skips GMEM reads but still writes masked zeros to the destination. Round-robin among serviceable zero rows and normal returns competing for the allocator. Create at most one row per edge.
 3. **Deliver to SMEM.** RD round-robins among unclaimed rows with data and source_done, setting claimed on selection. A ready younger row may drain even while GMEM holds the oldest read. Each walker-generated load segment writes only its valid bytes. Segments sharing a word retain independent masks. Initialize R_OUT.pending with groups having nonempty masks. Clear a group on write.fire and hold original data for groups still pending. **Release the slot on the final group write.fire. Another key can allocate it on the next edge.**
 4. **Accept acknowledgments.** Check early and late write ACKs against original ticket ID, key, group, and tag_view sent/done. While the second load issues reads, the first load's returns can still allocate slots, write SMEM, and settle. Accepting a successful ACK needs only its reserved event lane. The old tag can complete even after its old slot is overwritten.
@@ -58,14 +63,14 @@ The row allocator round-robins among eligible store.start, zero fills, and succe
 Prevent a mixed-direction cycle in which the head GMEM load return waits for a slot while a resident store waits to issue a GMEM write. Let U count normal loads from first presentation of GMEM READ to return, including held requests. Before allocating the first store require at least U+1 free rows. While a store row exists, each new load reserves return capacity when first presenting its read. Stores and zero fills may use only free rows remaining after subtracting U. Check the aggregate of requests and rows newly added on the same edge. A successful return converts one reservation to an occupied row and gets fair access to RAM writes. Pure loads can have 64 outstanding segments sharing 16 rows. Admit the first store once resident loads write SMEM and release sufficient space. Fairly service promised replies and resident rows. Accept SMEM write ACKs independently of new GMEM handshakes.
 
 - After RD locks a row, the earliest synchronous macro sample is the next edge. Q holds until R_OUT accepts. A zero row disables macro read and passes its zero flag through the same stages. Q and R_OUT can each send old and take new simultaneously. A write conflicting with a reserved read to the same bank and word stalls at its source. Owner moves with data through held/Q/R_OUT.
-- When slots fill, deassert gmem_rsp.ready. The external producer must hold valid, ID, data, and status until fire. **Releasing a resident load row depends only on acceptance of that row's SMEM writes**. SMEM write ACKs have independent completion event inputs. A stalled head on the shared GMEM return can delay a later descriptor. Draining resident rows is independent of descriptors and new GMEM responses. A nonstallable return link must provide ingress credits per the [top-level external memory contract](../top/blackwell_async_subsystem_top.md#common-protocol).
-- A non-OK memory response can be consumed without a free slot and raises fault without writing RAM or generating normal completion. Unknown, duplicate, or wrong-generation replies also terminate the run. Normal stop drains accepted tickets. Synchronous reset follows top-level isolation conditions.
+- When all data slots are occupied, deassert `gmem_rsp.ready` for a matched successful load read return. A store write ACK can transfer regardless of data-slot availability. The external GMEM responder holds valid, ID and data until fire. **Releasing a resident load row depends only on acceptance of that row's SMEM writes**. SMEM write ACKs have independent completion event inputs. A stalled head on the shared GMEM return can delay a later descriptor. Draining resident rows is independent of descriptors and new GMEM responses. A nonstallable return link must provide ingress credits per the [top-level external memory contract](../top/blackwell_async_subsystem_top.md#common-protocol).
+- Normal stop drains accepted tickets. Synchronous reset clears live row and pipeline state under the top-level isolation conditions.
 
 <a id="peak"></a>
 
 ### Cycle timing and acceptance
 
-Let a denote tracker.allocate.fire. The fixture below assumes full lines, no contention, and GMEM responding one edge after request. Choose tags and slots from pre-edge free entries. A returned entry can be reallocated on the next edge.
+Let a denote tracker.allocate.fire. The timing below assumes full lines, no contention, and GMEM responding one edge after request. Choose tags and slots from pre-edge free entries. A returned entry can be reallocated on the next edge.
 
 | Edge event | load | store |
 |---|---|---|
@@ -79,12 +84,10 @@ With 64 full segments allocated tags at a=0…63, loads can deliver 64 consecuti
 
 | Boundary case | Expected behavior |
 |---|---|
-| Issue 64 reads before any return, then stall the SMEM destination | The first 16 successful returns occupy one slot each and the 17th stays held. Return the oldest read last. Ready rows can still drain. After resumption verify each byte and destination exactly once. |
+| 64 reads outstanding, SMEM destination stalled | The first 16 successful returns occupy one slot each and the 17th stays held. Ready rows can drain before the oldest read returns. Each selected byte is delivered once to its destination. |
 | Seven load groups have written and ACKed early, eighth group delayed | Retain the old data until the eighth group accepts, then allow slot reuse. While its eighth ACK is held, the old tag and command barrier remain pending. |
 | Store GMEM write or ACK stalls | Before write acceptance hold the full row stable. After acceptance reuse the slot for another segment. A late old ACK delays old transaction retirement and full only. A .read whose sources have all completed can proceed. |
-| MEMORY status arrives with all slots occupied | Report fault without a free row. The response cannot trigger producer success or a new write. |
-
-Also cover out-of-order returns across the eight groups, same-edge ACKs for several tags, short segments, OOB zero fill, wrong/duplicate tags, and descriptor sharing of the return port. The RTL must replay these edges.
+| Store write ACK arrives with all rows occupied | Accept the ACK using its reserved event lane. The data rows remain available to their current owners. |
 
 ## Submodules
 

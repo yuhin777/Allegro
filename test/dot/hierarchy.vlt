@@ -1,0 +1,4 @@
+`verilator_config
+hier_block -module "blackwell_fp_dot_lane"
+hier_block -module "blackwell_fp4_dot"
+hier_block -module "blackwell_int8_dot"

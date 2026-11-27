@@ -4,23 +4,26 @@
 
 One context per direction supports ordinary 32x32b LD x16/x32 and ST x16. Expand addresses only according to [TMEM layout](blackwell_tmem_fabric.md#tmem-layout).
 
-| Signal / channel | Direction, type / width | Peer | Handshake or sampling condition |
-| --- | --- | --- | --- |
-| `issue` | Input, local ldst_issue_t, 97 bits | Top-level R_RF_ISSUE | `{cmd:tmem_ldst_cmd_t,slot:5}`. The top has already allocated the live slot. |
-| `rf_store` | Input, [rf_beat_t](#rf-types), 1090 bits | External RF | One store beat for a complete warp. |
-| `rf_load` | Output, rf_beat_t, 1090 bits | External RF | One load beat for a complete warp. |
-| `rd_req[128]` / `rd_rsp[128]` | Output/input, [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions)/[tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | Independent atom channels indexed by global lane. |
-| `wr_req[128]` / `wr_ack[128]` | Output/input, [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions)/[tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) | TMEM fabric | At most one candidate per bank per cycle. |
-| `pin_req` / `pin_rsp` | Output/input, [tmem_pin_req_t](blackwell_tmem_manager.md#management-types)/[tmem_pin_rsp_t](blackwell_tmem_manager.md#management-types) | TMEM manager | This engine prechecks range. The manager authorizes fixed users 3/4. Route ID back to LD/ST. |
-| `unpin` | Output, [tmem_unpin_t](blackwell_tmem_manager.md#management-types) | TMEM manager | Release the respective use bit after all data effects complete. |
-| `track_done` | Output, [rf_track_done_t](blackwell_tmem_wait_tracker.md#wait-types), 67 bits | TMEM wait tracker | Original slot/ID and final status. |
-| `done` | Output, [op_done_t](../top/blackwell_async_subsystem_top.md#identity), 62 bits | Software front end | Final command response, held independently of track_done. |
-| `stop_i` / `drained_o` | Input/output, 1 bit | Top level | Do not block derived issues already accepted by the top. Top-level stop closes new external LDST. Drain includes RF, ACK, pin, and completion outputs. |
-| `fault_o` | Output, 1 bit, no handshake | Top level | Protocol fault level aggregated at the top. |
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
+| `issue` | Input | local ldst_issue_t (97 bits) | Top-level R_RF_ISSUE | Transfer on `issue.fire`. `{cmd:tmem_ldst_cmd_t,slot:5}`. The top has already allocated the live slot. |
+| `rf_store` | Input | [rf_beat_t](#rf-types) (1,090 bits) | External RF | Transfer on `rf_store.fire`. One store beat for a complete warp. |
+| `rf_load` | Output | rf_beat_t (1,090 bits) | External RF | Transfer on `rf_load.fire`. One load beat for a complete warp. |
+| `rd_req[128]` | Output | [tmem_rd_req_t](blackwell_tmem_fabric.md#transactions) (108 bits) | TMEM fabric | On `rd_req.fire`, issue independently by global lane. |
+| `rd_rsp[128]` | Input | [tmem_rd_rsp_t](blackwell_tmem_fabric.md#transactions) (206 bits) | TMEM fabric | On `rd_rsp.fire`, capture the matching atom by lane. |
+| `wr_req[128]` | Output | [tmem_wr_req_t](blackwell_tmem_fabric.md#transactions) (236 bits) | TMEM fabric | On `wr_req.fire`, issue at most one write candidate per bank each cycle. |
+| `wr_ack[128]` | Input | [tmem_wr_ack_t](blackwell_tmem_fabric.md#transactions) (78 bits) | TMEM fabric | On `wr_ack.fire`, settle the matching actual write by tag. |
+| `pin_req` | Output | [tmem_pin_req_t](blackwell_tmem_manager.md#management-types) (61 bits) | TMEM manager | On `pin_req.fire`, request authorization for fixed user 3 or 4. |
+| `pin_rsp` | Input | [tmem_pin_rsp_t](blackwell_tmem_manager.md#management-types) (58 bits) | TMEM manager | On `pin_rsp.fire`, match the returned ID to the LD/ST operation. |
+| `unpin` | Output | [tmem_unpin_t](blackwell_tmem_manager.md#management-types) (61 bits) | TMEM manager | Transfer on `unpin.fire`. Release the respective use bit after all data effects complete. |
+| `track_done` | Output | [rf_track_done_t](blackwell_tmem_wait_tracker.md#wait-types) (63 bits) | TMEM wait tracker | Transfer on `track_done.fire`. Original slot and ID. |
+| `done` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | Software front end | Transfer on `done.fire`. Final command response, held independently of track_done. |
+| `stop_i` | Input | 1 bit | Top level | Level closing external admission at the top. Continue derived issues already accepted there. |
+| `drained_o` | Output | 1 bit | Top level | Assert when RF, ACK, pin and completion obligations drain. |
 
 ```mermaid
 flowchart LR
-    C["Command and registered wait slot"] --> PRE["Full-range precheck / pin"]
+    C["Command and registered wait slot"] --> PRE["Address expansion / pin"]
     PRE --> L["LD / current word and valid cell mask"]
     PRE --> S["Store context / atom enumeration"]
     L --> RD["One TMEM read per lane per word"]
@@ -51,15 +54,15 @@ Management and RF commands require the issuer's low five bits to be zero, denoti
 
 ### RF data layout
 
-Support only converged warp ordinary `.32x32b`, LD x16/x32 and ST x16. Each RF beat carries one b32 per thread for a whole warp. For thread t=0…31 and register index j=0…R−1, lane=base.lane+t and column=base.column+j, using the full cell. Require base.lane=32×(warp%4) and final column≤511, checked in wide arithmetic. Warps 0/4/8… of one CTA share a physical partition and track their RF returns independently. There is no pack, unpack, or split offset. Verify the 32 cells of each beat independently and preserve unaccessed cells. [supported instruction table](../../proposals/supported_ptx.md) · [PTX LD](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#tcgen05-instructions-tcgen05-ld)
+Support only converged warp ordinary `.32x32b`, LD x16/x32 and ST x16. Each RF beat carries one b32 per thread for a whole warp. For thread t=0…31 and register index j=0…R−1, lane=base.lane+t and column=base.column+j, using the full cell. Require base.lane=32×(warp%4) and final column≤511, checked in wide arithmetic. Warps 0/4/8… of one CTA share a physical partition and track their RF returns independently. There is no pack, unpack, or split offset. Unaccessed cells retain their contents. [supported instruction table](../../proposals/supported_ptx.md) · [PTX LD](https://docs.nvidia.com/cuda/archive/12.8.2/parallel-thread-execution/index.html#tcgen05-instructions-tcgen05-ld)
 
-### Instruction acceptance and address precheck
+### Instruction acceptance and address expansion
 
 issue_ready depends only on the corresponding load/store context and reserved output capacity. stop cannot revoke it. The top obtains issue.slot from the wait tracker before memory access. Load and store each retain one slot and return it unchanged at completion. They cannot reuse it themselves.
 
 Each context holds cmd92, slot5, pin valid, beat index7, stage, and done/track_done sent bits. Buffer valid and identity belong only to that context.
 
-CHECK validates the complete warp partition and inclusive range `[base.column, base.column+R−1]` in extended arithmetic, with R=16 or 32. Access memory only after one successful pin for the full range. client=5, token=`{store:1,pos:7,atom:6,reserved:2}`, atom is thread index t=0…31, and reserved=0. LD pos is the absolute word index. ST pos is the RF beat index. Match obligations by full ID, direction, pos, atom, and physical lane routing.
+CHECK determines the complete warp partition and inclusive column range `[base.column, base.column+R−1]`, with R=16 or 32. Simulation asserts in extended arithmetic that the last column fits and the complete warp targets its assigned partition. Access memory only after the pin acknowledgment for the full range. client=5, token=`{store:1,pos:7,atom:6,reserved:2}`, atom is thread index t=0…31, and reserved=0. LD pos is the absolute word index. ST pos is the RF beat index. Match obligations by full ID, direction, pos, atom, and physical lane routing.
 
 LD keeps 32 bits each of sent/returned for the current word and sent for the next word. ST keeps two 5-bit per-lane prefix counts, sent_count and ack_count (0…16), to check order. sent_count>index identifies already issued lanes for the current beat. Hold stalled requests, tags, and masks until handshake.
 
@@ -77,26 +80,18 @@ Let b be the starting column and e=b+R−1 the last. Visit words w=b//4…e//4 i
 
 ### ST RF beat acceptance and ACK tracking
 
-After successful pin, accept only rf_store matching ID, expected index, and last. Once a beat is accepted, derive each atom's payload and byte mask combinationally from its 1024-bit data. Unissued atoms share the same RF buffer.
+After pin acknowledgment, accept a store beat when the RF buffer has space. The RF source supplies the matching ID, expected index and last. Once a beat is accepted, derive each atom's payload and byte mask combinationally from its 1024-bit data. Unissued atoms share the same RF buffer.
 
 An ordinary store writes one full cell per lane and zeros the byte mask for other cells. Addresses within a beat are pairwise distinct.
 
-The next rf_store.fire may replace the 128 B buffer on the same edge as the current beat's final wr_req.fire. Increment sent_count per lane. An ACK must come from that lane, match the full ID, have pos=ack_count, and satisfy ack_count<sent_count. The [partition](blackwell_tmem_partition.md) delivers same-bank ACKs in order. Only a successful ACK increments ack_count. Success requires confirmation of all 16 writes in every lane. With full-warp grants every cycle, the earliest interval from first RF acceptance to last write ACK is 18 cycles (RF at 0, write acceptance at 1…16, ACKs at 3…18).
+The next rf_store.fire may replace the 128 B buffer on the same edge as the current beat's final wr_req.fire. Increment sent_count per lane. An ACK must come from that lane, match the full ID, have pos=ack_count, and satisfy ack_count<sent_count. The [partition](blackwell_tmem_partition.md) delivers same-bank ACKs in order. Each ACK.fire increments ack_count. Completion requires confirmation of all 16 writes in every lane. With full-warp grants every cycle, the earliest interval from first RF acceptance to last write ACK is 18 cycles (RF at 0, write acceptance at 1…16, ACKs at 3…18).
 
-### Completion and errors
+### Completion and register visibility
 
 After data completion, unpin and publish ordinary done. Publish track_done only after external consumption of done, confirming settlement of the operation and its final response. Release the context after track_done consumption. Neither output may send twice. Round-robin on the shared load/store outputs and hold selection until fire.
 
 The top must consume ordinary done independently of wait_done. Waiting for wait_done before asserting done.ready creates a cycle through track_done. Actual load/store data completion remains the last RF beat/ACK. Later control handshakes delay observable completion.
 
-A range/user violation discovered after registration, non-OK return, or wrong RF identity raises fault. A failed read does not write RF. A failed write ACK does not release its dependency. Preserve delivered RF beats and confirmed writes. Already presented payload follows the top-level hold rule. Normal stop continues accepted obligations.
+Simulation asserts the RF ID, index and last on every valid beat and matches each memory return to its outstanding lane, full ID and token. Each pin response must identify the context awaiting authorization. Normal stop continues accepted obligations.
 
-An RF ID/index/last protocol violation cannot update another context. An illegal or duplicate memory return cannot clear another atom's mask. Use full ID and token for all checks.
-
-### Acceptance
-
-- Fill LD with distinct values by lane and column. Sweep x16/x32 and all four b%4 values. Verify one read per `(id,lane,w)`, first/last byte_mask, and each thread/register value with index/last. Cover e=511 and out-of-range precheck.
-- Separately delay grants/returns for the current and next word and stall the current final RF beat. Check same-edge old sampling and new capture on word handoff and correct ownership of late prefetches. Hold an old ST ACK. Verify the next RF beat can replace the old one at final actual write acceptance. Filling both partition ACK frames then applies real credit backpressure.
-- Cover all four warp partitions and stall the two completion outputs independently. Late MEMORY raises fault without successful ACK settlement. The surrounding system reads an RF register only after actual beat writeback.
-
-Local fault is 1 bit. Non-OK, unknown, or duplicate memory/pin responses or a mismatched RF ID/index/last set it. See the [common fault rules](../top/blackwell_async_subsystem_top.md#common-protocol) for assertion, reset, and in-flight responses.
+The RF consumer can read a destination register after its beat writes back.

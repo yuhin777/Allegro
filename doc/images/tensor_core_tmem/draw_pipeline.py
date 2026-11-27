@@ -101,7 +101,7 @@ txt(64, 68, 'Allegro  |  Consecutive MMA issue and block prefetch', 44)
 txt(64, 122, 'Single CTA · Three ordered command records · Two input contexts · Four cores with 64 complete dot lanes each', 26, C['muted'])
 
 lane(52, 175, 2136, 280, 'Command admission and B source reads', C['tealfill'], C['teal'])
-chain(249, [('engine', ['Register command and tracker together', 'Precheck, pin, select partition by ID']),
+chain(249, [('engine', ['Register command and tracker together', 'Acquire pin and select B partition by ID']),
             ('SMEM physical array', ['32 banks × 1,824 words × 32 bits', '8 groups · 128 B/cycle per direction']),
             ('R_BREQ → grant', ['16 B atom across four adjacent banks', 'Sample at g, deliver from g+2']),
             ('Shared B loader', ['2 × 256 B, four 32-bit words per row', 'Full atoms for FP16/BF16, masks otherwise']),
@@ -124,12 +124,12 @@ chain(859, [('R_OP issue and refill', ['Admit first microtile by ID', '8 rows ×
             ('R_DOT → two D slots', ['1 KiB per slot, selected by result tag', 'Release data slot on last write acceptance']),
             ('TMEM R_W', ['128 banks × 128 bits', 'Accept at w, write at w+1']),
             ('Write ACK at w+2', ['Settle the original ID and block j', 'Release dependency after all required writes succeed'])], 'purple')
-txt(90, 1031, 'Families accept independently and deliver in issue order through the head family. Settle trailing writes and the pin against the original instruction ID.', 23, C['muted'])
+txt(90, 1031, 'Wide and K32 share the input stages by default. Results retire in issue order. Trailing writes and the pin retain the original instruction ID.', 23, C['muted'])
 
 lane(52, 1090, 2136, 280, 'Completion and synchronization', C['orangefill'], C['orange'])
 chain(1164, [('Final op_load / dot', ['Last operands copied into R_OP', 'Issued microtiles retain their identities']),
             ('local_done', ['All reads, computation, writes, and ACKs', 'for this core and ID have settled']),
-            ('Engine completion', ['Join four cores, loader, and snapshots', 'Return handle and publish done']),
+            ('Engine completion', ['Join four cores, loader, and snapshots', 'Return pin and report ID to tracker']),
             ('TC tracker', ['Accept one final completion per ID', "Settle this issuer's commit"]),
             ('mbarrier', ['arrival → phase', 'Wait succeeds after acquire ACK'])], 'orange')
 txt(90, 1336, 'The data path hands off first issue. The tracker receives final completion. After stop, drain all three records, partial deliveries, presented requests, and write ACKs.', 23, C['muted'])
@@ -143,7 +143,7 @@ txt(1650, 1528, '64 cycles between first dots', 25)
 txt(92, 1594, 'Next C0    Grant 58/59 → return 61/62 → load R_OP at 63 → first dot at 64', 28)
 txt(92, 1654, 'Next C1    Grant 62/63 → return 65/66 → load R_OP at 67 → first dot of block 1 at 68', 28)
 txt(92, 1724, 'Previous writes    Last result enters D at 68 → writes accepted at 69/70 → final write commits at 71 → final ACK at 72', 28)
-txt(92, 1784, 'Previous completion    Accept local_done at 73 → return resources and publish done at 74 → earliest tracker acceptance at 75', 28)
+txt(92, 1784, 'Previous completion    Accept local_done at 73 → return pin at 74 → earliest tracker acceptance at 75', 28)
 txt(92, 1870, 'Both commands share 128 B/cycle of SMEM. For other layouts, competing clients, late ACKs, or output stalls, use actual handshake edges.', 23, C['muted'])
 lane(52, 1950, 2136, 340, 'TMA  /  One walker, with all copies sharing a peak of 128 B/cycle', C['tealfill'], C['teal'])
 xs = [90, 510, 930, 1350, 1770]
