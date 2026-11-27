@@ -5,7 +5,6 @@ module mma_core_tmem_tb;
   import blackwell_tmem_pkg::*;
   bit clk;
   logic rst_n;
-  wire halt_i = 0;
   logic [15:0] epoch_i;
   mma_live_t [2:0] live_i;
   logic [2:0][3:0] older_writes_clear;
@@ -49,7 +48,6 @@ module mma_core_tmem_tb;
   wire [256:0] sb_view = '0;
   logic drained_o;
   logic idle_o;
-  logic fault_o;
 
   blackwell_tc_mma_core dut (.*);
 
@@ -63,7 +61,7 @@ module mma_core_tmem_tb;
         if (tm_rd_rsp_ready[l]) tm_rd_rsp_valid[l] <= 0;
         if (tm_rd_req_valid[l] && tm_rd_req_ready[l]) begin
           tm_rd_rsp_valid[l] <= 1;
-          tm_rd_rsp_payload[l] <= '{tm_rd_req_payload[l].tag, 128'd0, OK};
+          tm_rd_rsp_payload[l] <= '{tm_rd_req_payload[l].tag, 128'd0};
         end
       end
     end
@@ -78,7 +76,6 @@ module mma_core_tmem_tb;
   task automatic tick;
     @(posedge clk);
     @(negedge clk);
-    if (rst_n && fault_o) $fatal(1, "unexpected core fault");
   endtask
   task automatic reset_core;
     rst_n = 0;

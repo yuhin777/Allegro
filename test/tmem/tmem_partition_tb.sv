@@ -3,7 +3,7 @@
 module tmem_partition_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
-  logic clk = 0, rst_n = 0, halt_i = 0;
+  logic clk = 0, rst_n = 0;
   always #5 clk = !clk;
   logic [31:0] rd_req_valid, rd_req_ready, rd_rsp_valid, rd_rsp_ready;
   logic [31:0] wr_req_valid, wr_req_ready, wr_ack_valid, wr_ack_ready = '1;
@@ -13,7 +13,7 @@ module tmem_partition_tb;
   tmem_wr_ack_t wr_ack_payload[32];
   logic [31:0][1:0] read_credit_o;
   logic [1:0] write_credit_o;
-  logic drained_o, fault_o;
+  logic drained_o;
   logic [31:0][6:0] word_sel;
   logic [31:0][15:0] token, mask;
   logic modify;
@@ -56,7 +56,7 @@ module tmem_partition_tb;
       if (!read_mask[i]) want[8*i+:8] = 0;
     end
     if (!rd_rsp_valid[b] || rd_rsp_payload[b].tag.token != 16'(tok) ||
-        rd_rsp_payload[b].status != OK || rd_rsp_payload[b].data !== want)
+        rd_rsp_payload[b].data !== want)
       $fatal(1, "bank %0d wrong return for token %0d", b, tok);
   endtask
   initial begin
@@ -106,7 +106,7 @@ module tmem_partition_tb;
     @(negedge clk);
     @(posedge clk);
     if (!rd_req_ready[0] || read_credit_o[0] != 1)
-      $fatal(1, "ready %b credit %d fault %b", rd_req_ready[0], read_credit_o[0], fault_o);
+      $fatal(1, "ready %b credit %d", rd_req_ready[0], read_credit_o[0]);
     expect_bank(0, 0, 10, 16'hffff);
     @(negedge clk);
     rd_req_valid = 0;
@@ -146,7 +146,7 @@ module tmem_partition_tb;
     @(posedge clk);
     expect_bank(0, 3, 100, 16'hffff, 16'h5555);
     @(negedge clk);
-    if (!drained_o || fault_o) $fatal;
+    if (!drained_o) $fatal;
     $display("PASS TMEM three reservations, same-edge reuse, independent banks, masked conflict");
     $finish;
   end

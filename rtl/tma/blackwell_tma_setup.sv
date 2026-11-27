@@ -4,7 +4,6 @@ module blackwell_tma_setup
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic request_valid,
   input logic result_ready,
   input logic arm_valid,
@@ -24,8 +23,7 @@ module blackwell_tma_setup
   output setup_state_t slot_state[2],
   output ticket_t slot_ticket[2],
   output tma_span_t span[2],
-  output logic drained,
-  output logic fault
+  output logic drained
 );
   typedef enum logic [2:0] {
     DECODE,
@@ -35,7 +33,7 @@ module blackwell_tma_setup
     PUBLISH
   } build_t;
   build_t stage[2];
-  logic [1:0] map_legal, mult_busy;
+  logic [1:0] mult_busy;
   logic [3:0] product_step[2];
   logic [1:0] clipped_store;
   logic [3:0][7:0] last_local[2];
@@ -81,6 +79,7 @@ module blackwell_tma_setup
     end
     return m;
   endfunction
+`ifndef SYNTHESIS
   function automatic logic valid_map(input logic [1023:0] raw);
     logic legal;
     legal = raw[23:0] == 24'h060310 && (raw[31:24] & 8'hcf) == 8'h03 && raw[35:32] == 0 &&
@@ -94,6 +93,7 @@ module blackwell_tma_setup
     end
     return legal && raw[72*8+:3] == 0;
   endfunction
+`endif
   always_comb begin
     logic free_any;
     free_any = 0;
@@ -145,25 +145,18 @@ module blackwell_tma_setup
       end
     end
     drained = slot_state[0] == SLOT_FREE && slot_state[1] == SLOT_FREE && !result_valid;
-    request_ready = rst_n && !fault && free_any;
-    arm_ready = slot_state[arm_payload.context_slot] == READY &&
-        slot_ticket[arm_payload.context_slot] == arm_payload.ticket;
-    walk_start_ready = slot_state[walk_start_payload.context_slot] == ARMED &&
-        slot_ticket[walk_start_payload.context_slot] == walk_start_payload.ticket;
-    slot_release_ready = slot_state[slot_release_payload.context_slot] inside {ARMED, WALK} &&
-        slot_ticket[slot_release_payload.context_slot] == slot_release_payload.ticket;
+    request_ready = rst_n && free_any;
+    arm_ready = slot_state[arm_payload.context_slot] == READY;
+    walk_start_ready = slot_state[walk_start_payload.context_slot] == ARMED;
+    slot_release_ready = slot_state[slot_release_payload.context_slot] inside {ARMED, WALK};
   end
   always_ff @(posedge clk) begin
     if (!rst_n) begin
-      fault <= 0;
       result_valid <= 0;
       compute_rr <= 0;
       for (int i = 0; i < 2; i++) slot_state[i] <= SLOT_FREE;
       for (int i = 0; i < 4; i++) pipe[i].valid <= 0;
-    end else if (!halt_i && !fault) begin
-      if (arm_valid && !arm_ready || walk_start_valid && !walk_start_ready ||
-          slot_release_valid && !slot_release_ready)
-        fault <= 1;
+    end else begin
       if (result_valid && result_ready) result_valid <= 0;
       if (arm_valid && arm_ready) slot_state[arm_payload.context_slot] <= ARMED;
       if (walk_start_valid && walk_start_ready) slot_state[walk_start_payload.context_slot] <= WALK;
@@ -177,7 +170,6 @@ module blackwell_tma_setup
         ctx[free_slot].map <= request_payload.issue.cmd.opcode == LOAD_LINEAR ? '0 : decode(
             request_payload.raw
         );
-        map_legal[free_slot] <= valid_map(request_payload.raw);
       end
       for (int i = 0; i < 2; i++)
       if (slot_state[i] == BUILD) begin
@@ -208,7 +200,6 @@ module blackwell_tma_setup
               end else begin
                 highs[i][d-1] <= last[32:0];
               end
-              if (ctx[i].cmd.opcode == STORE_TENSOR && $signed(ctx[i].cmd.coord[d]) < 0) fault <= 1;
             end
             clipped_store[i] <= ctx[i].cmd.opcode == STORE_TENSOR && clipped && !empty_tile;
             // Low endpoint products also seed the modulo-64 virtual origin.
@@ -220,7 +211,6 @@ module blackwell_tma_setup
             mult_busy[i] <= 0;
             launched[i] <= 0;
             completed[i] <= 0;
-            if (!map_legal[i] || ctx[i].cmd.smem_addr[3:0] != 0) fault <= 1;
             stage[i] <= CALC;
           end
         end
@@ -236,7 +226,7 @@ module blackwell_tma_setup
           logic [64:0] glast, slast;
           logic [63:0] total, inner, final_within;
           logic [26:0] sectors;
-          logic linear, empty_g, empty_s, valid_geometry;
+          logic linear, empty_g, empty_s;
           linear = ctx[i].cmd.opcode == LOAD_LINEAR;
           total = linear ? 64'(ctx[i].cmd.bytes) : elements[i] << 1;
           inner = 64'(ctx[i].map.box[0]) << 1;
@@ -257,13 +247,12 @@ module blackwell_tma_setup
             slast = 65'(ctx[i].cmd.smem_addr) + (65'(last_sector[i]) << 7) +
                 65'({last_local[i][0][5:0], 1'b1});
           glast = 65'(ctx[i].cmd.global_addr) + 65'(total) - 1;
-          valid_geometry = ctx[i].cmd.smem_addr[3:0] == 0 && (empty_s || slast < 233472);
-          if (linear)
-            valid_geometry &= ctx[i].cmd.global_addr[3:0] == 0 && ctx[i].cmd.bytes[3:0] == 0 &&
-                (empty_g || !glast[64]);
-          else valid_geometry &= empty_g || high_addr[i][75:64] == 0;
-          if (ctx[i].cmd.opcode != STORE_TENSOR) valid_geometry &= total <= 1048575;
-          if (!valid_geometry) fault <= 1;
+`ifndef SYNTHESIS
+          assert (empty_s || slast < 233472) else $fatal(1, "TMA_SMEM_SPAN");
+          assert (empty_g || (linear ? !glast[64] : high_addr[i][75:64] == 0))
+              else $fatal(1, "TMA_GMEM_SPAN");
+          assert (ctx[i].cmd.opcode == STORE_TENSOR || total <= 1048575);
+`endif
           ctx[i].total_bytes <= total;
           ctx[i].inner_bytes <= linear ? '0 : inner[15:0];
           ctx[i].row_count <= linear ? '0 : rows[i];
@@ -332,10 +321,32 @@ module blackwell_tma_setup
         result_payload <= '{
             ticket: ctx[publication_slot].ticket,
             context_slot: publication_slot,
-            total_bytes: ctx[publication_slot].total_bytes,
-            status: OK
+            total_bytes: ctx[publication_slot].total_bytes
         };
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (request_valid) begin
+        assert (request_payload.issue.ticket < 18 && request_payload.issue.cmd.id.seq != '1);
+        assert (request_payload.issue.cmd.smem_addr[3:0] == 0);
+        assert (request_payload.issue.cmd.opcode inside {LOAD_TENSOR, STORE_TENSOR, LOAD_LINEAR});
+        if (request_payload.issue.cmd.opcode == LOAD_LINEAR) begin
+          assert (request_payload.issue.cmd.global_addr[3:0] == 0 && request_payload.issue.cmd.bytes[3:0] == 0);
+        end else begin
+          assert (valid_map(request_payload.raw)) else $fatal(1, "TMA_MAP_FORMAT");
+          if (request_payload.issue.cmd.opcode == STORE_TENSOR)
+            for (int d = 0; d < 4; d++) assert (!request_payload.issue.cmd.coord[d][31]);
+        end
+      end
+      if (arm_valid) assert (arm_ready && slot_ticket[arm_payload.context_slot] == arm_payload.ticket);
+      if (walk_start_valid)
+        assert (walk_start_ready && slot_ticket[walk_start_payload.context_slot] == walk_start_payload.ticket);
+      if (slot_release_valid)
+        assert (slot_release_ready && slot_ticket[slot_release_payload.context_slot] == slot_release_payload.ticket);
+    end
+  end
+`endif
 endmodule

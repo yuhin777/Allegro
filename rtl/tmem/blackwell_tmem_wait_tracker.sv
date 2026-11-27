@@ -4,7 +4,6 @@ module blackwell_tmem_wait_tracker
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop_i,
   input logic [15:0] epoch_i,
   input logic alloc_valid,
@@ -22,37 +21,29 @@ module blackwell_tmem_wait_tracker
   output logic wait_done_valid,
   input logic wait_done_ready,
   output op_done_t wait_done_payload,
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
   logic [31:0] live, store, pending, snapshot;
   async_id_t ids[32], wait_id;
   logic waiting;
   logic [4:0] free_slot, return_slot;
-  logic alloc_bad, wait_bad, complete_ok;
+  logic complete_fire;
   always_comb begin
     free_slot = 0;
-    alloc_bad = alloc_payload.id.issuer[4:0] != 0 || alloc_payload.id.epoch != epoch_i ||
-        alloc_payload.id.seq == '1;
-    wait_bad = wait_cmd_payload.id.issuer[4:0] != 0 || wait_cmd_payload.id.epoch != epoch_i ||
-        wait_cmd_payload.id.seq == '1;
     for (int i = 31; i >= 0; i--) begin
       if (!live[i]) free_slot = 5'(i);
-      if (live[i] && ids[i] == alloc_payload.id) alloc_bad = 1;
       snapshot[i] = live[i] && store[i] && ids[i].epoch == wait_cmd_payload.id.epoch &&
           ids[i].issuer == wait_cmd_payload.id.issuer;
     end
-    if (complete_ok) snapshot[complete_payload.slot] = 0;
+    if (complete_fire) snapshot[complete_payload.slot] = 0;
   end
-  assign complete_ready = !halt_i && !fault_o;
-  assign complete_ok = complete_valid && complete_ready && live[complete_payload.slot] &&
-      ids[complete_payload.slot] == complete_payload.id && complete_payload.status == OK &&
-      !(slot_valid && return_slot == complete_payload.slot);
-  assign alloc_ready = !stop_i && !halt_i && !fault_o && !(&live) && (!slot_valid || slot_ready);
+  assign complete_ready = rst_n;
+  assign complete_fire = complete_valid && complete_ready;
+  assign alloc_ready = !stop_i && !(&live) && (!slot_valid || slot_ready);
   assign slot_payload = '{id: ids[return_slot], slot: return_slot};
-  assign wait_cmd_ready = !waiting && !stop_i && !halt_i && !fault_o;
+  assign wait_cmd_ready = !waiting && !stop_i;
   assign wait_done_valid = waiting && pending == 0;
-  assign wait_done_payload = '{id: wait_id, status: OK};
+  assign wait_done_payload = '{id: wait_id};
   assign drained_o = !waiting && live == 0 && !slot_valid;
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -60,35 +51,42 @@ module blackwell_tmem_wait_tracker
       pending <= 0;
       waiting <= 0;
       slot_valid <= 0;
-      fault_o <= 0;
     end else begin
       if (slot_valid && slot_ready) slot_valid <= 0;
       if (wait_done_valid && wait_done_ready) waiting <= 0;
-      if (complete_valid && complete_ready) begin
-        if (!complete_ok) fault_o <= 1;
-        else begin
-          live[complete_payload.slot] <= 0;
-          pending[complete_payload.slot] <= 0;
-        end
+      if (complete_fire) begin
+        live[complete_payload.slot] <= 0;
+        pending[complete_payload.slot] <= 0;
       end
       if (alloc_valid && alloc_ready) begin
-        if (alloc_bad) fault_o <= 1;
-        else begin
-          slot_valid <= 1;
-          return_slot <= free_slot;
-          live[free_slot] <= 1;
-          ids[free_slot] <= alloc_payload.id;
-          store[free_slot] <= alloc_payload.store;
-        end
+        slot_valid <= 1;
+        return_slot <= free_slot;
+        live[free_slot] <= 1;
+        ids[free_slot] <= alloc_payload.id;
+        store[free_slot] <= alloc_payload.store;
       end
       if (wait_cmd_valid && wait_cmd_ready) begin
-        if (wait_bad) fault_o <= 1;
-        else begin
-          waiting <= 1;
-          wait_id <= wait_cmd_payload.id;
-          pending <= snapshot;
-        end
+        waiting <= 1;
+        wait_id <= wait_cmd_payload.id;
+        pending <= snapshot;
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (complete_fire)
+        assert (live[complete_payload.slot] && ids[complete_payload.slot] == complete_payload.id &&
+                !(slot_valid && return_slot == complete_payload.slot));
+      if (alloc_valid && alloc_ready) begin
+        assert (alloc_payload.id.issuer[4:0] == 0 && alloc_payload.id.seq != '1 &&
+                alloc_payload.id.epoch == epoch_i);
+        for (int i = 0; i < 32; i++) assert (!live[i] || ids[i] != alloc_payload.id);
+      end
+      if (wait_cmd_valid && wait_cmd_ready)
+        assert (wait_cmd_payload.id.issuer[4:0] == 0 && wait_cmd_payload.id.seq != '1 &&
+                wait_cmd_payload.id.epoch == epoch_i);
+    end
+  end
+`endif
 endmodule

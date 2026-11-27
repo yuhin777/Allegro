@@ -34,10 +34,10 @@ class Accumulation(FrontEnd):
             self.last_write_id = int(core("tm_wr_req_payload")[0].value) >> 178
             self.events.setdefault(self.last_write_id, {})["write"] = self.cycle
         if int(core("tm_wr_ack_valid").value) & int(core("tm_wr_ack_ready").value) & 1:
-            op = int(core("tm_wr_ack_payload")[0].value) >> 24
+            op = int(core("tm_wr_ack_payload")[0].value) >> 20
             self.events.setdefault(op, {})["ack"] = self.cycle
         if self.read("engine_done_valid") and self.read("engine_done_ready"):
-            op = self.read("engine_done_payload") >> 4
+            op = self.read("engine_done_payload")
             self.events.setdefault(op, {})["tracker"] = self.cycle
 
     async def write_panel(self, start, values):

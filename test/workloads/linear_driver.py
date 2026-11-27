@@ -26,9 +26,9 @@ class LinearFrontEnd(FrontEnd):
         for group in range(8):
             if self.read("smem_rd_rsp_valid") & self.read("smem_rd_rsp_ready") & (1 << group):
                 value = int(self.d.smem_rd_rsp_payload[group].value)
-                tag = value >> 132
-                assert value & 15 == 0 and tag not in self.atoms
-                self.atoms[tag] = ((value >> 4) & ((1 << 128) - 1)).to_bytes(16, "little")
+                tag = value >> 128
+                assert tag not in self.atoms
+                self.atoms[tag] = (value & ((1 << 128) - 1)).to_bytes(16, "little")
 
     async def load(self, origin, target, size, barrier):
         op = self.sign(0)

@@ -5,7 +5,6 @@ module blackwell_tma_data_path
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic start_valid,
   output logic start_ready,
   input tma_start_t start_payload,
@@ -19,7 +18,7 @@ module blackwell_tma_data_path
   output logic gmem_req_valid,
   output logic gmem_rsp_ready,
   output gmem_req_t gmem_req_payload,
-  input gmem_rsp_t gmem_rsp_payload,
+  input tma_gmem_return_t gmem_rsp_payload,
   input logic [7:0] smem_req_ready,
   input logic [7:0] smem_rsp_valid,
   output logic [7:0] smem_req_valid,
@@ -27,8 +26,7 @@ module blackwell_tma_data_path
   output logic [7:0] smem_read_blocked,
   output smem_atom_req_t smem_req_payload[8],
   input smem_atom_rsp_t smem_rsp_payload[8],
-  output logic drained,
-  output logic fault
+  output logic drained
 );
   typedef struct packed {
     logic valid, claimed, zero;
@@ -61,13 +59,12 @@ module blackwell_tma_data_path
       read_fire,
       write_fire,
       load_reply,
-      reply_bad,
       load_write,
       slot_requested,
       choose_start;
   logic room_for_start, reply_alloc;
   logic slot_turn, write_turn, gmem_turn, gmem_locked, gmem_lock_store, gmem_store;
-  logic [7:0] smem_turn, smem_lock, smem_lock_store, smem_store, smem_bad, smem_store_return;
+  logic [7:0] smem_turn, smem_lock, smem_lock_store, smem_store, smem_store_return;
   logic [7:0][3:0] store_selected, smem_lock_slot, return_slot;
   ticket_t group_rr[8], rd_store_rr;
   logic [3:0] rd_load_rr;
@@ -105,7 +102,7 @@ module blackwell_tma_data_path
     logic store_offer;
     store_offer = out_valid && owner_view[out_tag.ticket].store;
     gmem_store = gmem_locked ? gmem_lock_store : store_offer && (!read_held || gmem_turn);
-    gmem_req_valid = (store_offer || read_held) && !fault;
+    gmem_req_valid = store_offer || read_held;
     gmem_req_payload = '0;
     gmem_req_payload.op = 3'(gmem_store);
     if (gmem_store) begin
@@ -163,7 +160,7 @@ module blackwell_tma_data_path
       smem_store[g] = smem_lock[g] ? smem_lock_store[g] : found && (!load_offer || smem_turn[g]);
       if (smem_lock[g]) s = smem_lock_slot[g];
       store_selected[g] = s;
-      smem_req_valid[g] = !fault && (found || load_offer);
+      smem_req_valid[g] = found || load_offer;
       key = smem_store[g] ? rows[s].key : out_key;
       tag = tag_view[key.tag];
       smem_req_payload[g].write = !smem_store[g];
@@ -223,16 +220,13 @@ module blackwell_tma_data_path
     pick_store = store_found && (!load_found || rd_store_turn);
     pick_rd = pick_store ? store_slot : (load_after_cursor ? next_load : first_load);
     for (int g = 0; g < 8; g++) begin
-      read_enable[g] = rst_n && !halt_i && !fault && rd_valid && q_space && !rows[rd_slot].zero;
+      read_enable[g] = rst_n && rd_valid && q_space && !rows[rd_slot].zero;
       read_addr[g] = rd_slot;
     end
   end
   logic start_alloc, load_has_row;
   always_comb begin
-    reply_bad = gmem_rsp_payload.id.cls != 0 || return_tag.state inside {TAG_FREE, RETIRE} ||
-        return_tag.phase != return_key.phase || !return_tag.gmem_sent || return_tag.gmem_done ||
-        gmem_rsp_payload.status != OK;
-    load_reply = gmem_rsp_valid && !reply_bad && !owner_view[return_tag.ticket].store;
+    load_reply = gmem_rsp_valid && !owner_view[return_tag.ticket].store;
     read_rsp_groups = active_groups(return_tag);
     slot_requested = start_payload.segment.store ^ start_payload.segment.oob;
     room_for_start = free_count != 0;
@@ -252,37 +246,28 @@ module blackwell_tma_data_path
       logic [15:0] token;
       key_t key;
       tma_tag_t t;
-      logic found;
       token = smem_rsp_payload[g].tag.token;
       key = '{tag: token[9:4], phase: token[0]};
       t = tag_view[key.tag];
-      found = 0;
       return_slot[g] = 0;
       for (int i = 0; i < 16; i++)
       if (rows[i].valid && rows[i].key == key) begin
-        found = 1;
         return_slot[g] = 4'(i);
       end
       smem_store_return[g] = owner_view[t.ticket].store;
-      smem_bad[g] = token[15:10] != 0 || token[3:1] != 3'(g) ||
-          smem_rsp_payload[g].tag.client != 8 || t.state inside {TAG_FREE, RETIRE} ||
-          t.phase != key.phase || !t.smem_sent[g] || t.smem_done[g] ||
-          smem_rsp_payload[g].tag.id != owner_view[t.ticket].id ||
-          smem_rsp_payload[g].write == smem_store_return[g] || smem_rsp_payload[g].status != OK ||
-          (smem_store_return[g] && !found);
-      store_return_competes |= read_rsp_groups[g] && smem_rsp_valid[g] && !smem_bad[g] &&
+      store_return_competes |= read_rsp_groups[g] && smem_rsp_valid[g] &&
           smem_store_return[g];
     end
     reply_alloc = load_has_row && (!store_return_competes || write_turn);
     choose_start = start_alloc && (!reply_alloc || slot_turn);
-    gmem_rsp_ready = rst_n && !fault && (!load_reply || (reply_alloc && !choose_start));
+    gmem_rsp_ready = rst_n && (!load_reply || (reply_alloc && !choose_start));
     load_write = load_reply && gmem_rsp_ready;
     for (int g = 0; g < 8; g++) begin
       tma_tag_t t;
       t = tag_view[smem_rsp_payload[g].tag.token[9:4]];
-      smem_rsp_ready[g] = rst_n && !fault &&
-          (smem_bad[g] || !smem_store_return[g] || !(load_write && read_rsp_groups[g]));
-      write_enable[g] = !halt_i && load_write && read_rsp_groups[g];
+      smem_rsp_ready[g] = rst_n &&
+          (!smem_store_return[g] || !(load_write && read_rsp_groups[g]));
+      write_enable[g] = load_write && read_rsp_groups[g];
       write_addr[g] = free_slot;
       write_byte_mask[g] = group_mask(return_tag, 3'(g));
       write_data[g] = 0;
@@ -291,8 +276,8 @@ module blackwell_tma_data_path
         src = {(3'(g) ^ return_tag.xor_group), 4'(k)} - return_tag.soff + return_tag.goff;
         write_data[g][8*k+:8] = gmem_rsp_payload.data[8*src+:8];
       end
-      if (smem_rsp_valid[g] && smem_rsp_ready[g] && !smem_bad[g] && smem_store_return[g]) begin
-        write_enable[g] = !halt_i;
+      if (smem_rsp_valid[g] && smem_rsp_ready[g] && smem_store_return[g]) begin
+        write_enable[g] = 1'b1;
         write_addr[g] = return_slot[g];
         write_byte_mask[g] = group_mask(t, 3'(g));
         write_data[g] = smem_rsp_payload[g].data;
@@ -305,7 +290,7 @@ module blackwell_tma_data_path
     else
       start_ready = (!read_held || read_fire) &&
           (!stores_present || 8'(free_count) > outstanding_reads);
-    start_ready &= rst_n && !fault;
+    start_ready &= rst_n;
   end
   always_comb begin
     event_valid = 0;
@@ -316,11 +301,11 @@ module blackwell_tma_data_path
         kind: GMEM_REQ,
         grp: 0
     };
-    event_valid[1] = gmem_rsp_valid && gmem_rsp_ready && !reply_bad;
+    event_valid[1] = gmem_rsp_valid && gmem_rsp_ready;
     event_payload[1] = '{key: return_key, kind: GMEM_RSP, grp: 0};
     for (int g = 0; g < 8; g++) begin
       event_valid[2+g] = smem_req_valid[g] && smem_req_ready[g];
-      event_valid[10+g] = smem_rsp_valid[g] && smem_rsp_ready[g] && !smem_bad[g];
+      event_valid[10+g] = smem_rsp_valid[g] && smem_rsp_ready[g];
       event_payload[2+g] = '{
           key: {smem_req_payload[g].tag.token[9:4], smem_req_payload[g].tag.token[0]},
           kind: SMEM_REQ,
@@ -346,7 +331,6 @@ module blackwell_tma_data_path
       rd_valid <= 0;
       q_valid <= 0;
       out_valid <= 0;
-      fault <= 0;
       read_held <= 0;
       rd_load_rr <= 0;
       rd_store_rr <= 0;
@@ -358,7 +342,7 @@ module blackwell_tma_data_path
       gmem_locked <= 0;
       smem_turn <= 0;
       smem_lock <= 0;
-    end else if (!halt_i && !fault) begin
+    end else begin
       logic accept_read;
       accept_read = start_valid && start_ready && !start_payload.segment.store &&
           !start_payload.segment.oob;
@@ -397,7 +381,6 @@ module blackwell_tma_data_path
         slot_turn <= 1;
         write_turn <= 0;
       end
-      if (gmem_rsp_valid && gmem_rsp_ready && reply_bad) fault <= 1;
       if (rd_space) begin
         rd_valid <= rd_found;
         rd_slot <= pick_rd;
@@ -434,10 +417,36 @@ module blackwell_tma_data_path
           end
         end
         if (smem_rsp_valid[g] && smem_rsp_ready[g]) begin
-          if (smem_bad[g]) fault <= 1;
-          else if (smem_store_return[g] && read_rsp_groups[g]) write_turn <= 1;
+          if (smem_store_return[g] && read_rsp_groups[g]) write_turn <= 1;
         end
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (gmem_rsp_valid)
+        assert (gmem_rsp_payload.id.cls == 0 && !(return_tag.state inside {TAG_FREE, RETIRE}) &&
+                return_tag.phase == return_key.phase && return_tag.gmem_sent && !return_tag.gmem_done)
+            else $fatal(1, "TMA_DATA_RETURN");
+      for (int g = 0; g < 8; g++) begin
+        if (smem_rsp_valid[g]) begin
+          mem_tag_t token;
+          key_t key;
+          tma_tag_t entry;
+          token = smem_rsp_payload[g].tag;
+          key = '{tag: token.token[9:4], phase: token.token[0]};
+          entry = tag_view[key.tag];
+          assert (token.token[15:10] == 0 && token.token[3:1] == 3'(g) && token.client == 8 &&
+                  !(entry.state inside {TAG_FREE, RETIRE}) && entry.phase == key.phase &&
+                  entry.smem_sent[g] && !entry.smem_done[g] &&
+                  token.id == owner_view[entry.ticket].id &&
+                  smem_rsp_payload[g].write != smem_store_return[g]);
+          if (smem_store_return[g])
+            assert (rows[return_slot[g]].valid && rows[return_slot[g]].key == key);
+        end
+      end
+    end
+  end
+`endif
 endmodule

@@ -4,7 +4,7 @@ module mma_engine_tb;
   import blackwell_tc_pkg::*;
   bit clk;
   always #5 clk = ~clk;
-  logic rst_n, halt_i, stop_i, idle_o, drained_o, fault_o;
+  logic rst_n, stop_i, idle_o, drained_o;
   logic [15:0] epoch_i = 1;
   logic
       cmd_valid,
@@ -47,11 +47,12 @@ module mma_engine_tb;
   // Drive the scheduler independently to stagger per-core completion and selection.
   blackwell_tc_mma_control dut (.*);
 
-  localparam int CASES = 21;
+  localparam int MASKED = 21;
+  localparam int CASES = MASKED + 1;
   int loads[CASES], reports[CASES], launch_tick[CASES], selections[CASES], grants[CASES];
   bit [3:0] local_sent[CASES];
   bit release_first;
-  int cycles;
+  int cycles, accepted_at[CASES];
   bit [1:0] spec_size[CASES], spec_name[CASES], spec_op[CASES];
   bit [1:0] expected_base[CASES];
   bit expected_hit[CASES];
@@ -60,8 +61,14 @@ module mma_engine_tb;
   always @(posedge clk) begin
     if (rst_n) begin
       cycles++;
+      if (cmd_valid && cmd_ready) accepted_at[cmd_payload.id.seq] = cycles;
+      if (pin_req_valid && pin_req_ready && cycles != accepted_at[pin_req_payload.id.seq] + 2)
+        $fatal(1, "pin request for ID %0d missed c+2", pin_req_payload.id.seq);
+      if (unpin_valid && !(&local_sent[unpin_payload.id.seq]))
+        $fatal(1, "unpin before all four local completions");
+
       pin_rsp_valid <= pin_req_valid && pin_req_ready;
-      pin_rsp_payload <= {pin_req_payload.id, OK};
+      pin_rsp_payload.id <= pin_req_payload.id;
       result_valid <= 0;
       if (load_valid && load_ready) loads[load_payload.id.seq]++;
       for (int r = 0; r < 3; r++)
@@ -70,7 +77,7 @@ module mma_engine_tb;
         i = int'(live_o[r].id.seq);
         if (loads[i] > 0 && selections[i] == 4 && grants[i] == 0 && !result_valid) begin
           // Each mock install settles once. Latch a single response per cycle.
-          result_payload <= {live_o[r].id, OK};
+          result_payload.id <= live_o[r].id;
           result_valid <= 1;
           grants[i]++;
           break;
@@ -107,9 +114,8 @@ module mma_engine_tb;
         int i;
         i = int'(done_payload.id.seq);
         reports[i]++;
-        if (reports[i] != 1 || done_payload.status != OK) $fatal(1, "duplicate/error done");
+        if (reports[i] != 1) $fatal(1, "duplicate done");
       end
-      if (fault_o) $fatal(1, "unexpected fault at cycle %0d", cycles);
       if (cycles > 2500) $fatal(1, "scheduler timeout");
     end
   end
@@ -132,11 +138,11 @@ module mma_engine_tb;
             i = int'(live_o[age].id.seq);
             r = int'(live_o[age].rec);
             input_free[c][r] = launch_tick[i] != 0 && cycles >= launch_tick[i] + 2;
-            writes_done[c][r] = launch_tick[i] != 0 && cycles >= launch_tick[i] + 4 &&
+            writes_done[c][r] = launch_tick[i] != 0 && cycles >= launch_tick[i] + 4 + c &&
                 (i != 0 || release_first);
             if (writes_done[c][r] && !local_sent[i][c] && !local_done_valid[c]) begin
               local_done_valid[c] = 1;
-              local_done_payload[c] = {live_o[age].id, OK};
+              local_done_payload[c].id = live_o[age].id;
             end
           end
         end
@@ -150,7 +156,8 @@ module mma_engine_tb;
     cmd_payload.id.seq = 32'(i);
     cmd_payload.b_desc = (64'd1 << 46) | (64'd16 << 32) | (64'd8 << 16) | 64'(descriptor_offset[i]);
     cmd_payload.a_ref = (64'd1 << 46) | (64'd16 << 32) | (64'd8 << 16);
-    cmd_payload.ws = 1;
+    cmd_payload.ws = i != MASKED;
+    if (i == MASKED) cmd_payload.disable_lane_mask = '1;
     cmd_payload.collector_buffer = spec_name[i];
     cmd_payload.collector_op = spec_op[i];
     cmd_payload.n_code = spec_size[i];
@@ -243,8 +250,8 @@ module mma_engine_tb;
     // the older N256 miss to evict all four, then reload under its own ID.
     config_case(19, 2, 1, 2, 0, 0, 24);
     config_case(20, 3, 2, 0, 0, 0, 23);
+    config_case(MASKED, 0, 0, 0, 0, 0, 30);
     rst_n = 0;
-    halt_i = 0;
     stop_i = 0;
     cmd_valid = 0;
     done_ready = 0;
@@ -273,6 +280,11 @@ module mma_engine_tb;
     release_first = 1;
     wait (drained_o);
     for (int i = 3; i < CASES; i++) begin
+      if (i == MASKED) begin
+        wait (drained_o);
+        @(negedge clk);
+        epoch_i++;
+      end
       send_cmd(i);
       if (i != 19) wait (reports[i] != 0);
     end

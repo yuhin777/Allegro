@@ -8,12 +8,10 @@ module blackwell_tc_mma_engine
 ) (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop_i,
   input logic [15:0] epoch_i,
   output logic idle_o,
   output logic drained_o,
-  output logic fault_o,
   input logic cmd_valid,
   output logic cmd_ready,
   input mma_cmd_t cmd_payload,
@@ -81,17 +79,15 @@ module blackwell_tc_mma_engine
   b_data_t data_payload;
   logic [3:0][71:0] sb_query;
   logic [3:0][256:0] sb_view;
-  logic control_empty, control_fault, loader_drained, loader_fault, snapshot_drained, snapshot_fault;
-  logic [3:0] core_drained, core_fault;
+  logic control_empty, loader_drained, snapshot_drained;
+  logic [3:0] core_drained;
 
   assign drained_o = control_empty && loader_drained && snapshot_drained && (&core_drained);
   assign idle_o = drained_o;
-  assign fault_o = control_fault || loader_fault || snapshot_fault || (|core_fault);
 
   blackwell_tc_mma_control control (
     .idle_o(),
     .drained_o(control_empty),
-    .fault_o(control_fault),
     .*
   );
   for (genvar i = 0; i < 4; i++) begin : cores
@@ -100,7 +96,6 @@ module blackwell_tc_mma_engine
       .SHARE_FP_DOT_ADDER_TREE(SHARE_FP_DOT_ADDER_TREE)
     ) core (
       .epoch_i,
-      .halt_i,
       .live_i(live_o),
       .prepare_valid(prepare_valid[i]),
       .prepare_ready(prepare_ready[i]),
@@ -139,13 +134,11 @@ module blackwell_tc_mma_engine
       .tm_wr_ack_payload(tc_wr_ack_payload[i]),
       .idle_o(),
       .drained_o(core_drained[i]),
-      .fault_o(core_fault[i]),
       .*
     );
   end
   blackwell_tc_b_loader b_loader (
     .epoch_i,
-    .halt_i,
     .live_i(live_o),
     .sm_rd_req_valid(tc_smem_req_valid[4]),
     .sm_rd_req_ready(tc_smem_req_ready[4]),
@@ -154,12 +147,10 @@ module blackwell_tc_mma_engine
     .sm_rd_rsp_ready(tc_smem_rsp_ready[4]),
     .sm_rd_rsp_payload(tc_smem_rsp_payload[4]),
     .drained_o(loader_drained),
-    .fault_o(loader_fault),
     .*
   );
   blackwell_tc_scale_b_snapshot sb (
     .epoch_i,
-    .halt_i,
     .live_i(live_o),
     .rd_req_valid(tc_rd_req_valid[4]),
     .rd_req_ready(tc_rd_req_ready[4]),
@@ -171,7 +162,6 @@ module blackwell_tc_mma_engine
     .view(sb_view),
     .ready(snapshot_ready),
     .drained_o(snapshot_drained),
-    .fault_o(snapshot_fault),
     .*
   );
   assign tc_wr_req_valid[4] = 0;

@@ -6,7 +6,7 @@ module tmem_a_tb;
   import blackwell_tmem_pkg::*;
   import blackwell_smem_pkg::*;
   localparam int CORE = 1;
-  logic clk = 0, rst_n = 0, halt_i = 0, bind_i, active_i, permit_a = 1, permit_scale = 1;
+  logic clk = 0, rst_n = 0, bind_i, active_i, permit_a = 1, permit_scale = 1;
   always #5 clk = !clk;
   mma_cmd_t cmd;
   wire [7:0] sm_valid, sm_ret_ready;
@@ -17,7 +17,7 @@ module tmem_a_tb;
   tmem_rd_req_t tm_req[128];
   tmem_rd_rsp_t tm_ret[128];
   logic [3:0] a_ready;
-  logic scale_ready, fault_o;
+  logic scale_ready;
   logic [31:0][255:0] rows;
   logic [31:0][ 31:0] scales;
   blackwell_tc_a_context #(.CORE(CORE)) source (.*);
@@ -30,7 +30,6 @@ module tmem_a_tb;
   logic saw_cross_partition_conflict;
   tmem_rd_rsp_t wrong_lane_payload;
   logic [6:0] fill_word;
-  logic [3:0] partition_fault;
   int cycle;
   always_ff @(posedge clk) cycle <= cycle + 1;
   for (genvar p = 0; p < 4; p++) begin : part
@@ -71,7 +70,6 @@ module tmem_a_tb;
     ) ram (
       .clk,
       .rst_n,
-      .halt_i,
       .rd_req_valid(read_valid),
       .rd_req_ready(read_ready),
       .rd_req_payload(rq),
@@ -86,8 +84,7 @@ module tmem_a_tb;
       .wr_ack_payload(ack),
       .read_credit_o(),
       .write_credit_o(),
-      .drained_o(),
-      .fault_o(partition_fault[p])
+      .drained_o()
     );
     always @(posedge clk) if (fill && !(&write_ready)) $fatal(1, "initialization lost a frame");
   end
@@ -204,7 +201,7 @@ module tmem_a_tb;
     bind_i = 0;
     while (a_ready != '1 || !scale_ready) begin
       @(negedge clk);
-      if (fault_o || partition_fault != 0 || sm_valid != 0)
+      if (sm_valid != 0)
         $fatal(1, "bad context seq=%0d", seqnum);
     end
     for (int row = 0; row < 32; row++) begin
@@ -253,24 +250,25 @@ module tmem_a_tb;
     exercise(6, 7, 1, 0, 10, 3, 0);
     uniform_service = 1;
     exercise(2, 3, 4, 95, 11, 0, 0, 1);
-    if (!saw_cross_partition_conflict || fault_o || partition_fault != 0) $fatal;
+    if (!saw_cross_partition_conflict) $fatal;
 
-    // Duplicate a genuine outstanding response on a distant, incorrect lane.
-    cmd.transpose_a = 0;
-    cmd.a_ref = 0;
-    cmd.id.seq++;
-    seen = '0;
-    active_i = 1;
-    bind_i = 1;
-    @(negedge clk);
-    bind_i = 0;
-    while (!tm_ret_valid[32*CORE]) @(negedge clk);
-    wrong_lane_payload = tm_ret[32*CORE];
-    inject_wrong_lane = 1;
-    do @(posedge clk); while (!tm_ret_ready[127]);
-    @(negedge clk);
-    inject_wrong_lane = 0;
-    if (!fault_o) $fatal(1, "wrong-lane response did not raise fault");
+    if ($test$plusargs("wrong_lane")) begin
+      // Duplicate a genuine outstanding response on a distant, incorrect lane.
+      cmd.transpose_a = 0;
+      cmd.a_ref = 0;
+      cmd.id.seq++;
+      seen = '0;
+      active_i = 1;
+      bind_i = 1;
+      @(negedge clk);
+      bind_i = 0;
+      while (!tm_ret_valid[32*CORE]) @(negedge clk);
+      wrong_lane_payload = tm_ret[32*CORE];
+      inject_wrong_lane = 1;
+      do @(posedge clk); while (!tm_ret_ready[127]);
+      @(negedge clk);
+      $fatal(1, "expected wrong-lane assertion");
+    end
     $display("PASS TMEM A FP16/BF16/TF32, E2M1 extraction, FP6, native FP4 and 1X/2X/4X scale A");
     $finish;
   end

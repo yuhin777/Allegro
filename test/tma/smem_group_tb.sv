@@ -1,7 +1,7 @@
 module smem_group_tb;
   import blackwell_async_pkg::*;
   import blackwell_smem_pkg::*;
-  logic clk = 0, rst_n = 0, halt_i = 0;
+  logic clk = 0, rst_n = 0;
   logic [15:0] epoch_i = 0;
   mma_live_t live[3];
   logic [15:0][7:0]
@@ -17,7 +17,7 @@ module smem_group_tb;
   smem_wr_req_t wr_req_payload[16][8];
   smem_rd_rsp_t rd_rsp_payload[16][8];
   smem_wr_ack_t wr_ack_payload[16][8];
-  logic drained_o, fault_o;
+  logic drained_o;
   async_id_t id = '{epoch: 16'd1, issuer: 10'd3, seq: 32'd9};
   logic [15:0] lsu_token, lsu_mask;
   logic [15:0] wtoken, wmask;
@@ -136,7 +136,7 @@ module smem_group_tb;
       $fatal(1, "read byte mask");
     request_read(12, 8, '1);
     do @(posedge clk); while (!rd_rsp_valid[12][0]);
-    if (rd_rsp_payload[12][0].data != {PATTERN[127:8], 8'hff} || fault_o)
+    if (rd_rsp_payload[12][0].data != {PATTERN[127:8], 8'hff})
       $fatal(1, "masked write damaged neighbor");
     @(negedge clk);
     if (!drained_o) $fatal(1, "remaining credits");

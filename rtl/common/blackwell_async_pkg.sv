@@ -1,13 +1,7 @@
 package blackwell_async_pkg;
-  typedef enum logic [3:0] {
-    OK,
-    UNSUPPORTED,
-    INVALID,
-    RANGE,
-    MEMORY,
-    STALE,
-    PROTOCOL
-  } status_t;
+  // External memory and ordering services encode successful replies as zero.
+  typedef logic [3:0] status_t;
+  localparam status_t OK = 4'd0;
   typedef struct packed {
     logic [15:0] epoch;
     logic [9:0]  issuer;
@@ -15,7 +9,6 @@ package blackwell_async_pkg;
   } async_id_t;
   typedef struct packed {
     async_id_t id;
-    status_t   status;
   } op_done_t;
   typedef struct packed {
     async_id_t   id;
@@ -29,7 +22,10 @@ package blackwell_async_pkg;
     logic [63:0] addr;
     logic [31:0] bytes;
   } order_req_t;
-  typedef op_done_t order_rsp_t;
+  typedef struct packed {
+    async_id_t id;
+    status_t status;
+  } order_rsp_t;
   typedef struct packed {
     logic valid;
     logic [1:0] rec;

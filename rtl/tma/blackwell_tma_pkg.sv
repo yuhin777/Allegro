@@ -7,8 +7,7 @@ package blackwell_tma_pkg;
     COMMIT_GROUP,
     WAIT_GROUP_READ,
     PROXY_FENCE,
-    PREFETCH_MAP,
-    REJECT
+    PREFETCH_MAP
   } tma_opcode_t;
   typedef struct packed {
     async_id_t id;
@@ -41,6 +40,10 @@ package blackwell_tma_pkg;
   typedef struct packed {
     gmem_id_t id;
     logic [1023:0] data;
+  } tma_gmem_return_t;
+  typedef struct packed {
+    gmem_id_t id;
+    logic [1023:0] data;
     status_t status;
   } gmem_rsp_t;
   typedef logic [4:0] ticket_t;
@@ -57,7 +60,6 @@ package blackwell_tma_pkg;
   typedef struct packed {
     ticket_t ticket;
     logic [1023:0] raw;
-    status_t status;
   } tma_desc_rsp_t;
   typedef struct packed {
     logic [63:0] base_addr;
@@ -83,7 +85,6 @@ package blackwell_tma_pkg;
     ticket_t ticket;
     logic context_slot;
     logic [63:0] total_bytes;
-    status_t status;
   } tma_setup_rsp_t;
   typedef struct packed {
     ticket_t ticket;

@@ -29,9 +29,9 @@ class Fa4FrontEnd(FrontEnd):
         for group in range(8):
             if ack_fire >> group & 1:
                 rsp = int(sm.t_rsp[group].value)
-                if rsp >> 210:
-                    tag = (rsp >> 132) & ((1<<78)-1)
-                    assert rsp & 15 == 0 and tag in self.copy_atoms, (tag,group)
+                if rsp >> 206:
+                    tag = (rsp >> 128) & ((1<<78)-1)
+                    assert tag in self.copy_atoms, (tag,group)
                     self.copy_bytes[tag>>20] += self.copy_atoms.pop(tag)
             if request_fire >> group & 1:
                 req = int(sm.t_req[group].value)
@@ -54,8 +54,8 @@ class Fa4FrontEnd(FrontEnd):
                     self.copy_atoms[tag] = mask.bit_count()
         if int(sm.producer_done_valid.value) and int(sm.producer_done_ready.value):
             value=int(sm.producer_done_payload.value)
-            op,count,status=value>>36,(value>>4)&0xffffffff,value&15
-            assert op not in self.producer and status==0 and self.copy_bytes[op]==count==16384
+            op,count=value>>32,value&0xffffffff
+            assert op not in self.producer and self.copy_bytes[op]==count==16384
             assert not self.copy_expected[op]
             self.producer[op]=self.cycle
 

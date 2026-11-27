@@ -11,7 +11,6 @@ module blackwell_tc_mma_core
 ) (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic [15:0] epoch_i,
   input mma_live_t [2:0] live_i,
   input logic [2:0][3:0] older_writes_clear,
@@ -54,8 +53,7 @@ module blackwell_tc_mma_core
   output logic [71:0] sb_query,
   input logic [256:0] sb_view,
   output logic drained_o,
-  output logic idle_o,
-  output logic fault_o
+  output logic idle_o
 );
   mma_cmd_t command[3];
   logic [2:0] bound, selected, bank, reported;
@@ -66,7 +64,7 @@ module blackwell_tc_mma_core
   logic [2:0][31:0][2:0][31:0] pending;
   logic [2:0][2:0] inflight;
   logic [31:0][2047:0] bmem;
-  logic [1:0] context_active, context_bind, context_fault, scale_ready;
+  logic [1:0] context_active, context_bind, scale_ready;
   logic [1:0][1:0] context_rec;
   logic [1:0][3:0] a_ready;
   logic [1:0][31:0][255:0] rows;
@@ -80,7 +78,7 @@ module blackwell_tc_mma_core
   logic [127:0][1:0] tm_source, tm_pick;
   logic [7:0] sm_pick;
   logic [1:0] current, bind_rec, deliver_rec, select_rec, done_rec, held_done;
-  logic current_valid, deliver_match, select_match, done_lock, local_fault;
+  logic current_valid, deliver_match, select_match, done_lock;
   logic [1:0] c_active, d_active;
   logic [1:0][1:0] c_rec, d_rec;
   logic [1:0][4:0] c_block, d_block;
@@ -114,13 +112,11 @@ module blackwell_tc_mma_core
     .*
   );
   assign result_tag = result_payload.tag;
-  assign fault_o = local_fault || (|context_fault);
   assign idle_o = drained_o;
   assign drained_o = !(|bound) && !operand_valid && empty_o;
   always_comb begin
     bind_rec = prepare_payload.rec;
-    prepare_ready = !halt_i &&
-        (!context_active[prepare_payload.bank] || input_free[context_rec[prepare_payload.bank]]);
+    prepare_ready = (!context_active[prepare_payload.bank] || input_free[context_rec[prepare_payload.bank]]);
     for (int b = 0; b < 2; b++)
     context_bind[b] = prepare_valid && prepare_ready && prepare_payload.bank == 1'(b);
     current_valid = 0;
@@ -155,16 +151,16 @@ module blackwell_tc_mma_core
           result_match = 1;
           result_rec = r;
         end
-        if (!done_lock && !halt_i && input_free[r] && writes_done[r] && inflight[r] == 0 &&
+        if (!done_lock && input_free[r] && writes_done[r] && inflight[r] == 0 &&
             !reported[r]) begin
           done_rec = r;
           local_done_valid = 1;
         end
       end
     end
-    local_done_payload = '{command[done_rec].id, OK};
-    b_select_ready = !halt_i && select_match && !selected[select_rec];
-    data_ready = !halt_i && deliver_match && selected[deliver_rec] &&
+    local_done_payload.id = command[done_rec].id;
+    b_select_ready = select_match && !selected[select_rec];
+    data_ready = deliver_match && selected[deliver_rec] &&
         installed[deliver_rec] == 6'(data_payload.block_idx);
     for (int i = 0; i < 3; i++) begin
       logic [1:0] r;
@@ -185,7 +181,6 @@ module blackwell_tc_mma_core
     ) ctx (
       .clk,
       .rst_n,
-      .halt_i,
       .bind_i(context_bind[b]),
       .active_i(context_bind[b] || (context_active[b] && !input_free[r])),
       .permit_a(older_writes_clear[r][0]),
@@ -206,8 +201,7 @@ module blackwell_tc_mma_core
       .a_ready(a_ready[b]),
       .scale_ready(scale_ready[b]),
       .rows(rows[b]),
-      .scales(scales[b]),
-      .fault_o(context_fault[b])
+      .scales(scales[b])
     );
   end
   for (genvar g = 0; g < 8; g++) begin : sm_route
@@ -263,7 +257,7 @@ module blackwell_tc_mma_core
         32'(command[r].a_ref[15:0]) < command[r].d_tmem + (32'd64 << command[r].n_code) &&
         command[r].d_tmem < 32'(command[r].a_ref[15:0]) + tmem_a_columns(command[r]);
     all_a = overlap ? (&a_ready[bank[r]]) : a_ready[bank[r]][row_cursor[r]];
-    b_can_load = current_valid && !halt_i && selected[r] && installed[r] > consumed[r] && all_a &&
+    b_can_load = current_valid && selected[r] && installed[r] > consumed[r] && all_a &&
         scale_ready[bank[r]] && (command[r].kind < 4 || sb_view[256]) && complete_c &&
         (!operand_valid || operand_ready);
   end
@@ -297,7 +291,7 @@ module blackwell_tc_mma_core
         s = cursor[r][0];
         if (!found && live_i[i].valid && bound[r] && cursor[r] < blocks[r]) begin
           found = 1;
-          if (!halt_i && !c_reserve[s] && (!c_active[s] || (op_load && consumed[current][0] == s &&
+          if (!c_reserve[s] && (!c_active[s] || (op_load && consumed[current][0] == s &&
                                                             row_cursor[current] == 3))) begin
             c_reserve[s] = 1;
             next_c_rec[s] = r;
@@ -325,7 +319,7 @@ module blackwell_tc_mma_core
         j = c_reserve[s] ? next_c_block[s] : c_block[s];
         missing = word_need(command[r]) & ~(c_reserve[s] ? 3'b0 : c_sent[s][l]);
         for (int w = 0; w < 3; w++)
-        if (!cr_valid[l] && !halt_i && live_i[age].valid && r == live_i[age].rec &&
+        if (!cr_valid[l] && live_i[age].valid && r == live_i[age].rec &&
             command[r].input_d && (c_active[s] || c_reserve[s]) && missing[w] && block_allowed(
                 r, j
             )) begin
@@ -355,7 +349,7 @@ module blackwell_tc_mma_core
       for (int age = 0; age < 3; age++)
       for (int s = 0; s < 2; s++)
       for (int w = 0; w < 3; w++)
-      if (!tm_wr_req_valid[LANE] && !halt_i && d_active[s] && (&d_rows[s]) && live_i[age].valid &&
+      if (!tm_wr_req_valid[LANE] && d_active[s] && (&d_rows[s]) && live_i[age].valid &&
           d_rec[s] == live_i[age].rec && !command[d_rec[s]].disable_lane_mask[LANE] &&
           block_allowed(
               d_rec[s], d_block[s]
@@ -420,8 +414,7 @@ module blackwell_tc_mma_core
             command[d_rec[s]]
         );
     end
-    result_ready = !halt_i &&
-        (!d_active[result_tag.block_idx[0]] ||
+    result_ready = (!d_active[result_tag.block_idx[0]] ||
          (d_rec[result_tag.block_idx[0]] == result_rec && d_block[result_tag.block_idx[0]] ==
           result_tag.block_idx[4:0] && !d_rows[result_tag.block_idx[0]][result_tag.row_idx]));
   end
@@ -434,7 +427,6 @@ module blackwell_tc_mma_core
       c_active <= 0;
       d_active <= 0;
       operand_valid <= 0;
-      local_fault <= 0;
       done_lock <= 0;
       sm_hold <= 0;
       tm_hold <= 0;
@@ -464,22 +456,22 @@ module blackwell_tc_mma_core
             6'(c_reserve[1] && next_c_rec[1] == 2'(r));
       end
       if (prepare_ready && prepare_valid) begin
-        if (bind_rec >= 3 || prepare_payload.cmd.id.epoch != epoch_i) local_fault <= 1;
-        else begin
-          command[bind_rec] <= prepare_payload.cmd;
-          bound[bind_rec] <= 1;
-          selected[bind_rec] <= 0;
-          reported[bind_rec] <= 0;
-          bank[bind_rec] <= prepare_payload.bank;
-          consumed[bind_rec] <= 0;
-          reserved_c[bind_rec] <= 0;
-          row_cursor[bind_rec] <= 0;
-          installed[bind_rec] <= 0;
-          blocks[bind_rec] <= 6'd8 << prepare_payload.cmd.n_code;
-          closed[bind_rec] <= 0;
-          pending[bind_rec] <= 0;
-          inflight[bind_rec] <= 0;
-        end
+`ifndef SYNTHESIS
+        assert (bind_rec < 3 && prepare_payload.cmd.id.epoch == epoch_i);
+`endif
+        command[bind_rec] <= prepare_payload.cmd;
+        bound[bind_rec] <= 1;
+        selected[bind_rec] <= 0;
+        reported[bind_rec] <= 0;
+        bank[bind_rec] <= prepare_payload.bank;
+        consumed[bind_rec] <= 0;
+        reserved_c[bind_rec] <= 0;
+        row_cursor[bind_rec] <= 0;
+        installed[bind_rec] <= 0;
+        blocks[bind_rec] <= 6'd8 << prepare_payload.cmd.n_code;
+        closed[bind_rec] <= 0;
+        pending[bind_rec] <= 0;
+        inflight[bind_rec] <= 0;
       end
       for (int b = 0; b < 2; b++) begin
         if (input_free[context_rec[b]]) context_active[b] <= 0;
@@ -538,37 +530,39 @@ module blackwell_tc_mma_core
       if (result_valid && result_ready) begin
         logic s;
         s = result_tag.block_idx[0];
-        if (!result_match || result_tag.core != 2'(CORE) || result_tag.generation !=
-            {3'b0, result_tag.block_idx[5:1]} || result_tag.block_idx >= blocks[result_rec])
-          local_fault <= 1;
-        else begin
-          if (!d_active[s]) begin
-            d_active[s] <= 1;
-            d_rec[s] <= result_rec;
-            d_block[s] <= result_tag.block_idx[4:0];
-            d_rows[s] <= 0;
-            d_sent[s] <= 0;
-          end
-          d_rows[s][result_tag.row_idx] <= 1;
-          dbuf[s][8*int'(result_tag.row_idx)+:8] <= result_payload.cells;
-          if (result_tag.row_idx == 3 &&
-              (&command[result_rec].disable_lane_mask[32*CORE+:32])) begin
-            d_active[s] <= 0;
-            closed[result_rec][result_tag.block_idx[4:0]] <= 1;
-          end
+`ifndef SYNTHESIS
+        assert (result_match && result_tag.core == 2'(CORE) && result_tag.generation ==
+                {3'b0, result_tag.block_idx[5:1]} && result_tag.block_idx < blocks[result_rec]);
+`endif
+        if (!d_active[s]) begin
+          d_active[s] <= 1;
+          d_rec[s] <= result_rec;
+          d_block[s] <= result_tag.block_idx[4:0];
+          d_rows[s] <= 0;
+          d_sent[s] <= 0;
+        end
+        d_rows[s][result_tag.row_idx] <= 1;
+        dbuf[s][8*int'(result_tag.row_idx)+:8] <= result_payload.cells;
+        if (result_tag.row_idx == 3 &&
+            (&command[result_rec].disable_lane_mask[32*CORE+:32])) begin
+          d_active[s] <= 0;
+          closed[result_rec][result_tag.block_idx[4:0]] <= 1;
         end
       end
       for (int g = 0; g < 8; g++) begin
         sm_source[g] <= sm_pick[g];
         sm_hold[g] <= sm_rd_req_valid[g] && !sm_rd_req_ready[g];
-        if (sm_rd_rsp_valid[g] && !as_ret[0][g] && !as_ret[1][g]) local_fault <= 1;
+`ifndef SYNTHESIS
+        if (sm_rd_rsp_valid[g]) assert (as_ret[0][g] ^ as_ret[1][g]);
+`endif
       end
       for (int l = 0; l < 128; l++) begin
         tm_source[l] <= tm_pick[l];
         tm_hold[l] <= tm_rd_req_valid[l] && !tm_rd_req_ready[l];
-        if (tm_rd_rsp_valid[l] && tm_rd_rsp_payload[l].tag.token[15:13] != 2 && !at_ret[0][l] &&
-            !at_ret[1][l])
-          local_fault <= 1;
+`ifndef SYNTHESIS
+        if (tm_rd_rsp_valid[l] && tm_rd_rsp_payload[l].tag.token[15:13] != 2)
+          assert (at_ret[0][l] ^ at_ret[1][l]);
+`endif
         if (tm_rd_rsp_valid[l] && tm_rd_rsp_payload[l].tag.token[15:13] == 2) begin
           logic [4:0] j;
           logic s;
@@ -576,35 +570,39 @@ module blackwell_tc_mma_core
           j = tm_rd_rsp_payload[l].tag.token[12:8];
           s = j[0];
           w = int'(tm_rd_rsp_payload[l].tag.token[3:0]) - 3 * (l % 2);
-          if (l / 32 != CORE || !c_active[s] || c_block[s] != j || command[c_rec[s]].id !=
-              tm_rd_rsp_payload[l].tag.id || tm_rd_rsp_payload[l].tag.client != 4'(CORE) ||
-              tm_rd_rsp_payload[l].tag.token[7:4] != 4'((l % 32) / 2) || w < 0 || w >= 3 ||
-              !c_sent[s][l%32][w] || c_recv[s][l%32][w] || tm_rd_rsp_payload[l].status != OK)
-            local_fault <= 1;
-          else begin
-            c_recv[s][l%32][w] <= 1;
-            for (int k = 0; k < 4; k++) begin
-              n = 4 * w + k - int'(command[c_rec[s]].d_tmem[1:0]);
-              if (n >= 0 && n < 8) cbuf[s][l%32][n] <= tm_rd_rsp_payload[l].data[32*k+:32];
-            end
+`ifndef SYNTHESIS
+          assert (l / 32 == CORE && c_active[s] && c_block[s] == j &&
+                  command[c_rec[s]].id == tm_rd_rsp_payload[l].tag.id &&
+                  tm_rd_rsp_payload[l].tag.client == 4'(CORE) &&
+                  tm_rd_rsp_payload[l].tag.token[7:4] == 4'((l % 32) / 2) &&
+                  w >= 0 && w < 3 && c_sent[s][l%32][w] && !c_recv[s][l%32][w]);
+`endif
+          c_recv[s][l%32][w] <= 1;
+          for (int k = 0; k < 4; k++) begin
+            n = 4 * w + k - int'(command[c_rec[s]].d_tmem[1:0]);
+            if (n >= 0 && n < 8) cbuf[s][l%32][n] <= tm_rd_rsp_payload[l].data[32*k+:32];
           end
         end
         if (tm_wr_ack_valid[l]) begin
-          logic found;
+          logic [2:0] owner_match;
           logic [4:0] j;
           logic [2:0] w;
           j = tm_wr_ack_payload[l].tag.token[12:8];
           w = tm_wr_ack_payload[l].tag.token[7:5];
-          found = 0;
-          for (int r = 0; r < 3; r++)
-          if (bound[r] && command[r].id == tm_wr_ack_payload[l].tag.id &&
-              tm_wr_ack_payload[l].tag.client == 4'(CORE) && l / 32 == CORE && w < 3 &&
-              tm_wr_ack_payload[l].tag.token[15:13] == 0 && tm_wr_ack_payload[l].tag.token[4:0] ==
-              5'(l) && tm_wr_ack_payload[l].status == OK && pending[r][j][w][l%32]) begin
-            pending[r][j][w][l%32] <= 0;
-            found = 1;
+          for (int r = 0; r < 3; r++) begin
+            owner_match[r] = bound[r] && command[r].id == tm_wr_ack_payload[l].tag.id;
+            if (owner_match[r]) begin
+`ifndef SYNTHESIS
+              assert (pending[r][j][w][l%32]);
+`endif
+              pending[r][j][w][l%32] <= 0;
+            end
           end
-          if (!found) local_fault <= 1;
+`ifndef SYNTHESIS
+          assert ($onehot(owner_match) && tm_wr_ack_payload[l].tag.client == 4'(CORE) &&
+                  l / 32 == CORE && w < 3 && tm_wr_ack_payload[l].tag.token[15:13] == 0 &&
+                  tm_wr_ack_payload[l].tag.token[4:0] == 5'(l));
+`endif
         end
       end
       for (int l = 0; l < 32; l++) begin

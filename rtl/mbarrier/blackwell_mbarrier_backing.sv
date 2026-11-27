@@ -5,7 +5,6 @@ module blackwell_mbarrier_backing
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop,
   input logic [15:0] epoch,
   input logic back_req_valid,
@@ -20,8 +19,7 @@ module blackwell_mbarrier_backing
   output bar_back_rsp_t back_rsp_payload,
   output smem_atom_req_t smem_req_payload,
   input smem_atom_rsp_t smem_rsp_payload,
-  output logic drained,
-  output logic fault
+  output logic drained
 );
   typedef enum logic [1:0] {
     EMPTY,
@@ -33,9 +31,9 @@ module blackwell_mbarrier_backing
   bar_back_req_t req;
   logic [15:0] token, epoch_q;
   assign drained = state == EMPTY;
-  assign back_req_ready = rst_n && drained && !fault;
+  assign back_req_ready = rst_n && drained;
   assign smem_req_valid = state == ISSUE;
-  assign smem_rsp_ready = rst_n && !fault;
+  assign smem_rsp_ready = rst_n;
   assign back_rsp_valid = state == RESP;
   always_comb begin
     smem_req_payload = '0;
@@ -52,34 +50,21 @@ module blackwell_mbarrier_backing
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       state <= EMPTY;
-      fault <= 0;
       token <= 0;
       epoch_q <= 0;
-    end else if (!halt_i) begin
+    end else begin
       if (epoch != epoch_q) begin
-        if (!drained) fault <= 1;
-        else begin
-          epoch_q <= epoch;
-          token <= 0;
-        end
+        epoch_q <= epoch;
+        token <= 0;
       end
       if (back_req_valid && back_req_ready) begin
-        if (back_req_payload.addr[2:0] != 0 || back_req_payload.addr >= 233472) fault <= 1;
-        else begin
-          req <= back_req_payload;
-          state <= ISSUE;
-        end
+        req <= back_req_payload;
+        state <= ISSUE;
       end
       if (smem_req_valid && smem_req_ready) state <= WAIT_MEM;
       if (smem_rsp_valid && smem_rsp_ready) begin
-        if (state != WAIT_MEM || smem_rsp_payload.tag != smem_req_payload.tag ||
-            smem_rsp_payload.write != req.write || smem_rsp_payload.status != OK)
-          fault <= 1;
-        else begin
-          back_rsp_payload.status <= OK;
-          back_rsp_payload.value <= req.write ? '0 : smem_rsp_payload.data[req.addr[3]*64+:64];
-          state <= RESP;
-        end
+        back_rsp_payload.value <= req.write ? '0 : smem_rsp_payload.data[req.addr[3]*64+:64];
+        state <= RESP;
       end
       if (back_rsp_valid && back_rsp_ready) begin
         token <= token + 16'd1;
@@ -87,4 +72,16 @@ module blackwell_mbarrier_backing
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (epoch != epoch_q) assert (drained);
+      if (back_req_valid) assert (back_req_payload.addr[2:0] == 0 && back_req_payload.addr < 233472);
+      if (smem_rsp_valid && smem_rsp_ready) begin
+        assert (state == WAIT_MEM);
+        assert (smem_rsp_payload.tag == smem_req_payload.tag && smem_rsp_payload.write == req.write);
+      end
+    end
+  end
+`endif
 endmodule

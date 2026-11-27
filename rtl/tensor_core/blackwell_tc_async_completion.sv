@@ -4,7 +4,6 @@ module blackwell_tc_async_completion
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop_i,
   input logic [15:0] epoch_i,
   input logic ready_commit_valid,
@@ -22,55 +21,48 @@ module blackwell_tc_async_completion
   output logic commit_retire_valid,
   input logic commit_retire_ready,
   output tc_commit_retire_t commit_retire_payload,
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
   typedef enum logic [2:0] {
     EMPTY,
     SEND,
     WAIT_BAR,
     DONE,
-    RETIRE,
-    FAILED
+    RETIRE
   } state_t;
   state_t state;
   tc_ready_commit_t record;
   assign drained_o = state == EMPTY;
   // stop_i closes external admission. Internal commits still drain.
-  assign ready_commit_ready = !fault_o && !halt_i && (drained_o || (state == RETIRE && commit_retire_ready));
+  assign ready_commit_ready = drained_o || (state == RETIRE && commit_retire_ready);
   assign tc_bar_req_valid = state == SEND;
   assign tc_bar_req_payload = record.commit;
   assign tc_bar_rsp_ready = state == WAIT_BAR;
   assign commit_done_valid = state == DONE;
-  assign commit_done_payload = '{record.commit.id, OK};
+  assign commit_done_payload.id = record.commit.id;
   assign commit_retire_valid = state == RETIRE;
   assign commit_retire_payload = '{record.slot, record.commit.id};
 
 `ifndef SYNTHESIS
   // A normal stop leaves the epoch live through the final retirement.
-  assert property (@(posedge clk) disable iff (!rst_n || halt_i || fault_o)
+  assert property (@(posedge clk) disable iff (!rst_n)
                    stop_i && state != EMPTY |-> record.commit.id.epoch == epoch_i);
+  assert property (@(posedge clk) disable iff (!rst_n)
+                   tc_bar_rsp_valid |-> state == WAIT_BAR && tc_bar_rsp_payload.id == record.commit.id)
+    else $fatal(1, "TC_BRIDGE_RSP: unexpected barrier acknowledgment");
 `endif
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       state <= EMPTY;
-      fault_o <= 0;
     end else begin
       case (state)
-        SEND: if (tc_bar_req_ready) state <= halt_i ? FAILED : WAIT_BAR;
-        WAIT_BAR:
-        if (tc_bar_rsp_valid) begin
-          if (tc_bar_rsp_payload.id != record.commit.id || tc_bar_rsp_payload.status != OK) begin
-            fault_o <= 1;
-            state <= FAILED;
-          end else state <= halt_i ? FAILED : DONE;
-        end
-        DONE: if (commit_done_ready) state <= halt_i ? FAILED : RETIRE;
+        SEND: if (tc_bar_req_ready) state <= WAIT_BAR;
+        WAIT_BAR: if (tc_bar_rsp_valid) state <= DONE;
+        DONE: if (commit_done_ready) state <= RETIRE;
         RETIRE: if (commit_retire_ready) state <= EMPTY;
         default: ;
       endcase
-      if (tc_bar_rsp_valid && state != WAIT_BAR) fault_o <= 1;
       if (ready_commit_valid && ready_commit_ready) begin
         record <= ready_commit_payload;
         state <= SEND;

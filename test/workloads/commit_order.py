@@ -15,7 +15,8 @@ def masked_mma(op, partition):
                 (32, 128*partition), (32, 0), (32, 0))
 
 
-async def exercise(d, fail):
+@cocotb.test()
+async def younger_notifies_before_older_ack(d):
     fe = Accumulation(d)
     def probe(name):
         return d._id("ack_client[0].ack_route[0].observed.probe."+name, extended=False)
@@ -49,32 +50,10 @@ async def exercise(d, fail):
     live = fe.read("live")
     entries = [(live >> (61*i)) & ((1 << 61)-1) for i in range(3)]
     assert [v & ((1 << 58)-1) for v in entries if v >> 60] == [old, young]
-    probe("inject_memory").value = int(fail)
     probe("stall").value = 0
-    if fail:
-        for _ in range(8):
-            await Timer(1, units="ns")
-            assert not fe.read("tc_op_done_valid") and not fe.read("tc_commit_done_valid")
-            if fe.read("fault"):
-                break
-            d.clk.value = 1
-            await Timer(1, units="ns")
-            d.clk.value = 0
-        assert fe.read("fault")
-    else:
-        await fe.result(old, "tc_op_done")
-        await fe.shutdown([barrier])
-        assert not fe.results
-
-
-@cocotb.test()
-async def younger_notifies_before_older_ack(dut):
-    await exercise(dut, False)
-
-
-@cocotb.test()
-async def old_write_error_after_younger_arrival(dut):
-    await exercise(dut, True)
+    await fe.result(old, "tc_op_done")
+    await fe.shutdown([barrier])
+    assert not fe.results
 
 
 @cocotb.test()
@@ -87,7 +66,7 @@ async def empty_commits_and_lifecycle_exclusion(d):
     init = await fe.barrier(a, 0, count=1)
     await fe.wait_until(lambda: fe.read("bar_rsp_valid"), f"barrier response for {init}")
     held = fe.read("bar_rsp_payload")
-    assert held >> 5 == init
+    assert held >> 1 == init
 
     other = fe.sign(6)
     await fe.send("tc_commit", pack((58, other), (32, b)))

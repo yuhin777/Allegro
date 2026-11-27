@@ -4,7 +4,7 @@ module scale_tb;
   import blackwell_tmem_pkg::*;
   bit clk;
   always #5 clk = !clk;
-  logic rst_n, halt_i, start_valid, start_ready, release_valid, release_ready, drained_o, fault_o;
+  logic rst_n, start_valid, start_ready, release_valid, release_ready, drained_o;
   logic [15:0] epoch_i = 1;
   mma_live_t [2:0] live_i;
   prepare_t start_payload;
@@ -29,7 +29,6 @@ module scale_tb;
       rd_req_ready[l] = cycle % 5 != 2 && (!outstanding[l] || cycle % 3 != 1);
       rd_rsp_valid[l] = outstanding[l] && cycle % 3 != 1;
       rd_rsp_payload[l].tag = saved[l].tag;
-      rd_rsp_payload[l].status = OK;
       for (int b = 0; b < 16; b++)
       rd_rsp_payload[l].data[b*8+:8] = pattern(l, 4 * int'(saved[l].word) + b / 4, b % 4);
     end
@@ -47,9 +46,9 @@ module scale_tb;
   end
   always_ff @(posedge clk) begin
     cycle <= cycle + 1;
-    if (fault_o || cycle > 20000)
-      $fatal(1, "scale snapshot cycle=%0d cmd=%0d fault=%b ready=%b start_ready=%b",
-             cycle, start_payload.cmd.id.seq, fault_o, ready, start_ready);
+    if (cycle > 20000)
+      $fatal(1, "scale snapshot cycle=%0d cmd=%0d ready=%b start_ready=%b",
+             cycle, start_payload.cmd.id.seq, ready, start_ready);
   end
   initial begin
     repeat (2) @(negedge clk);

@@ -4,7 +4,7 @@ module b_loader_tb;
   import blackwell_smem_pkg::*;
   bit clk;
   always #5 clk = ~clk;
-  logic rst_n, halt_i, drained_o, fault_o, load_valid, load_ready, result_valid, result_ready;
+  logic rst_n, drained_o, load_valid, load_ready, result_valid, result_ready;
   logic [15:0] epoch_i = 1;
   mma_live_t [2:0] live_i;
   b_load_t load_payload;
@@ -32,7 +32,7 @@ module b_loader_tb;
   } reply_t;
   reply_t replies[8][$];
   int next_block[4], next_id[4];
-  bit inject_final_error;
+  bit inject_bad_return;
   int nc, issued, retired, tick, anchor, total_requests, total_blocks;
   function automatic logic [7:0] memory(int addr);
     return 8'((addr * 'h9d + (addr >> 3) * 'h57 + (addr >> 9) * 'h37 + 'hab) ^ (addr >> 12));
@@ -75,10 +75,9 @@ module b_loader_tb;
   initial begin
     read_file();
     anchor = -1;
-    inject_final_error = $test$plusargs("final_error");
-    if (inject_final_error) nc = 1;
+    inject_bad_return = $test$plusargs("bad_return");
+    if (inject_bad_return) nc = 1;
     rst_n = 0;
-    halt_i = 0;
     load_valid = 0;
     result_ready = 0;
     data_ready = 0;
@@ -144,7 +143,7 @@ module b_loader_tb;
           sent[i][j][p][a] = 1;
           total_requests++;
           ret.rsp.tag = req.tag;
-          ret.rsp.status = (inject_final_error && j == nblocks[i] - 1 && p == 15) ? MEMORY : OK;
+          if (inject_bad_return && j == nblocks[i] - 1 && p == 15) ret.rsp.tag.client = 0;
           for (int b = 0; b < 16; b++) ret.rsp.data[8*b+:8] = memory(addr + b);
           ret.available = tick + 3 + (retired != 0 ? (g + tick) % 5 : 0);
           replies[g].push_back(ret);
@@ -177,31 +176,22 @@ module b_loader_tb;
         end
       end
       if (result_valid && result_ready) begin
-        if (result_payload.id !== commands[retired].id || result_payload.status != OK)
+        if (result_payload.id !== commands[retired].id)
           $fatal(1, "incorrect result");
         for (int c = 0; c < 4; c++) if (next_id[c] <= retired) $fatal(1, "early result");
         retired++;
       end
       tick++;
-      if (inject_final_error && fault_o) begin
-        if (result_valid || retired != 0) $fatal(1, "failed B stream published success");
-        for (int c = 0; c < 4; c++)
-        if (next_block[c] != nblocks[0] - 1) $fatal(1, "failed B block reached core");
-        repeat (3) begin
-          @(posedge clk);
-          if (!fault_o || result_valid || (|data_valid)) $fatal(1, "invalid B termination");
-        end
-        $display("PASS failed final B return suppresses all four deliveries and successful result");
-        $finish;
-      end else if (tick > 500000 || fault_o)
-        $fatal(1, "B loader tick=%0d fault=%b retired=%0d/%0d issued=%0d blocks=%0d",
-               tick, fault_o, retired, nc, issued, total_blocks);
+      if (tick > 500000)
+        $fatal(1, "B loader tick=%0d retired=%0d/%0d issued=%0d blocks=%0d",
+               tick, retired, nc, issued, total_blocks);
       @(negedge clk);
     end
     for (int i = 0; i < nc; i++)
     for (int j = 0; j < nblocks[i]; j++)
     for (int p = 0; p < 16; p++)
     if (required[i][j][p] != sent[i][j][p]) $fatal(1, "missing request");
+    if (inject_bad_return) $fatal(1, "expected wrong-tag assertion");
     if (!drained_o) $fatal(1, "not drained");
     $display("PASS %0d B streams, %0d blocks, %0d distinct request tags, four-core delivery", nc,
              total_blocks, total_requests);

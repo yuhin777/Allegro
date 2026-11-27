@@ -12,12 +12,9 @@ module blackwell_test_memory_ack
   output tmem_wr_ack_t out_payload
 );
   mem_tag_t target = '0;
-  logic stall = 0, inject_memory = 0;
+  logic stall = 0;
   wire matched = in_payload.tag == target;
   assign out_valid = in_valid && !(matched && stall);
   assign in_ready = out_ready && !(matched && stall);
-  always_comb begin
-    out_payload = in_payload;
-    if (matched && inject_memory) out_payload.status = MEMORY;
-  end
+  assign out_payload = in_payload;
 endmodule

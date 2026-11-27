@@ -1,8 +1,7 @@
-"""Linear bulk two-phase workload and isolated recovery on the integrated subsystem."""
+"""Linear bulk two-phase workload and CTA lifecycle on the integrated subsystem."""
 from struct import unpack
 
 import cocotb
-from cocotb.triggers import Timer
 
 from workload_protocol import pack
 from linear_driver import LinearFrontEnd
@@ -41,70 +40,30 @@ async def replay_linear_bulk(dut):
 
 
 @cocotb.test()
-async def memory_failure_and_isolated_reopen(dut):
+async def open_response_holds_until_accepted(dut):
     fe = LinearFrontEnd(dut)
-    await fe.open()
-    barrier = 16384
-    await fe.result(await fe.barrier(barrier, 0, count=1, issuer=0), "bar_rsp")
-    await fe.result(await fe.barrier(barrier, 3, nbytes=16, issuer=0), "bar_rsp")
-    load = await fe.load(0, 0, 16, barrier)
-    await fe.wait_until(lambda: fe.pending_memory, f"GMEM read for TMA operation {load}")
-    # Fail the already-issued data READ under its original ID.
-    fe.pending_memory[0] |= 4
-    await fe.edge()
-    for _ in range(8):
-        await Timer(1, units="ns")
-        assert not int(dut.tma_rsp_valid.value) and not int(dut.close_rsp_valid.value)
-        if int(dut.fault.value):
-            break
-        dut.clk.value = 1
-        await Timer(1, units="ns")
-        dut.clk.value = 0
-    assert int(dut.fault.value) and not int(dut.tma_cmd_ready.value)
-    assert load not in fe.results
-    # Disconnect old responses and apply synchronous isolated reset before opening.
-    fe.pending_memory.clear()
-    fe.pending_order.clear()
-    dut.gmem_rsp_valid.value = 0
-    dut.isolated.value = 1
-    dut.rst_n.value = 0
-    fe.epoch = 2
-    await fe.open()
-    await fe.result(await fe.barrier(barrier, 0, count=1, issuer=0), "bar_rsp")
-    await fe.send("close_req")
-    await fe.wait_until(lambda: "close_rsp" in fe.lifecycle, f"close response for epoch {fe.epoch}")
-    assert fe.order_kinds[-1] == 4
-
-
-@cocotb.test()
-async def fault_with_held_open_response(dut):
-    """Consume an already presented response exactly once after halt."""
-    fe = LinearFrontEnd(dut)
-    async def clock():
-        await Timer(1, units="ns")
-        dut.clk.value = 1
-        await Timer(1, units="ns")
-        dut.clk.value = 0
-        await Timer(1, units="ns")
-
     dut.open_rsp_ready.value = 0
-    await clock()
+    await fe.edge()
     dut.rst_n.value = 1
+    dut.isolated.value = 0
     dut.open_req_payload.value = 1
     dut.open_req_valid.value = 1
-    await clock()
+    for _ in range(3):
+        assert not await fe.edge("open_req_ready")
+    dut.isolated.value = 1
+    assert await fe.edge("open_req_ready")
     dut.open_req_valid.value = 0
-    assert fe.read("open_rsp_valid")
-    dut.order_rsp_valid.value = 1
-    dut.order_rsp_payload.value = 0
-    await clock()
-    dut.order_rsp_valid.value = 0
-    assert fe.read("fault") and fe.read("open_rsp_valid") and fe.read("open_rsp_payload") == 0
-    await clock()
-    assert fe.read("open_rsp_valid")
+    alloc = fe.sign(0)
+    dut.tmem_manage_payload.value = pack((58, alloc), (2, 0), (32, 0), (10, 512))
+    dut.tmem_manage_valid.value = 1
+    for _ in range(4):
+        assert await fe.edge("open_rsp_valid")
+        assert fe.read("stopped") and not fe.read("tmem_manage_ready")
     dut.open_rsp_ready.value = 1
-    await clock()
-    assert not fe.read("open_rsp_valid") and fe.read("stopped") and fe.read("fault")
+    assert not await fe.edge("tmem_manage_ready")
+    assert await fe.edge("tmem_manage_ready")
+    dut.tmem_manage_valid.value = 0
+    assert await fe.result(alloc, "tmem_manage_rsp") == alloc << 32
 
 
 @cocotb.test()
@@ -144,3 +103,22 @@ async def close_flushes_both_halves_before_ordering(dut):
     data = await fe.read_line(base)
     objects = unpack("<QQ", data[:16])
     assert objects == tuple((1 << 62) | (count << 20) | (count-1) for count in (3, 5))
+
+
+@cocotb.test()
+async def close_drains_queued_wait(dut):
+    fe = LinearFrontEnd(dut)
+    await fe.open()
+    barrier = 256
+    await fe.result(await fe.barrier(barrier, 0, count=1), "bar_rsp")
+    dut.order_req_ready.value = 0
+    arrival = await fe.barrier(barrier, 2, count=1)
+    wait = await fe.barrier(barrier, 4)
+    await fe.send("close_req")
+    await fe.wait_until(lambda: fe.read("order_req_valid"), "release for queued arrival")
+    assert fe.read("stopped") and wait not in fe.results
+    dut.order_req_ready.value = 1
+    await fe.result(arrival, "bar_rsp")
+    assert await fe.result(wait, "bar_rsp") & 1
+    await fe.wait_until(lambda: "close_rsp" in fe.lifecycle, "close after queued wait")
+    assert fe.order_kinds == [0, 1, 4]

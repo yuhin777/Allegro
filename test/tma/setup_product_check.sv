@@ -2,7 +2,6 @@
 module setup_product_check (
   input logic clk,
   input logic rst_n,
-  input logic advance,
   input logic issue,
   input logic [4:0] issue_tag,
   input logic [63:0] operand_a,
@@ -32,10 +31,8 @@ module setup_product_check (
               returned, return_tag, product
             }
         );
-      if (advance) begin
-        expected[0] <= '{valid: issue, tag: issue_tag, value: 76'(operand_a) * 76'(operand_b)};
-        for (int i = 1; i < 4; i++) expected[i] <= expected[i-1];
-      end
+      expected[0] <= '{valid: issue, tag: issue_tag, value: 76'(operand_a) * 76'(operand_b)};
+      for (int i = 1; i < 4; i++) expected[i] <= expected[i-1];
     end
   end
 endmodule
@@ -43,7 +40,6 @@ endmodule
 bind blackwell_tma_setup setup_product_check product_check (
   .clk,
   .rst_n,
-  .advance(!halt_i && !fault),
   .issue(found),
   .issue_tag({chosen, task_id}),
   .operand_a(mul_a),

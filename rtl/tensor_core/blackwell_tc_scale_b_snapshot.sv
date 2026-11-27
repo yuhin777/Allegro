@@ -5,7 +5,6 @@ module blackwell_tc_scale_b_snapshot
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic [15:0] epoch_i,
   input mma_live_t [2:0] live_i,
   input logic start_valid,
@@ -24,8 +23,7 @@ module blackwell_tc_scale_b_snapshot
   output logic [3:0][256:0] view,
   output logic [2:0] ready,
   output logic [2:0] quiescent,
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
   typedef struct packed {
     async_id_t  id;
@@ -44,9 +42,10 @@ module blackwell_tc_scale_b_snapshot
   logic [4:0] req_lane, held_lane;
   logic [1:0] req_atom, held_atom;
   logic [1:0] release_match;
-  logic legal_start, start_live;
   logic [3:0] new_columns;
   assign new_columns = 4'd2 << start_payload.cmd.n_code;
+`ifndef SYNTHESIS
+  logic legal_start, start_live;
   always_comb begin
     start_live = 0;
     for (int i = 0; i < 3; i++)
@@ -57,6 +56,11 @@ module blackwell_tc_scale_b_snapshot
         start_payload.cmd.scale_b + 32'(new_columns) <= 512 && start_payload.cmd.scale_vec != 0 &&
         int'(start_payload.cmd.scale_b_id) + (1 << (start_payload.cmd.scale_vec - 1)) <= 4;
   end
+  always_ff @(posedge clk) if (rst_n) begin
+    if (start_valid) assert (legal_start);
+    if (release_valid) assert ($onehot(release_match));
+  end
+`endif
   always_comb begin
     ready = 0;
     quiescent = '1;
@@ -72,10 +76,10 @@ module blackwell_tc_scale_b_snapshot
       end
     end
   end
-  assign start_ready = !halt_i && !active[start_payload.bank] && legal_start;
+  assign start_ready = !active[start_payload.bank];
   for (genvar b = 0; b < 2; b++)
     assign release_match[b] = complete[b] && ctx[b].id == release_payload;
-  assign release_ready = !halt_i && (|release_match);
+  assign release_ready = (|release_match);
   assign drained_o = active == 0;
   always_comb begin
     req_found = req_lock;
@@ -86,7 +90,7 @@ module blackwell_tc_scale_b_snapshot
     for (int b = 0; b < 2; b++)
     for (int r = 0; r < 32; r++)
     for (int a = 0; a < 3; a++)
-    if (!req_found && !halt_i && live_i[i].valid && active[b] && ctx[b].id == live_i[i].id &&
+    if (!req_found && live_i[i].valid && active[b] && ctx[b].id == live_i[i].id &&
         needed[b][a] && !sent[b][r][a]) begin
       req_found = 1;
       req_bank = 1'(b);
@@ -122,9 +126,7 @@ module blackwell_tc_scale_b_snapshot
     if (!rst_n) begin
       active <= 0;
       req_lock <= 0;
-      fault_o <= 0;
     end else begin
-      if (start_valid && !legal_start || release_valid && !(|release_match)) fault_o <= 1;
       if (start_valid && start_ready) begin
         ctx[start_payload.bank] <= '{
             start_payload.cmd.id,
@@ -153,20 +155,19 @@ module blackwell_tc_scale_b_snapshot
           logic [1:0] a;
           b = active[1] && rd_rsp_payload[l].tag.id == ctx[1].id;
           a = rd_rsp_payload[l].tag.token[1:0];
-          if (l >= 32 || !active[b] || ctx[b].id != rd_rsp_payload[l].tag.id ||
-              rd_rsp_payload[l].tag.client != 4 || rd_rsp_payload[l].tag.token[15:2] != 14'(l) ||
-              a == 3 || !sent[b][l%32][a] || received[b][l%32][a] || rd_rsp_payload[l].status != OK)
-            fault_o <= 1;
-          else begin
-            received[b][l%32][a] <= 1;
-            for (int c = 0; c < 8; c++)
-            if (c < ctx[b].columns && (int'(ctx[b].base[1:0]) + c) / 4 == int'(a))
-              for (int g = 0; g < 4; g++)
-              cells[{
-                1'b0, b
-              }][l%32][c][g*8+:8] <= g < ctx[b].factors ? rd_rsp_payload[l].data[
-                  8*(4*((int'(ctx[b].base[1:0])+c)%4)+int'(ctx[b].scale_id)+g)+:8] : 0;
-          end
+`ifndef SYNTHESIS
+          assert (l < 32 && active[b] && ctx[b].id == rd_rsp_payload[l].tag.id &&
+                  rd_rsp_payload[l].tag.client == 4 && rd_rsp_payload[l].tag.token[15:2] == 14'(l) &&
+                  a < 3 && sent[b][l%32][a] && !received[b][l%32][a]);
+`endif
+          received[b][l%32][a] <= 1;
+          for (int c = 0; c < 8; c++)
+          if (c < ctx[b].columns && (int'(ctx[b].base[1:0]) + c) / 4 == int'(a))
+            for (int g = 0; g < 4; g++)
+            cells[{
+              1'b0, b
+            }][l%32][c][g*8+:8] <= g < ctx[b].factors ? rd_rsp_payload[l].data[
+                8*(4*((int'(ctx[b].base[1:0])+c)%4)+int'(ctx[b].scale_id)+g)+:8] : 0;
         end
       end
     end

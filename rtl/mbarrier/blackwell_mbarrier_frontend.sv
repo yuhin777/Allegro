@@ -4,11 +4,9 @@ module blackwell_mbarrier_frontend
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop,
   input logic [15:0] epoch,
   output logic drained,
-  output logic fault,
   input logic sw_cmd_valid,
   input logic sw_rsp_ready,
   input logic wait_cmd_ready,
@@ -56,11 +54,13 @@ module blackwell_mbarrier_frontend
   output logic release_req_valid,
   output logic release_rsp_ready,
   output order_req_t release_req_payload,
-  input order_rsp_t release_rsp_payload,
+  input op_done_t release_rsp_payload,
   output logic [31:0] wait_busy_addr,
   output logic [31:0] commit_busy_addr,
   input logic wait_addr_busy,
+`ifndef SYNTHESIS
   input logic wait_id_busy,
+`endif
   input logic commit_addr_busy,
   input logic [31:0] commit_candidate_addr,
   output logic commit_blocked
@@ -98,7 +98,9 @@ module blackwell_mbarrier_frontend
   logic [7:0] older[8];
   bar_bind_t producer[16];
   logic [31:0] bytes[16];
-  logic [15:0] phase;
+`ifndef SYNTHESIS
+  logic [15:0] bound_phase;
+`endif
   tc_bar_req_t tc;
 
   logic [7:0] eligible, lifecycle;
@@ -114,27 +116,15 @@ module blackwell_mbarrier_frontend
   logic [2:0] held_result, held_wait, held_order, order_owner;
   logic [3:0] held_bind, held_done;
   logic free_sw, free_prod, have_svc, have_wait, have_order, have_result, have_bind, have_done;
-  logic have_lifecycle, matches_prod, duplicate_prod, bind_blocked;
-  logic tc_busy, producer_busy, duplicate_sw, try_awaits_probe;
-  status_t ingress_status;
+  logic have_lifecycle, matches_prod, bind_blocked;
+  logic tc_busy, producer_busy, try_awaits_probe;
   function automatic logic lifecycle_op(input bar_op_t op);
     return op inside {BAR_INIT, BAR_INVAL};
   endfunction
 
   always_comb begin
-    ingress_status = OK;
-    if (sw_cmd_payload.op > BAR_FENCE_INIT) ingress_status = UNSUPPORTED;
-    else if (sw_cmd_payload.id.epoch != epoch) ingress_status = STALE;
-    else if (sw_cmd_payload.op != BAR_FENCE_INIT &&
-             (sw_cmd_payload.addr[2:0] != 0 || sw_cmd_payload.addr >= 233472))
-      ingress_status = RANGE;
-    else if ((sw_cmd_payload.op inside {BAR_INIT, BAR_ARRIVE} &&
-              !(sw_cmd_payload.count inside {[1 : 1048575]})) ||
-             (sw_cmd_payload.op == BAR_EXPECT && sw_cmd_payload.bytes > 1048575))
-      ingress_status = RANGE;
     free_sw = 0;
     try_awaits_probe = 0;
-    duplicate_sw = wait_id_busy;
     free_s = 0;
     eligible = 0;
     lifecycle = 0;
@@ -148,9 +138,8 @@ module blackwell_mbarrier_frontend
       end
       try_awaits_probe |= sw[i] == S_TRY;
       if (sw[i] != S_FREE) begin
-        duplicate_sw |= cmd[i].id == sw_cmd_payload.id;
         drained = 0;
-        if (result[i].status == OK && lifecycle_op(cmd[i].op)) begin
+        if (lifecycle_op(cmd[i].op)) begin
           commit_blocked |= cmd[i].addr == commit_candidate_addr;
           bind_blocked |= cmd[i].addr == bind_req_payload.addr;
         end
@@ -160,15 +149,15 @@ module blackwell_mbarrier_frontend
         logic same_object;
         same_object = cmd[i].op != BAR_FENCE_INIT && cmd[j].op != BAR_FENCE_INIT &&
             cmd[i].addr == cmd[j].addr;
-        if (older[i][j] && sw[j] != S_FREE && result[j].status == OK) begin
+        if (older[i][j] && sw[j] != S_FREE) begin
           if (cmd[i].id.issuer == cmd[j].id.issuer && sw[j] != S_RESULT) eligible[i] = 0;
           if (same_object && (lifecycle_op(cmd[i].op) || lifecycle_op(cmd[j].op))) eligible[i] = 0;
         end
       end
       lifecycle[i] = eligible[i] && lifecycle_op(cmd[i].op);
     end
-    sw_cmd_ready = rst_n && !stop && !fault && free_sw && !duplicate_sw;
-    if (sw_cmd_valid && sw_cmd_ready && ingress_status == OK && lifecycle_op(sw_cmd_payload.op)) begin
+    sw_cmd_ready = rst_n && !stop && free_sw;
+    if (sw_cmd_valid && sw_cmd_ready && lifecycle_op(sw_cmd_payload.op)) begin
       commit_blocked |= sw_cmd_payload.addr == commit_candidate_addr;
       bind_blocked |= sw_cmd_payload.addr == bind_req_payload.addr;
     end
@@ -189,7 +178,6 @@ module blackwell_mbarrier_frontend
     free_p = 0;
     matches_prod = 0;
     match_p = 0;
-    duplicate_prod = 0;
     for (int i = 0; i < 16; i++) begin
       if (ps[i] == P_FREE && !free_prod) begin
         free_prod = 1;
@@ -198,7 +186,6 @@ module blackwell_mbarrier_frontend
       if (ps[i] != P_FREE) begin
         drained = 0;
         producer_busy |= producer[i].addr == cmd[exclusive_s].addr;
-        duplicate_prod |= producer[i].id == bind_req_payload.id;
         if (producer[i].id == producer_done_payload.id && ps[i] == P_DATA) begin
           matches_prod = 1;
           match_p = 4'(i);
@@ -206,9 +193,9 @@ module blackwell_mbarrier_frontend
       end
     end
     tc_busy = ts != T_FREE && tc.addr == cmd[exclusive_s].addr;
-    bind_req_ready = rst_n && !fault && free_prod && !bind_blocked;
-    producer_done_ready = rst_n && !fault;
-    tc_req_ready = rst_n && !fault && ts == T_FREE;
+    bind_req_ready = rst_n && free_prod && !bind_blocked;
+    producer_done_ready = rst_n;
+    tc_req_ready = rst_n && ts == T_FREE;
   end
   always_comb begin
     have_order = 0;
@@ -248,21 +235,21 @@ module blackwell_mbarrier_frontend
       have_result = 1;
       result_s = held_result;
     end
-    wait_cmd_valid = have_wait && !try_awaits_probe && !fault;
+    wait_cmd_valid = have_wait && !try_awaits_probe;
     wait_cmd_payload = cmd[wait_s];
     select_wait_rsp = wait_rsp_lock ||
         (!result_lock && wait_rsp_valid && (!have_result || prefer_wait_rsp));
     sw_rsp_valid = have_result || wait_rsp_valid;
     sw_rsp_payload = select_wait_rsp ? wait_rsp_payload : result[result_s];
     wait_rsp_ready = select_wait_rsp && sw_rsp_ready;
-    release_req_valid = have_order && !order_live && !fault;
+    release_req_valid = have_order && !order_live;
     release_req_payload = '0;
     release_req_payload.id = cmd[order_s].id;
     if (cmd[order_s].op == BAR_FENCE_INIT) begin
       release_req_payload.kind = 5;
       release_req_payload.scope = 3;
     end else release_req_payload.to_proxy = 1;
-    release_rsp_ready = !fault;
+    release_rsp_ready = rst_n;
   end
   always_comb begin
     class_valid = 0;
@@ -311,11 +298,11 @@ module blackwell_mbarrier_frontend
       done_p = held_done;
     end
     bind_rsp_valid = have_bind;
-    bind_rsp_payload = '{id: producer[bind_p].id, status: OK};
+    bind_rsp_payload = '{id: producer[bind_p].id};
     producer_rsp_valid = have_done;
-    producer_rsp_payload = '{id: producer[done_p].id, status: OK};
+    producer_rsp_payload = '{id: producer[done_p].id};
     tc_rsp_valid = ts == T_RESULT;
-    tc_rsp_payload = '{id: tc.id, status: OK};
+    tc_rsp_payload = '{id: tc.id};
     have_svc = 0;
     service_class = 0;
     for (int i = 0; i < 4; i++) begin
@@ -330,7 +317,7 @@ module blackwell_mbarrier_frontend
       have_svc = 1;
       service_class = held_class;
     end
-    service_req_valid = have_svc && !fault;
+    service_req_valid = have_svc;
     service_req_payload = '0;
     service_req_payload.route = service_class;
     service_req_payload.slot = service_lock ? held_service_slot : class_slot[service_class];
@@ -350,14 +337,15 @@ module blackwell_mbarrier_frontend
         service_req_payload.cmd.addr = producer[update_p].addr;
         service_req_payload.cmd.op = ps[update_p] == P_QUERY ? BAR_QUERY : BAR_COMPLETE;
         if (ps[update_p] == P_UPDATE) begin
-          service_req_payload.cmd.guard = 1;
-          service_req_payload.cmd.parity = phase[update_p];
+`ifndef SYNTHESIS
+          service_req_payload.cmd.parity = bound_phase[update_p];
+`endif
           service_req_payload.cmd.bytes = bytes[update_p];
         end
       end
     endcase
     wait_probe_req_ready = service_req_valid && service_class == 1 && service_req_ready;
-    service_rsp_ready = !fault && (service_rsp_payload.route != 1 || wait_probe_rsp_ready);
+    service_rsp_ready = (service_rsp_payload.route != 1 || wait_probe_rsp_ready);
     wait_probe_rsp_valid = service_rsp_valid && service_rsp_payload.route == 1;
     wait_probe_rsp_payload = service_rsp_payload;
   end
@@ -370,7 +358,6 @@ module blackwell_mbarrier_frontend
       for (int i = 0; i < 16; i++) ps[i] <= P_FREE;
       for (int i = 0; i < 4; i++) class_cursor[i] <= 0;
       ts <= T_FREE;
-      fault <= 0;
       order_live <= 0;
       result_lock <= 0;
       wait_rsp_lock <= 0;
@@ -387,13 +374,12 @@ module blackwell_mbarrier_frontend
       bind_cursor <= 0;
       done_cursor <= 0;
       lifecycle_cursor <= 0;
-    end else if (!halt_i && !fault) begin
-      if (sw_cmd_valid && !stop && duplicate_sw) fault <= 1;
+    end else begin
       lifecycle_cursor <= lifecycle_cursor + 3'd1;
       if (sw_cmd_valid && sw_cmd_ready) begin
         cmd[free_s] <= sw_cmd_payload;
-        result[free_s] <= '{id: sw_cmd_payload.id, status: ingress_status, completed: 0};
-        sw[free_s] <= ingress_status == OK ? S_NEW : S_RESULT;
+        result[free_s] <= '{id: sw_cmd_payload.id, completed: 0};
+        sw[free_s] <= S_NEW;
         for (int i = 0; i < 8; i++) begin
           older[free_s][i] <= sw[i] != S_FREE &&
               !(sw_rsp_valid && sw_rsp_ready && !select_wait_rsp && result_s == 3'(i));
@@ -431,20 +417,12 @@ module blackwell_mbarrier_frontend
         end
       end
       if (release_rsp_valid) begin
-        if (!order_live || release_rsp_payload.id != cmd[order_owner].id ||
-            release_rsp_payload.status != OK)
-          fault <= 1;
-        else begin
-          order_live <= 0;
-          sw[order_owner] <= cmd[order_owner].op == BAR_FENCE_INIT ? S_RESULT : S_SERVICE;
-        end
+        order_live <= 0;
+        sw[order_owner] <= cmd[order_owner].op == BAR_FENCE_INIT ? S_RESULT : S_SERVICE;
       end
       if (bind_req_valid && bind_req_ready) begin
-        if (duplicate_prod || bind_req_payload.id.epoch != epoch) fault <= 1;
-        else begin
-          ps[free_p] <= P_QUERY;
-          producer[free_p] <= bind_req_payload;
-        end
+        ps[free_p] <= P_QUERY;
+        producer[free_p] <= bind_req_payload;
       end
       if (bind_rsp_valid) begin
         bind_lock <= !bind_rsp_ready;
@@ -455,11 +433,8 @@ module blackwell_mbarrier_frontend
         end
       end
       if (producer_done_valid && producer_done_ready) begin
-        if (!matches_prod || producer_done_payload.status != OK) fault <= 1;
-        else begin
-          ps[match_p] <= P_UPDATE;
-          bytes[match_p] <= producer_done_payload.bytes;
-        end
+        ps[match_p] <= P_UPDATE;
+        bytes[match_p] <= producer_done_payload.bytes;
       end
       if (producer_rsp_valid) begin
         done_lock <= !producer_rsp_ready;
@@ -496,39 +471,69 @@ module blackwell_mbarrier_frontend
         logic [3:0] p;
         s = service_rsp_payload.slot[2:0];
         p = service_rsp_payload.slot[3:0];
-        if (service_rsp_payload.rsp.status != OK) fault <= 1;
-        else
-          case (service_rsp_payload.route)
-            0:
-            if (service_rsp_payload.slot >= 8 || sw[s] != S_PENDING ||
-                cmd[s].id != service_rsp_payload.rsp.id)
-              fault <= 1;
-            else begin
-              result[s] <= service_rsp_payload.rsp;
-              sw[s] <= S_RESULT;
-            end
-            2:
-            if (ts != T_PENDING || service_rsp_payload.slot != 0 ||
-                service_rsp_payload.rsp.id != tc.id)
-              fault <= 1;
-            else ts <= T_RESULT;
-            3:
-            if (service_rsp_payload.slot >= 16 || producer[p].id != service_rsp_payload.rsp.id)
-              fault <= 1;
-            else
-              case (ps[p])
-                P_QUERY_WAIT:
-                if (!service_rsp_payload.initialized) fault <= 1;
-                else begin
-                  ps[p] <= P_BIND;
-                  phase[p] <= service_rsp_payload.phase;
-                end
-                P_UPDATE_WAIT: ps[p] <= P_RESULT;
-                default: fault <= 1;
-              endcase
-            default: ;
-          endcase
+        case (service_rsp_payload.route)
+          0: begin
+            result[s] <= service_rsp_payload.rsp;
+            sw[s] <= S_RESULT;
+          end
+          2: ts <= T_RESULT;
+          3: begin
+            if (ps[p] == P_QUERY_WAIT) begin
+              ps[p] <= P_BIND;
+`ifndef SYNTHESIS
+              bound_phase[p] <= service_rsp_payload.phase;
+`endif
+            end else ps[p] <= P_RESULT;
+          end
+          default: ;
+        endcase
       end
     end
   end
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (sw_cmd_valid && !stop) begin
+        assert (sw_cmd_payload.id.epoch == epoch && sw_cmd_payload.id.seq != '1 && !wait_id_busy);
+        for (int i = 0; i < 8; i++)
+          assert (sw[i] == S_FREE || cmd[i].id != sw_cmd_payload.id);
+        assert (sw_cmd_payload.op <= BAR_FENCE_INIT);
+        assert (sw_cmd_payload.addr[2:0] == 0 && sw_cmd_payload.addr < 233472);
+        if (sw_cmd_payload.op == BAR_FENCE_INIT) assert (sw_cmd_payload.addr == 0);
+        if (sw_cmd_payload.op inside {BAR_INIT, BAR_ARRIVE}) begin
+          assert (sw_cmd_payload.count inside {[1 : 1048575]});
+        end else assert (sw_cmd_payload.count == 0);
+        if (sw_cmd_payload.op == BAR_EXPECT) begin
+          assert (sw_cmd_payload.bytes <= 1048575);
+        end else assert (sw_cmd_payload.bytes == 0);
+        if (sw_cmd_payload.op != BAR_TRY) assert (!sw_cmd_payload.parity && sw_cmd_payload.time_hint == 0);
+      end
+      if (release_rsp_valid) assert (order_live && release_rsp_payload.id == cmd[order_owner].id);
+      if (bind_req_valid && bind_req_ready) begin
+        assert (bind_req_payload.id.epoch == epoch);
+        for (int i = 0; i < 16; i++)
+          assert (ps[i] == P_FREE || producer[i].id != bind_req_payload.id);
+      end
+      if (producer_done_valid) assert (matches_prod);
+      if (tc_req_valid && tc_req_ready) assert (tc_req_payload.id.epoch == epoch);
+      if (wait_probe_req_valid && wait_probe_req_ready)
+        assert (sw[held_wait] == S_TRY && wait_probe_req_payload.cmd.id == cmd[held_wait].id);
+      if (service_rsp_valid && service_rsp_ready) begin
+        case (service_rsp_payload.route)
+          0: assert (service_rsp_payload.slot < 8 && sw[service_rsp_payload.slot[2:0]] == S_PENDING &&
+                     service_rsp_payload.rsp.id == cmd[service_rsp_payload.slot[2:0]].id);
+          2: assert (ts == T_PENDING && service_rsp_payload.slot == 0 && service_rsp_payload.rsp.id == tc.id);
+          3: begin
+            assert (service_rsp_payload.slot < 16 &&
+                    ps[service_rsp_payload.slot[3:0]] inside {P_QUERY_WAIT, P_UPDATE_WAIT} &&
+                    service_rsp_payload.rsp.id == producer[service_rsp_payload.slot[3:0]].id);
+            assert (service_rsp_payload.initialized);
+          end
+          default: ;
+        endcase
+      end
+    end
+  end
+`endif
 endmodule

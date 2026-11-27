@@ -10,7 +10,6 @@ module blackwell_tc_a_context
 ) (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic bind_i,
   input logic active_i,
   input logic permit_a,
@@ -31,8 +30,7 @@ module blackwell_tc_a_context
   output logic [3:0] a_ready,
   output logic scale_ready,
   output logic [31:0][255:0] rows,
-  output logic [31:0][31:0] scales,
-  output logic fault_o
+  output logic [31:0][31:0] scales
 );
   b_load_t src;
   assign src = '{cmd.id, cmd.a_ref, cmd.a_type, cmd.kind, cmd.transpose_a, cmd.n_code};
@@ -119,7 +117,6 @@ module blackwell_tc_a_context
   // A transposed 16-byte piece spans at most 16 adjacent TMEM lanes.
   // A nontransposed piece uses one lane, and a scale token uses a lane pair.
   localparam int MAX_RETURN_DISTANCE = 15;
-  wire enabled = active_i && !halt_i;
   always_comb begin
     a_ready = {4{active_i && !bind_i}};
     for (int p = 0; p < 64; p++) a_ready[p/16] &= (received[p] & need[p]) == need[p];
@@ -129,7 +126,7 @@ module blackwell_tc_a_context
     tm_valid = tlock;
     tp = th;
     for (int l = 0; l < 32; l++)
-    if (!tm_valid[l] && enabled && cmd.kind >= 4 && permit_scale && (bind_i || !sa_sent[l])) begin
+    if (!tm_valid[l] && active_i && cmd.kind >= 4 && permit_scale && (bind_i || !sa_sent[l])) begin
       tm_valid[l] = 1;
       tp[l] = '{1'b1, 6'(l), 4'd0};
     end
@@ -143,7 +140,7 @@ module blackwell_tc_a_context
       p = 16 * r + 2 * y + h;
       g = addresses[p][a][6:4];
       l = addresses[p][a][22:16];
-      if (enabled && permit_a && need[p][a] && (bind_i || !sent[p][a])) begin
+      if (active_i && permit_a && need[p][a] && (bind_i || !sent[p][a])) begin
         if (cmd.a_from_tmem && !tm_valid[l]) begin
           tp[l] = '{1'b0, 6'(p), 4'(a)};
           tm_valid[l] = 1;
@@ -186,7 +183,6 @@ module blackwell_tc_a_context
   end
   always_ff @(posedge clk) begin
     if (!rst_n) begin
-      fault_o <= 0;
       slock <= 0;
       tlock <= 0;
     end else begin
@@ -205,16 +201,15 @@ module blackwell_tc_a_context
           logic [3:0] a;
           p = sm_ret[g].tag.token[9:4];
           a = sm_ret[g].tag.token[3:0];
-          if (sm_ret[g].status != OK || sm_ret[g].tag.id != cmd.id ||
-              sm_ret[g].tag.client != 4'(CORE) || sm_ret[g].tag.token[15:10] != 6'b001000 ||
-              !sent[p][a] || received[p][a] || addresses[p][a][6:4] != 3'(g))
-            fault_o <= 1;
-          else begin
-            received[p][a] <= 1;
-            for (int b = 0; b < 128; b++)
-            if (parts[p][b] == a)
-              rows[p[5:1]][128*int'(p[0])+b] <= used[p][b] && sm_ret[g].data[offsets[p][b]];
-          end
+`ifndef SYNTHESIS
+          assert (sm_ret[g].tag.id == cmd.id && sm_ret[g].tag.client == 4'(CORE) &&
+                  sm_ret[g].tag.token[15:10] == 6'b001000 && sent[p][a] &&
+                  !received[p][a] && addresses[p][a][6:4] == 3'(g));
+`endif
+          received[p][a] <= 1;
+          for (int b = 0; b < 128; b++)
+          if (parts[p][b] == a)
+            rows[p[5:1]][128*int'(p[0])+b] <= used[p][b] && sm_ret[g].data[offsets[p][b]];
         end
       end
       for (int l = 0; l < 128; l++) begin
@@ -229,23 +224,24 @@ module blackwell_tc_a_context
           logic [3:0] a;
           p = tm_ret[l].tag.token[9:4];
           a = tm_ret[l].tag.token[3:0];
-          if (tm_ret[l].status != OK || tm_ret[l].tag.id != cmd.id ||
-              tm_ret[l].tag.client != 4'(CORE))
-            fault_o <= 1;
-          else if (tm_ret[l].tag.token[15:13] == 3) begin
-            if (l >= 32 || !sa_sent[l%32] || sa_received[l%32] ||
-                tm_ret[l].tag.token != {3'd3, 5'd0, 4'(l / 2), 4'(l % 2)})
-              fault_o <= 1;
-            else begin
-              sa_received[l%32] <= 1;
-              for (int g = 0; g < 4; g++)
-              scales[l%32][g*8+:8] <= g < (1 << (cmd.scale_vec - 1)) ? tm_ret[l].data[
-                  8*(4*((int'(cmd.scale_a[1:0])+CORE)%4)+int'(cmd.scale_a_id)+g)+:8] : 0;
-            end
-          end else if (tm_ret[l].tag.token[15:10] != 6'b001000 || !sent[p][a] || received[p][a] ||
-                       addresses[p][a][31:16] != 16'(l))
-            fault_o <= 1;
-          else begin
+`ifndef SYNTHESIS
+          assert (tm_ret[l].tag.id == cmd.id && tm_ret[l].tag.client == 4'(CORE));
+`endif
+          if (tm_ret[l].tag.token[15:13] == 3) begin
+`ifndef SYNTHESIS
+            assert (l < 32 && sa_sent[l%32] && !sa_received[l%32] &&
+                    tm_ret[l].tag.token == {3'd3, 5'd0, 4'(l / 2), 4'(l % 2)});
+`endif
+            sa_received[l%32] <= 1;
+            for (int g = 0; g < 4; g++)
+            scales[l%32][g*8+:8] <= g < (1 << (cmd.scale_vec - 1)) ? tm_ret[l].data[
+                8*(4*((int'(cmd.scale_a[1:0])+CORE)%4)+int'(cmd.scale_a_id)+g)+:8] : 0;
+          end else begin
+`ifndef SYNTHESIS
+            assert (tm_ret[l].tag.token[15:10] == 6'b001000 && sent[p][a] && !received[p][a] &&
+                    addresses[p][a][31:16] == 16'(l))
+              else $fatal(1, "TC_A_TMEM_RETURN: return must match the requested lane and atom");
+`endif
             received[p][a] <= 1;
             for (int b = 0; b < 128; b++)
             if (parts[p][b] == a)

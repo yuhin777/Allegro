@@ -4,7 +4,6 @@ module blackwell_tmem_ldst_engine
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop_i,
   input logic issue_valid,
   output logic issue_ready,
@@ -42,8 +41,7 @@ module blackwell_tmem_ldst_engine
   output logic track_done_valid,
   input logic track_done_ready,
   output rf_track_done_t track_done_payload,
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
   typedef enum logic [2:0] {
     IDLE,
@@ -59,14 +57,8 @@ module blackwell_tmem_ldst_engine
   logic [1:0] pin_match;
   logic [3:0] selected, active, cursor, locked, locked_source, output_ready;
   localparam int PIN_PORT = 0, RELEASE_PORT = 1, DONE_PORT = 2, TRACK_PORT = 3;
-  wire running = !halt_i && !fault_o;
   wire direction = issue_payload.cmd.store;
-  wire [16:0] issue_limit = {1'b0, issue_payload.cmd.base[15:0]} +
-      (issue_payload.cmd.x32 ? 17'd32 : 17'd16);
-  wire bad_issue = issue_payload.cmd.id.issuer[4:0] != 0 || issue_payload.cmd.id.seq == '1 ||
-      issue_payload.cmd.base[31:16] != {9'd0, issue_payload.cmd.id.issuer[6:5], 5'd0} ||
-      issue_limit > 512 || (direction && issue_payload.cmd.x32);
-  assign issue_ready = running && stage[direction] == IDLE;
+  assign issue_ready = rst_n && stage[direction] == IDLE;
   assign drained_o = stage[0] == IDLE && stage[1] == IDLE;
   assign output_ready = {track_done_ready, done_ready, unpin_ready, pin_req_ready};
   for (genvar k = 0; k < 4; k++) begin : control_port
@@ -74,7 +66,7 @@ module blackwell_tmem_ldst_engine
         k == RELEASE_PORT ? RELEASE : k == DONE_PORT ? REPORT : TRACK;
     assign selected[k] = locked[k] ? locked_source[k] :
         stage[cursor[k]] == SOURCE ? cursor[k] : !cursor[k];
-    assign active[k] = (locked[k] || running) && stage[selected[k]] == SOURCE;
+    assign active[k] = stage[selected[k]] == SOURCE;
     always_ff @(posedge clk) begin
       if (!rst_n) begin
         locked[k] <= 0;
@@ -89,19 +81,14 @@ module blackwell_tmem_ldst_engine
   assign {track_done_valid, done_valid, unpin_valid, pin_req_valid} = active;
   assign pin_req_payload = '{id: record_q[selected[0]].cmd.id, user: selected[0] ? 3'd4 : 3'd3};
   assign unpin_payload = '{id: record_q[selected[1]].cmd.id, user: selected[1] ? 3'd4 : 3'd3};
-  assign done_payload = '{id: record_q[selected[2]].cmd.id, status: OK};
+  assign done_payload = '{id: record_q[selected[2]].cmd.id};
   assign track_done_payload = '{
           slot: record_q[selected[3]].slot,
-          id: record_q[selected[3]].cmd.id,
-          status: OK
+          id: record_q[selected[3]].cmd.id
       };
-  assign pin_rsp_ready = running;
+  assign pin_rsp_ready = rst_n;
   for (genvar dir = 0; dir < 2; dir++)
     assign pin_match[dir] = stage[dir] == PIN_WAIT && pin_rsp_payload.id == record_q[dir].cmd.id;
-  wire pin_error = pin_rsp_valid && pin_rsp_ready && (!$onehot(
-      pin_match
-  ) || pin_rsp_payload.status != OK);
-
   // LD has one 16 B buffer per lane. The next word may issue while this word
   // owns its buffer; its return can fire exactly when the last old cell leaves.
   logic [31:0] sent, prefetched, returned, send_current, send_next, receive_current, receive_next;
@@ -112,8 +99,7 @@ module blackwell_tmem_ldst_engine
   wire [8:0] ld_end = ld_base + (record_q[0].cmd.x32 ? 9'd31 : 9'd15);
   wire [6:0] last_word = ld_end[8:2];
   wire last_cell = cell_index == 3 || (word_index == last_word && cell_index == ld_end[1:0]);
-  logic rf_load_held;
-  assign rf_load_valid = stage[0] == DATA && (&returned) && (running || rf_load_held);
+  assign rf_load_valid = stage[0] == DATA && (&returned);
   assign rf_load_payload.id = record_q[0].cmd.id;
   assign rf_load_payload.index = beat_index;
   assign rf_load_payload.last = beat_index == (record_q[0].cmd.x32 ? 31 : 15);
@@ -130,14 +116,9 @@ module blackwell_tmem_ldst_engine
   wire [4:0] write_index = store_beats - 1'b1;
   wire [8:0] column = record_q[1].cmd.base[8:0] + 9'(write_index);
   wire store_replace = store_full && (&all_sent);
-  assign rf_store_ready = running && stage[1] == DATA && store_beats < 16 &&
+  assign rf_store_ready = stage[1] == DATA && store_beats < 16 &&
       (!store_full || store_replace);
   wire st_fire = rf_store_valid && rf_store_ready;
-  wire store_error = st_fire &&
-      (rf_store_payload.id != record_q[1].cmd.id || rf_store_payload.index != 7'(store_beats) ||
-       rf_store_payload.last != (store_beats == 15));
-  logic [127:0] rd_error, wr_error;
-  logic [127:0] held_read, held_write;
   function automatic logic [15:0] read_mask(input logic [6:0] word_number, input logic [8:0] first,
                                             last);
     logic [15:0] mask;
@@ -150,7 +131,7 @@ module blackwell_tmem_ldst_engine
     wire in_load = record_q[0].cmd.base[22:21] == 2'(lane / 32) && stage[0] == DATA;
     wire in_store = record_q[1].cmd.base[22:21] == 2'(lane / 32) && stage[1] == DATA;
     wire [6:0] requested_word = sent[T] ? word_index + 1'b1 : word_index;
-    assign rd_req_valid[lane] = (running || held_read[lane]) && in_load &&
+    assign rd_req_valid[lane] = in_load &&
         (!sent[T] || (word_index != last_word && !prefetched[T]));
     assign rd_req_payload[lane] = '{
             tag: '{
@@ -162,17 +143,8 @@ module blackwell_tmem_ldst_engine
             word: requested_word,
             byte_mask: read_mask(requested_word, ld_base, ld_end)
         };
-    wire [15:0] rd_token = rd_rsp_payload[lane].tag.token;
-    wire match_base = in_load && rd_rsp_payload[lane].tag.id == record_q[0].cmd.id &&
-        rd_rsp_payload[lane].tag.client == 5 && !rd_token[15] && rd_token[7:0] == {6'(T), 2'b00};
-    wire current_match = match_base && rd_token[14:8] == word_index && sent[T] && !returned[T];
-    wire next_match = match_base && word_index != last_word &&
-        rd_token[14:8] == word_index + 1'b1 && prefetched[T];
-    assign rd_rsp_ready[lane] = running &&
-        (!next_match || rotate || rd_rsp_payload[lane].status != OK);
-    assign rd_error[lane] = rd_rsp_ready[lane] && rd_rsp_valid[lane] &&
-        (!(current_match || next_match) || rd_rsp_payload[lane].status != OK);
-    assign wr_req_valid[lane] = (running || held_write[lane]) && in_store && store_full &&
+    assign rd_rsp_ready[lane] = !returned[T] || rotate;
+    assign wr_req_valid[lane] = in_store && store_full &&
         sent_count[T] == write_index;
     assign wr_req_payload[lane] = '{
             tag: '{
@@ -185,26 +157,30 @@ module blackwell_tmem_ldst_engine
             byte_mask: 16'h000f << (4 * column[1:0]),
             data: 128'(store_buffer[T*32+:32]) << (32 * column[1:0])
         };
-    assign wr_ack_ready[lane] = running;
-    assign wr_error[lane] = running && wr_ack_valid[lane] &&
-        (!in_store || wr_ack_payload[lane].status != OK || wr_ack_payload[lane].tag.id !=
-         record_q[1].cmd.id || wr_ack_payload[lane].tag.client != 5 || ack_count[T] >=
-         sent_count[T] || wr_ack_payload[lane].tag.token != {1'b1, 7'(ack_count[T]), 6'(T), 2'b00});
+    assign wr_ack_ready[lane] = rst_n;
+`ifndef SYNTHESIS
+    wire [15:0] rd_token = rd_rsp_payload[lane].tag.token;
+    wire match_base = in_load && rd_rsp_payload[lane].tag.id == record_q[0].cmd.id &&
+        rd_rsp_payload[lane].tag.client == 5 && !rd_token[15] && rd_token[7:0] == {6'(T), 2'b00};
+    wire current_match = match_base && rd_token[14:8] == word_index && sent[T] && !returned[T];
+    wire next_match = match_base && word_index != last_word &&
+        rd_token[14:8] == word_index + 1'b1 && prefetched[T];
     always_ff @(posedge clk) begin
-      if (!rst_n) begin
-        held_read[lane] <= 0;
-        held_write[lane] <= 0;
-      end else begin
-        held_read[lane] <= rd_req_valid[lane] && !rd_req_ready[lane];
-        held_write[lane] <= wr_req_valid[lane] && !wr_req_ready[lane];
+      if (rst_n && rd_rsp_valid[lane]) assert (current_match || next_match);
+      if (rst_n && wr_ack_valid[lane]) begin
+        assert (in_store && wr_ack_payload[lane].tag.id == record_q[1].cmd.id &&
+                wr_ack_payload[lane].tag.client == 5 && ack_count[T] < sent_count[T] &&
+                wr_ack_payload[lane].tag.token == {1'b1, 7'(ack_count[T]), 6'(T), 2'b00})
+          else $error("TMEM_STORE_ACK");
       end
     end
+`endif
   end
   for (genvar t = 0; t < 32; t++) begin : thread_route
     wire [6:0] ld_lane = {record_q[0].cmd.base[22:21], 5'(t)};
     wire [6:0] st_lane = {record_q[1].cmd.base[22:21], 5'(t)};
     wire req_fire = rd_req_valid[ld_lane] && rd_req_ready[ld_lane];
-    wire ret_fire = rd_rsp_valid[ld_lane] && rd_rsp_ready[ld_lane] && !rd_error[ld_lane];
+    wire ret_fire = rd_rsp_valid[ld_lane] && rd_rsp_ready[ld_lane];
     assign send_current[t] = req_fire && !sent[t];
     assign send_next[t] = req_fire && sent[t];
     assign receive_current[t] = ret_fire && rd_rsp_payload[ld_lane].tag.token[14:8] == word_index;
@@ -212,7 +188,7 @@ module blackwell_tmem_ldst_engine
     assign returned_data[t] = rd_rsp_payload[ld_lane].data;
     assign rf_load_payload.data[t*32+:32] = word_buffer[t][int'(cell_index)*32+:32];
     assign write_fire[t] = wr_req_valid[st_lane] && wr_req_ready[st_lane];
-    assign ack_fire[t] = wr_ack_valid[st_lane] && wr_ack_ready[st_lane] && !wr_error[st_lane];
+    assign ack_fire[t] = wr_ack_valid[st_lane] && wr_ack_ready[st_lane];
     assign all_sent[t] = sent_count[t] == store_beats || write_fire[t];
     assign all_acked[t] = ack_count[t] == 16 || (ack_count[t] == 15 && ack_fire[t]);
   end
@@ -220,34 +196,27 @@ module blackwell_tmem_ldst_engine
     if (!rst_n) begin
       stage[0] <= IDLE;
       stage[1] <= IDLE;
-      fault_o <= 0;
-      rf_load_held <= 0;
       store_full <= 0;
     end else begin
-      rf_load_held <= rf_load_valid && !rf_load_ready;
-      if ((|rd_error) || (|wr_error) || pin_error || store_error) fault_o <= 1;
       if (issue_valid && issue_ready) begin
-        if (bad_issue) fault_o <= 1;
-        else begin
-          stage[direction] <= PIN;
-          record_q[direction] <= issue_payload;
-          if (direction) begin
-            sent_count <= '0;
-            ack_count <= '0;
-            store_beats <= 0;
-            store_full <= 0;
-          end else begin
-            sent <= 0;
-            returned <= 0;
-            prefetched <= 0;
-            beat_index <= 0;
-            word_index <= issue_payload.cmd.base[8:2];
-            cell_index <= issue_payload.cmd.base[1:0];
-          end
+        stage[direction] <= PIN;
+        record_q[direction] <= issue_payload;
+        if (direction) begin
+          sent_count <= '0;
+          ack_count <= '0;
+          store_beats <= 0;
+          store_full <= 0;
+        end else begin
+          sent <= 0;
+          returned <= 0;
+          prefetched <= 0;
+          beat_index <= 0;
+          word_index <= issue_payload.cmd.base[8:2];
+          cell_index <= issue_payload.cmd.base[1:0];
         end
       end
       if (pin_req_valid && pin_req_ready) stage[selected[0]] <= PIN_WAIT;
-      if (pin_rsp_valid && pin_rsp_ready && !pin_error) stage[pin_match[1]] <= DATA;
+      if (pin_rsp_valid && pin_rsp_ready) stage[pin_match[1]] <= DATA;
       if (unpin_valid && unpin_ready) stage[selected[1]] <= REPORT;
       if (done_valid && done_ready) stage[selected[2]] <= TRACK;
       if (track_done_valid && track_done_ready) stage[selected[3]] <= IDLE;
@@ -266,7 +235,7 @@ module blackwell_tmem_ldst_engine
       end
       if (stage[1] == DATA) begin
         if (store_replace) store_full <= 0;
-        if (st_fire && !store_error) begin
+        if (st_fire) begin
           store_buffer <= rf_store_payload.data;
           store_full <= 1;
           store_beats <= store_beats + 1'b1;
@@ -279,4 +248,21 @@ module blackwell_tmem_ldst_engine
       end
     end
   end
+`ifndef SYNTHESIS
+  wire [16:0] issue_limit = {1'b0, issue_payload.cmd.base[15:0]} +
+      (issue_payload.cmd.x32 ? 17'd32 : 17'd16);
+  wire bad_issue = issue_payload.cmd.id.issuer[4:0] != 0 || issue_payload.cmd.id.seq == '1 ||
+      issue_payload.cmd.base[31:16] != {9'd0, issue_payload.cmd.id.issuer[6:5], 5'd0} ||
+      issue_limit > 512 || (direction && issue_payload.cmd.x32);
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (issue_valid) assert (!bad_issue) else $error("TMEM_RF_ISSUE");
+      if (pin_rsp_valid) assert ($onehot(pin_match));
+      if (rf_store_valid && store_beats < 16 && stage[1] inside {PIN, PIN_WAIT, DATA})
+        assert (rf_store_payload.id == record_q[1].cmd.id &&
+                rf_store_payload.index == 7'(store_beats) &&
+                rf_store_payload.last == (store_beats == 15));
+    end
+  end
+`endif
 endmodule

@@ -5,7 +5,6 @@ module blackwell_tma_completion_tracker
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic begin_valid,
   input logic allocate_valid,
   input logic generated_valid,
@@ -37,14 +36,13 @@ module blackwell_tma_completion_tracker
   output ticket_t finish_payload,
   output bar_producer_done_t producer_done_payload,
   input op_done_t producer_rsp_payload,
-  output logic drained,
-  output logic fault
+  output logic drained
 );
   tma_tag_t next_tag[64];
   logic [17:0] closed, source_reported, full_reported, bar_done;
   logic [6:0] pending_src[18], pending_dst[18], live_tags[18];
   logic [6:0] src_settled[18], dst_settled[18];
-  logic free_tag, ret_any, events_bad;
+  logic free_tag, ret_any;
   logic [5:0] free_index, ret_index, ret_cursor;
   logic [4:0]
       prog_cursor,
@@ -75,13 +73,12 @@ module blackwell_tma_completion_tracker
         ret_index = r;
       end
     end
-    begin_ready = rst_n && !fault && begin_payload < 18 && !ticket_busy[begin_payload];
-    allocate_ready = rst_n && !fault && free_tag && (!start_valid || start_ready);
-    generated_ready = rst_n && !fault;
+    begin_ready = rst_n && !ticket_busy[begin_payload];
+    allocate_ready = rst_n && free_tag && (!start_valid || start_ready);
+    generated_ready = rst_n;
     drained = ticket_busy == 0 && !start_valid;
   end
   always_comb begin
-    events_bad = 0;
     for (int i = 0; i < 64; i++) next_tag[i] = tag_view[i];
     for (int i = 0; i < 18; i++) begin
       src_settled[i] = 0;
@@ -94,34 +91,18 @@ module blackwell_tma_completion_tracker
       t = event_payload[i].key.tag;
       g = event_payload[i].grp;
       if (event_valid[i]) begin
-        if (tag_view[t].state inside {TAG_FREE, RETIRE} ||
-            event_payload[i].key.phase != tag_view[t].phase)
-          events_bad = 1;
-        else
-          case (event_payload[i].kind)
-            GMEM_REQ: begin
-              if (tag_view[t].gmem_sent) events_bad = 1;
-              next_tag[t].gmem_sent = 1;
-            end
-            GMEM_RSP: begin
-              if (!tag_view[t].gmem_sent || tag_view[t].gmem_done) events_bad = 1;
-              next_tag[t].gmem_done = 1;
-            end
-            SMEM_REQ: begin
-              if (tag_view[t].smem_sent[g]) events_bad = 1;
-              next_tag[t].smem_sent[g] = 1;
-            end
-            SMEM_RSP: begin
-              if (!tag_view[t].smem_sent[g] || tag_view[t].smem_done[g]) events_bad = 1;
-              next_tag[t].smem_done[g] = 1;
-            end
-            LOCAL_ZERO: next_tag[t].source_done = 1;
-            NO_ACCESS: begin
-              next_tag[t].source_done = 1;
-              next_tag[t].target_done = 1;
-            end
-            default: events_bad = 1;
-          endcase
+        case (event_payload[i].kind)
+          GMEM_REQ: next_tag[t].gmem_sent = 1;
+          GMEM_RSP: next_tag[t].gmem_done = 1;
+          SMEM_REQ: next_tag[t].smem_sent[g] = 1;
+          SMEM_RSP: next_tag[t].smem_done[g] = 1;
+          LOCAL_ZERO: next_tag[t].source_done = 1;
+          NO_ACCESS: begin
+            next_tag[t].source_done = 1;
+            next_tag[t].target_done = 1;
+          end
+          default: ;
+        endcase
       end
     end
     for (int i = 0; i < 64; i++) begin
@@ -199,10 +180,9 @@ module blackwell_tma_completion_tracker
     finish_payload = f;
     producer_done_payload = '{
         id: owner_view[b].id,
-        bytes: owner_view[b].total_bytes[31:0],
-        status: OK
+        bytes: owner_view[b].total_bytes[31:0]
     };
-    producer_rsp_ready = rst_n && !fault;
+    producer_rsp_ready = rst_n;
   end
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -213,7 +193,6 @@ module blackwell_tma_completion_tracker
       full_reported <= 0;
       bar_done <= 0;
       start_valid <= 0;
-      fault <= 0;
       ret_cursor <= 0;
       prog_cursor <= 0;
       finish_cursor <= 0;
@@ -222,16 +201,14 @@ module blackwell_tma_completion_tracker
       finish_lock <= 0;
       producer_lock <= 0;
       producer_live <= 0;
-    end else if (!halt_i && !fault) begin
+    end else begin
       for (int i = 0; i < 64; i++) tag_view[i] <= next_tag[i];
-      if (events_bad) fault <= 1;
       if (begin_valid && begin_ready) begin
         ticket_busy[begin_payload] <= 1;
         closed[begin_payload] <= 0;
         source_reported[begin_payload] <= 0;
         full_reported[begin_payload] <= 0;
         bar_done[begin_payload] <= 0;
-        if (!owner_view[begin_payload].live) fault <= 1;
       end
       if (start_valid && start_ready) start_valid <= 0;
       if (allocate_valid && allocate_ready) begin
@@ -246,9 +223,6 @@ module blackwell_tma_completion_tracker
         init_tag.xor_group = allocate_payload.xor_group;
         init_tag.logical_bytes = allocate_payload.logical_bytes;
         init_tag.oob = allocate_payload.oob;
-        if (allocate_payload.ticket >= 18 || !ticket_busy[allocate_payload.ticket] ||
-            closed[allocate_payload.ticket])
-          fault <= 1;
         tag_view[free_index] <= init_tag;
         start_valid <= 1;
         start_payload <= '{
@@ -258,8 +232,6 @@ module blackwell_tma_completion_tracker
         if (allocate_payload.last) closed[allocate_payload.ticket] <= 1;
       end
       if (generated_valid && generated_ready) begin
-        if (generated_payload >= 18 || !ticket_busy[generated_payload] || closed[generated_payload])
-          fault <= 1;
         closed[generated_payload] <= 1;
       end
       if (ret_any) begin
@@ -300,14 +272,9 @@ module blackwell_tma_completion_tracker
           producer_cursor <= b == 17 ? 0 : b + 5'd1;
         end
       end
-      if (producer_rsp_valid) begin
-        if (!producer_live || producer_rsp_payload.status != OK ||
-            producer_rsp_payload.id != owner_view[producer_owner].id)
-          fault <= 1;
-        else begin
-          producer_live <= 0;
-          bar_done[producer_owner] <= 1;
-        end
+      if (producer_rsp_valid && producer_rsp_ready) begin
+        producer_live <= 0;
+        bar_done[producer_owner] <= 1;
       end
       if (finish_valid) begin
         finish_lock <= !finish_ready;
@@ -319,4 +286,35 @@ module blackwell_tma_completion_tracker
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (begin_valid) assert (begin_payload < 18 && owner_view[begin_payload].live);
+      if (allocate_valid)
+        assert (allocate_payload.ticket < 18 && ticket_busy[allocate_payload.ticket] &&
+                !closed[allocate_payload.ticket]);
+      if (generated_valid)
+        assert (generated_payload < 18 && ticket_busy[generated_payload] && !closed[generated_payload]);
+      if (producer_rsp_valid) assert (producer_live && producer_rsp_payload.id == owner_view[producer_owner].id);
+      for (int i = 0; i < 20; i++) begin
+        tma_tag_t entry;
+        logic [2:0] g;
+        entry = tag_view[event_payload[i].key.tag];
+        g = event_payload[i].grp;
+        if (event_valid[i]) begin
+          assert (!(entry.state inside {TAG_FREE, RETIRE}) && entry.phase == event_payload[i].key.phase);
+          case (event_payload[i].kind)
+            GMEM_REQ: assert (!entry.gmem_sent);
+            GMEM_RSP: assert (entry.gmem_sent && !entry.gmem_done);
+            SMEM_REQ: assert (!entry.smem_sent[g]);
+            SMEM_RSP: assert (entry.smem_sent[g] && !entry.smem_done[g]);
+            LOCAL_ZERO, NO_ACCESS: assert (entry.state == START && start_valid && start_ready &&
+                                           event_payload[i].key == start_payload.key);
+            default: assert (1'b0);
+          endcase
+        end
+      end
+    end
+  end
+`endif
 endmodule

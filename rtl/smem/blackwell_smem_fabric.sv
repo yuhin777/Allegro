@@ -4,7 +4,6 @@ module blackwell_smem_fabric
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic [15:0] epoch_i,
   input mma_live_t live[3],
   input logic [15:0][7:0] rd_req_valid,
@@ -19,8 +18,7 @@ module blackwell_smem_fabric
   input smem_wr_req_t wr_req_payload[16][8],
   output smem_rd_rsp_t rd_rsp_payload[16][8],
   output smem_wr_ack_t wr_ack_payload[16][8],
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
   logic [31:0] read_enable, write_enable;
   logic [31:0][10:0] read_addr, write_addr;
@@ -34,12 +32,11 @@ module blackwell_smem_fabric
     .*
   );
   logic [1:0] phase;
-  logic [7:0] busy, bad;
+  logic [7:0] busy;
   assign drained_o = !(|busy);
-  assign fault_o = |bad;
   always_ff @(posedge clk)
     if (!rst_n) phase <= '0;
-    else if (!halt_i) phase <= phase + 2'd1;
+    else phase <= phase + 2'd1;
 
   for (genvar g = 0; g < 8; g++) begin : groups
     // Only the four A clients can multicast. External/B reads use the
@@ -68,8 +65,6 @@ module blackwell_smem_fabric
     logic [15:0] selected;
     logic rfound, wfound;
     logic [127:0] qdata;
-    logic rd_bad, wr_bad;
-    logic [15:0] epoch_q;
     function automatic logic [1:0] age(input async_id_t id);
       for (int i = 0; i < 3; i++) if (live[i].valid && live[i].id == id) return 2'(i);
       return 2'd3;
@@ -175,24 +170,16 @@ module blackwell_smem_fabric
           (|w.byte_mask[4*s+:4]);
       grant = r_possible && (!conflict || !conflict_write);
       write_fire = w_possible && (!conflict || conflict_write);
-      wr_bad = w.addr[3:0] != 0 || w.addr[6:4] != 3'(g) || w.addr >= 233472 ||
-          w.tag.client != writer || w.tag.id.epoch != epoch_i;
-      rd_bad = 0;
       for (int i = 0; i < 16; i++) begin
-        rd_req_ready[i][g] = rst_n && !fault_o && (!rvalid || grant) && selected[i];
-        wr_req_ready[i][g] = rst_n && !fault_o && write_fire && writer == 4'(i);
-        if (selected[i])
-          rd_bad |= rd_req_payload[i][g].addr[3:0] != 0 || rd_req_payload[i][g].addr[6:4] !=
-              3'(g) || rd_req_payload[i][g].addr >= 233472 || rd_req_payload[i][g].tag.client !=
-              4'(i) || rd_req_payload[i][g].tag.id.epoch != epoch_i;
+        rd_req_ready[i][g] = rst_n && (!rvalid || grant) && selected[i];
+        wr_req_ready[i][g] = rst_n && write_fire && writer == 4'(i);
       end
-      capture = rfound && (!rvalid || grant) && !fault_o && rst_n;
+      capture = rfound && (!rvalid || grant) && rst_n;
       for (int s = 0; s < 4; s++) begin
-        read_enable[4*g+s] = rst_n && !halt_i && !fault_o && grant && (|rmask[4*s+:4]);
+        read_enable[4*g+s] = rst_n && grant && (|rmask[4*s+:4]);
         read_addr[4*g+s] = raddr[17:7];
         qdata[32*s+:32] = read_q[4*g+s];
-        write_enable[4*g+s] = rst_n && !halt_i && !fault_o && write_fire && !wr_bad &&
-            (|w.byte_mask[4*s+:4]);
+        write_enable[4*g+s] = rst_n && write_fire && (|w.byte_mask[4*s+:4]);
         write_addr[4*g+s] = w.addr[17:7];
         write_byte_mask[4*g+s] = w.byte_mask[4*s+:4];
         write_data[4*g+s] = w.data[32*s+:32];
@@ -214,46 +201,72 @@ module blackwell_smem_fabric
         wr_cursor <= 0;
         ext_turn <= 0;
         conflict_write <= 0;
-        bad[g] <= 0;
-        epoch_q <= 0;
-      end else if (!halt_i) begin
-        epoch_q <= epoch_i;
-        if (epoch_i != epoch_q && busy[g]) bad[g] <= 1;
-        if (!fault_o) begin
-          if (grant) begin
-            qdest <= rdest;
-            rvalid <= 0;
-          end
-          if (capture) begin
-            if (rd_bad) bad[g] <= 1;
-            else begin
-              rvalid <= 1;
-              rdest <= new_dest;
-              raddr <= rd_req_payload[reader][g].addr;
-              rmask <= new_mask;
-              ext_turn <= reader < 4 || reader == 6;
-              if (reader >= 4 && reader != 6) rd_cursor <= reader + 4'd1;
-            end
-          end
-          qvalid <= (qvalid && !q_move) || grant;
-          if (q_move) begin
-            returns[wp] <= '{dest: qdest, data: qdata};
-            wp <= !wp;
-          end
-          if (pop) rp <= !rp;
-          delivered <= pop ? '0 : delivered | handshakes;
-          ret_count <= ret_count + 2'(q_move) - 2'(pop);
-          if (write_fire && wr_bad) bad[g] <= 1;
-          if (write_fire && !wr_bad) begin
-            acks[aw] <= '{tag: wr_req_payload[writer][g].tag, status: OK};
-            aw <= !aw;
-            wr_cursor <= writer + 4'd1;
-          end
-          if (ack_pop) ap <= !ap;
-          ack_count <= ack_count + 2'(write_fire && !wr_bad) - 2'(ack_pop);
-          if (conflict) conflict_write <= !conflict_write;
+      end else begin
+        if (grant) begin
+          qdest <= rdest;
+          rvalid <= 0;
         end
+        if (capture) begin
+          rvalid <= 1;
+          rdest <= new_dest;
+          raddr <= rd_req_payload[reader][g].addr;
+          rmask <= new_mask;
+          ext_turn <= reader < 4 || reader == 6;
+          if (reader >= 4 && reader != 6) rd_cursor <= reader + 4'd1;
+        end
+        qvalid <= (qvalid && !q_move) || grant;
+        if (q_move) begin
+          returns[wp] <= '{dest: qdest, data: qdata};
+          wp <= !wp;
+        end
+        if (pop) rp <= !rp;
+        delivered <= pop ? '0 : delivered | handshakes;
+        ret_count <= ret_count + 2'(q_move) - 2'(pop);
+        if (write_fire) begin
+          acks[aw] <= '{tag: wr_req_payload[writer][g].tag};
+          aw <= !aw;
+          wr_cursor <= writer + 4'd1;
+        end
+        if (ack_pop) ap <= !ap;
+        ack_count <= ack_count + 2'(write_fire) - 2'(ack_pop);
+        if (conflict) conflict_write <= !conflict_write;
       end
     end
+`ifndef SYNTHESIS
+    for (genvar i = 0; i < 16; i++) begin : check_request
+      // An accepted broadcast enters each destination's stream independently.
+      mem_tag_t read_tags[$], write_tags[$];
+      always @(posedge clk) begin
+        if (!rst_n) begin
+          read_tags.delete();
+          write_tags.delete();
+        end else begin
+          if (rd_rsp_valid[i][g]) begin
+            assert (read_tags.size() > 0 && rd_rsp_payload[i][g].tag == read_tags[0]);
+            if (rd_rsp_ready[i][g]) void'(read_tags.pop_front());
+          end
+          if (wr_ack_valid[i][g]) begin
+            assert (write_tags.size() > 0 && wr_ack_payload[i][g].tag == write_tags[0]);
+            if (wr_ack_ready[i][g]) void'(write_tags.pop_front());
+          end
+          if (rd_req_valid[i][g] && rd_req_ready[i][g])
+            read_tags.push_back(rd_req_payload[i][g].tag);
+          if (wr_req_valid[i][g] && wr_req_ready[i][g])
+            write_tags.push_back(wr_req_payload[i][g].tag);
+        end
+      end
+      always_ff @(posedge clk) begin
+        if (rst_n && rd_req_valid[i][g])
+          assert (rd_req_payload[i][g].addr[6:0] == {3'(g), 4'b0} &&
+                  rd_req_payload[i][g].addr < 233472 && rd_req_payload[i][g].tag.client == 4'(i) &&
+                  rd_req_payload[i][g].tag.id.epoch == epoch_i);
+        if (rst_n && wr_req_valid[i][g])
+          assert (wr_req_payload[i][g].addr[6:0] == {3'(g), 4'b0} &&
+                  wr_req_payload[i][g].addr < 233472 && wr_req_payload[i][g].tag.client == 4'(i) &&
+                  wr_req_payload[i][g].tag.id.epoch == epoch_i);
+      end
+    end
+    assert property (@(posedge clk) disable iff (!rst_n) busy[g] |-> $stable(epoch_i));
+`endif
   end
 endmodule

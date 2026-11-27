@@ -6,7 +6,6 @@ module blackwell_tma_unit
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop,
   input logic [15:0] epoch,
   input logic cmd_valid,
@@ -34,7 +33,7 @@ module blackwell_tma_unit
   output gmem_req_t gmem_req_payload,
   input gmem_rsp_t gmem_rsp_payload,
   output order_req_t order_req_payload,
-  input order_rsp_t order_rsp_payload,
+  input op_done_t order_rsp_payload,
   output bar_bind_t bar_bind_payload,
   input op_done_t bar_bind_rsp_payload,
   input op_done_t producer_rsp_payload,
@@ -46,8 +45,7 @@ module blackwell_tma_unit
   output logic [7:0] smem_read_blocked,
   output smem_atom_req_t smem_req_payload[8],
   input smem_atom_rsp_t smem_rsp_payload[8],
-  output logic drained,
-  output logic fault
+  output logic drained
 );
   typedef enum logic [3:0] {
     FREE,
@@ -66,7 +64,6 @@ module blackwell_tma_unit
   ticket_state_t state[20];
   async_id_t id[20];
   tma_opcode_t op[20];
-  status_t status[20];
   logic [19:0] source_done, target_done, bound, slot;
   logic [1:0] age[18];
   logic [17:0] wait_pending[20];
@@ -84,25 +81,22 @@ module blackwell_tma_unit
   ) ingress (
     .*
   );
-  logic cache_fault, setup_fault, walk_fault, track_fault, data_fault, unit_fault;
   logic cache_drained, setup_drained, walk_drained, track_drained, data_drained;
-  assign
-      fault = unit_fault || cache_fault || setup_fault || walk_fault || track_fault || data_fault;
-  logic available, duplicate, uses_fifo, is_control;
+  logic available, uses_fifo, is_control;
   ticket_t new_ticket, head_t, rsp_t, rsp_cursor, held_rsp;
   logic rsp_locked;
-  status_t reject_status;
   assign head_t = out_payload.ticket;
   logic
       lookup_valid, lookup_ready, desc_valid, desc_ready, cg_req_valid, cg_req_ready, cg_rsp_ready;
   tma_desc_req_t lookup_payload;
   tma_desc_rsp_t desc_payload;
+  tma_gmem_return_t gmem_return;
+  assign gmem_return = '{id: gmem_rsp_payload.id, data: gmem_rsp_payload.data};
   gmem_req_t cg_req_payload, dg_req_payload;
   logic dg_req_valid, dg_req_ready, dg_rsp_ready, mem_turn, mem_lock, mem_hold, req_cache;
   blackwell_tma_descriptor_cache cache (
     .clk,
     .rst_n,
-    .halt_i,
     .epoch,
     .lookup_valid,
     .lookup_ready,
@@ -115,9 +109,8 @@ module blackwell_tma_unit
     .gmem_req_payload(cg_req_payload),
     .gmem_rsp_valid(gmem_rsp_valid && gmem_rsp_payload.id.cls == 1),
     .gmem_rsp_ready(cg_rsp_ready),
-    .gmem_rsp_payload,
-    .drained(cache_drained),
-    .fault(cache_fault)
+    .gmem_rsp_payload(gmem_return),
+    .drained(cache_drained)
   );
   logic
       request_valid,
@@ -140,7 +133,6 @@ module blackwell_tma_unit
   blackwell_tma_setup setup (
     .clk,
     .rst_n,
-    .halt_i,
     .request_valid,
     .request_ready,
     .request_payload,
@@ -160,8 +152,7 @@ module blackwell_tma_unit
     .slot_state,
     .slot_ticket,
     .span,
-    .drained(setup_drained),
-    .fault(setup_fault)
+    .drained(setup_drained)
   );
   logic head_valid, segment_valid, segment_ready, generated_valid, generated_ready;
   tma_context_ref_t head_payload;
@@ -170,7 +161,6 @@ module blackwell_tma_unit
   blackwell_tma_request_generator walker (
     .clk,
     .rst_n,
-    .halt_i,
     .head_valid,
     .head_payload,
     .ctx,
@@ -184,8 +174,7 @@ module blackwell_tma_unit
     .generated_valid,
     .generated_ready,
     .generated_payload,
-    .drained(walk_drained),
-    .fault(walk_fault)
+    .drained(walk_drained)
   );
   logic
       begin_valid,
@@ -207,7 +196,6 @@ module blackwell_tma_unit
   blackwell_tma_completion_tracker tracker (
     .clk,
     .rst_n,
-    .halt_i,
     .begin_valid,
     .begin_ready,
     .begin_payload,
@@ -239,13 +227,11 @@ module blackwell_tma_unit
     .producer_rsp_valid,
     .producer_rsp_ready,
     .producer_rsp_payload,
-    .drained(track_drained),
-    .fault(track_fault)
+    .drained(track_drained)
   );
   blackwell_tma_data_path data_path (
     .clk,
     .rst_n,
-    .halt_i,
     .start_valid,
     .start_ready,
     .start_payload,
@@ -259,7 +245,7 @@ module blackwell_tma_unit
     .gmem_req_payload(dg_req_payload),
     .gmem_rsp_valid(gmem_rsp_valid && gmem_rsp_payload.id.cls == 0),
     .gmem_rsp_ready(dg_rsp_ready),
-    .gmem_rsp_payload,
+    .gmem_rsp_payload(gmem_return),
     .smem_req_valid,
     .smem_req_ready,
     .smem_req_payload,
@@ -267,8 +253,7 @@ module blackwell_tma_unit
     .smem_rsp_ready,
     .smem_read_blocked,
     .smem_rsp_payload,
-    .drained(data_drained),
-    .fault(data_fault)
+    .drained(data_drained)
   );
   for (genvar i = 0; i < 18; i++)
     assign owner_view[i] = '{
@@ -284,35 +269,12 @@ module blackwell_tma_unit
   assign gmem_req_valid = cg_req_valid || dg_req_valid;
   assign cg_req_ready = req_cache && gmem_req_ready;
   assign dg_req_ready = !req_cache && gmem_req_ready;
-  assign gmem_rsp_ready = gmem_rsp_payload.id.cls == 0 ? dg_rsp_ready :
-      gmem_rsp_payload.id.cls == 1 ? cg_rsp_ready : !fault;
+  assign gmem_rsp_ready = gmem_rsp_payload.id.cls == 1 ? cg_rsp_ready : dg_rsp_ready;
   always_comb begin
-    reject_status = OK;
-    if (cmd_payload.opcode == REJECT) reject_status = UNSUPPORTED;
-    else if (cmd_payload.id.seq == '1) reject_status = INVALID;
-    else if ((cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, PREFETCH_MAP}) &&
-             cmd_payload.map_addr[6:0] != 0)
-      reject_status = INVALID;
-    else if ((cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, LOAD_LINEAR}) &&
-             cmd_payload.smem_addr[3:0] != 0)
-      reject_status = INVALID;
-    else if ((cmd_payload.opcode inside {LOAD_LINEAR, LOAD_TENSOR}) &&
-             (cmd_payload.barrier_addr[2:0] != 0 || cmd_payload.barrier_addr >= 233472))
-      reject_status = RANGE;
-    else if (cmd_payload.opcode == LOAD_LINEAR &&
-             (cmd_payload.global_addr[3:0] != 0 || cmd_payload.bytes[3:0] != 0))
-      reject_status = INVALID;
-    else if (cmd_payload.opcode == LOAD_LINEAR &&
-             (cmd_payload.bytes > 1048575 ||
-              33'(cmd_payload.smem_addr) + 33'(cmd_payload.bytes) > 233472 ||
-              65'(cmd_payload.global_addr) + 65'(cmd_payload.bytes) > 65'h1_0000000000000000))
-      reject_status = RANGE;
-    is_control = cmd_payload.opcode inside {COMMIT_GROUP, WAIT_GROUP_READ, PROXY_FENCE,
-                                            PREFETCH_MAP, REJECT} || reject_status != OK;
-    uses_fifo = reject_status == OK && !(cmd_payload.opcode inside {COMMIT_GROUP, WAIT_GROUP_READ});
+    is_control = cmd_payload.opcode inside {COMMIT_GROUP, WAIT_GROUP_READ, PROXY_FENCE, PREFETCH_MAP};
+    uses_fifo = !(cmd_payload.opcode inside {COMMIT_GROUP, WAIT_GROUP_READ});
     new_ticket = 0;
     available = 0;
-    duplicate = 0;
     rsp_valid = 0;
     rsp_t = 0;
     drained = cache_drained && setup_drained && walk_drained && track_drained && data_drained &&
@@ -320,10 +282,7 @@ module blackwell_tma_unit
     for (int i = 0; i < 20; i++) begin
       ticket_t r;
       r = 5'((int'(rsp_cursor) + i) % 20);
-      if (state[i] != FREE) begin
-        duplicate |= id[i] == cmd_payload.id;
-        drained = 0;
-      end
+      if (state[i] != FREE) drained = 0;
       if (!available && state[i] == FREE && (i < 18 || is_control)) begin
         new_ticket = 5'(i);
         available = 1;
@@ -340,12 +299,10 @@ module blackwell_tma_unit
       rsp_t = held_rsp;
       rsp_valid = 1;
     end
-    rsp_payload = '{done: '{id: id[rsp_t], status: status[rsp_t]}, logical_bytes: total[rsp_t]};
+    rsp_payload = '{done: '{id: id[rsp_t]}, logical_bytes: total[rsp_t]};
     in_payload = '{ticket: new_ticket, cmd: cmd_payload};
-    in_valid = rst_n && !halt_i && !fault && !stop && available && !duplicate && cmd_valid &&
-        cmd_payload.id.epoch == epoch && uses_fifo;
-    cmd_ready = rst_n && !fault && !stop && available && !duplicate &&
-        cmd_payload.id.epoch == epoch && (!uses_fifo || in_ready);
+    in_valid = rst_n && !stop && available && cmd_valid && uses_fifo;
+    cmd_ready = rst_n && !stop && available && (!uses_fifo || in_ready);
   end
   logic deps_clear, fence_clear;
   always_comb begin
@@ -396,11 +353,11 @@ module blackwell_tma_unit
           issue: out_payload,
           raw: out_payload.cmd.opcode == LOAD_LINEAR ? '0 : desc_payload.raw
       };
-  assign result_ready = !fault;
+  assign result_ready = rst_n;
   assign bar_bind_valid = out_valid && state[head_t] == CHECK_DEPS && deps_clear &&
       out_payload.cmd.opcode != STORE_TENSOR;
   assign bar_bind_payload = '{id: out_payload.cmd.id, addr: out_payload.cmd.barrier_addr};
-  assign bar_bind_rsp_ready = !fault;
+  assign bar_bind_rsp_ready = rst_n;
   assign arm_payload = '{ticket: head_t, context_slot: slot[head_t]};
   assign arm_valid = out_valid && state[head_t] == PREPARED && begin_ready;
   assign begin_valid = out_valid && state[head_t] == PREPARED && arm_ready;
@@ -418,12 +375,12 @@ module blackwell_tma_unit
           addr: 64'd0,
           bytes: 32'd0
       };
-  assign order_rsp_ready = !fault;
-  assign out_ready = !halt_i &&
-      (walk_start_valid || (desc_valid && desc_ready && out_payload.cmd.opcode == PREFETCH_MAP) ||
-       (order_rsp_valid && order_rsp_ready && state[head_t] == FENCE_WAIT));
-  assign progress_ready = !fault;
-  assign finish_ready = !fault;
+  assign order_rsp_ready = rst_n;
+  assign out_ready = walk_start_valid ||
+      (desc_valid && desc_ready && out_payload.cmd.opcode == PREFETCH_MAP) ||
+      (order_rsp_valid && order_rsp_ready && state[head_t] == FENCE_WAIT);
+  assign progress_ready = rst_n;
+  assign finish_ready = rst_n;
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       for (int i = 0; i < 20; i++) begin
@@ -433,18 +390,16 @@ module blackwell_tma_unit
       bound <= 0;
       source_done <= 0;
       target_done <= 0;
-      unit_fault <= 0;
       mem_lock <= 0;
       mem_turn <= 0;
       rsp_cursor <= 0;
       rsp_locked <= 0;
-    end else if (!halt_i && !fault) begin
+    end else begin
       if (gmem_req_valid) begin
         mem_lock <= !gmem_req_ready;
         mem_hold <= req_cache;
         if (gmem_req_ready) mem_turn <= !req_cache;
       end
-      if (gmem_rsp_valid && gmem_rsp_payload.id.cls > 1) unit_fault <= 1;
       for (int i = 0; i < 20; i++)
       if (state[i] == GROUP_WAIT) begin
         logic [17:0] remaining;
@@ -470,7 +425,7 @@ module blackwell_tma_unit
           older[i][new_ticket] <= 0;
           if (i < 18 && state[i] != FREE && id[i].issuer == cmd_payload.id.issuer &&
               op[i] inside {LOAD_TENSOR, STORE_TENSOR}) begin
-            if (reject_status == OK && cmd_payload.opcode == COMMIT_GROUP && age[i] != 2)
+            if (cmd_payload.opcode == COMMIT_GROUP && age[i] != 2)
               age[i] <= age[i] + 2'd1;
             if (age[i] > 2'(cmd_payload.wait_n) && !source_done[i] &&
                 !(progress_valid && progress_payload.boundary == 1 &&
@@ -478,13 +433,11 @@ module blackwell_tma_unit
               pending_set[i] = 1;
           end
         end
-        state[new_ticket] <= reject_status != OK || cmd_payload.opcode == COMMIT_GROUP ? RESULT :
+        state[new_ticket] <= cmd_payload.opcode == COMMIT_GROUP ? RESULT :
             cmd_payload.opcode == WAIT_GROUP_READ ? (pending_set == 0 ? RESULT : GROUP_WAIT) :
             QUEUED;
         id[new_ticket] <= cmd_payload.id;
-        // A rejected command owns a response ticket but creates no data or group obligations.
-        op[new_ticket] <= reject_status == OK ? cmd_payload.opcode : REJECT;
-        status[new_ticket] <= reject_status;
+        op[new_ticket] <= cmd_payload.opcode;
         total[new_ticket] <= 0;
         bound[new_ticket] <= 0;
         source_done[new_ticket] <= 0;
@@ -497,34 +450,21 @@ module blackwell_tma_unit
         end
       end
       if (lookup_valid && lookup_ready) state[head_t] <= DESC;
-      if (desc_valid && desc_ready) begin
-        if (desc_payload.ticket != head_t || desc_payload.status != OK) unit_fault <= 1;
-        if (out_payload.cmd.opcode == PREFETCH_MAP) state[head_t] <= RESULT;
-      end
+      if (desc_valid && desc_ready && out_payload.cmd.opcode == PREFETCH_MAP) state[head_t] <= RESULT;
       if (request_valid && request_ready) state[head_t] <= SETUP;
       if (result_valid && result_ready) begin
-        if (!out_valid || result_payload.ticket != head_t || state[head_t] != SETUP ||
-            result_payload.status != OK)
-          unit_fault <= 1;
-        else begin
-          total[head_t] <= result_payload.total_bytes;
-          spans[head_t] <= span[result_payload.context_slot];
-          slot[head_t] <= result_payload.context_slot;
-          state[head_t] <= CHECK_DEPS;
-        end
+        total[head_t] <= result_payload.total_bytes;
+        spans[head_t] <= span[result_payload.context_slot];
+        slot[head_t] <= result_payload.context_slot;
+        state[head_t] <= CHECK_DEPS;
       end
       if (out_valid && state[head_t] == CHECK_DEPS && out_payload.cmd.opcode == STORE_TENSOR &&
           deps_clear)
         state[head_t] <= PREPARED;
       if (bar_bind_valid && bar_bind_ready) state[head_t] <= BIND_WAIT;
       if (bar_bind_rsp_valid && bar_bind_rsp_ready) begin
-        if (!out_valid || state[head_t] != BIND_WAIT || bar_bind_rsp_payload.id != id[head_t] ||
-            bar_bind_rsp_payload.status != OK)
-          unit_fault <= 1;
-        else begin
-          bound[head_t] <= 1;
-          state[head_t] <= PREPARED;
-        end
+        bound[head_t] <= 1;
+        state[head_t] <= PREPARED;
       end
       if (arm_valid && arm_ready) state[head_t] <= ARMED_HEAD;
       if (walk_start_valid) state[head_t] <= ISSUED;
@@ -534,12 +474,56 @@ module blackwell_tma_unit
       end
       if (finish_valid && finish_ready) state[finish_payload] <= RESULT;
       if (order_req_valid && order_req_ready) state[head_t] <= FENCE_WAIT;
-      if (order_rsp_valid && order_rsp_ready) begin
-        if (!out_valid || state[head_t] != FENCE_WAIT || order_rsp_payload.id != id[head_t] ||
-            order_rsp_payload.status != OK)
-          unit_fault <= 1;
-        else state[head_t] <= RESULT;
-      end
+      if (order_rsp_valid && order_rsp_ready) state[head_t] <= RESULT;
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (cmd_valid) begin
+        assert (cmd_payload.id.epoch == epoch && cmd_payload.id.seq != '1);
+        for (int i = 0; i < 20; i++)
+          assert (state[i] == FREE || id[i] != cmd_payload.id);
+        assert (cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, LOAD_LINEAR, COMMIT_GROUP,
+                                          WAIT_GROUP_READ, PROXY_FENCE, PREFETCH_MAP})
+            else $fatal(1, "TMA_CMD_OPCODE");
+        if (!(cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, PREFETCH_MAP}))
+          assert (cmd_payload.map_addr == 0);
+        if (!(cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, LOAD_LINEAR}))
+          assert (cmd_payload.smem_addr == 0);
+        if (!(cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR}))
+          assert ({cmd_payload.coord, cmd_payload.cache_policy} == '0);
+        if (!(cmd_payload.opcode inside {LOAD_TENSOR, LOAD_LINEAR}))
+          assert (cmd_payload.barrier_addr == 0);
+        if (cmd_payload.opcode != LOAD_LINEAR) assert ({cmd_payload.global_addr, cmd_payload.bytes} == '0);
+        if (cmd_payload.opcode != WAIT_GROUP_READ) assert (!cmd_payload.wait_n);
+        if (cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, PREFETCH_MAP})
+          assert (cmd_payload.map_addr[6:0] == 0) else $fatal(1, "TMA_MAP_ALIGNMENT");
+        if (cmd_payload.opcode inside {LOAD_TENSOR, STORE_TENSOR, LOAD_LINEAR})
+          assert (cmd_payload.smem_addr[3:0] == 0);
+        if (cmd_payload.opcode inside {LOAD_TENSOR, LOAD_LINEAR})
+          assert (cmd_payload.barrier_addr[2:0] == 0 && cmd_payload.barrier_addr < 233472);
+        if (cmd_payload.opcode == LOAD_LINEAR)
+          assert (cmd_payload.global_addr[3:0] == 0 && cmd_payload.bytes[3:0] == 0 &&
+                  cmd_payload.bytes <= 1048575 &&
+                  33'(cmd_payload.smem_addr) + 33'(cmd_payload.bytes) <= 233472 &&
+                  65'(cmd_payload.global_addr) + 65'(cmd_payload.bytes) <= 65'h1_0000000000000000);
+      end
+      if (gmem_rsp_valid) begin
+        assert (gmem_rsp_payload.status == OK) else $fatal(1, "TMA GMEM response status must be OK");
+        assert (gmem_rsp_payload.id.cls <= 1);
+      end
+      if (desc_valid) assert (out_valid && state[head_t] == DESC && desc_payload.ticket == head_t);
+      if (result_valid) assert (out_valid && state[head_t] == SETUP && result_payload.ticket == head_t);
+      if (bar_bind_rsp_valid)
+        assert (out_valid && state[head_t] == BIND_WAIT && bar_bind_rsp_payload.id == id[head_t]);
+      if (order_rsp_valid)
+        assert (out_valid && state[head_t] == FENCE_WAIT && order_rsp_payload.id == id[head_t]);
+    end
+  end
+  assert property (@(posedge clk) disable iff (!rst_n)
+      cmd_valid && !cmd_ready |=> cmd_valid && $stable(cmd_payload));
+  assert property (@(posedge clk) disable iff (!rst_n)
+      gmem_rsp_valid && !gmem_rsp_ready |=> gmem_rsp_valid && $stable(gmem_rsp_payload));
+`endif
 endmodule

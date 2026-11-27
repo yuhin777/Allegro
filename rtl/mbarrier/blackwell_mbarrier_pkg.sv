@@ -14,12 +14,11 @@ package blackwell_mbarrier_pkg;
     async_id_t id;
     bar_op_t op;
     logic [31:0] addr, count, bytes;
-    logic parity, guard;
+    logic parity;
     logic [31:0] time_hint;
   } bar_cmd_t;
   typedef struct packed {
     async_id_t id;
-    status_t status;
     logic completed;
   } bar_rsp_t;
   typedef struct packed {
@@ -43,7 +42,6 @@ package blackwell_mbarrier_pkg;
     logic [63:0] value;
   } bar_back_req_t;
   typedef struct packed {
-    status_t status;
     logic [63:0] value;
   } bar_back_rsp_t;
   typedef struct packed {
@@ -54,7 +52,6 @@ package blackwell_mbarrier_pkg;
   typedef struct packed {
     async_id_t id;
     logic [31:0] bytes;
-    status_t status;
   } bar_producer_done_t;
   typedef struct packed {
     logic reserved, initialized, phase;

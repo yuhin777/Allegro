@@ -1,9 +1,8 @@
 // Ancillary issue ports can choose different records. A presented choice is
-// held independently until its consumer accepts it, including during halt.
+// held independently until its consumer accepts it.
 module blackwell_tc_record_select (
   input logic clk,
   input logic rst_n,
-  input logic halt,
   input blackwell_async_pkg::mma_live_t [2:0] live,
   input logic [2:0] eligible,
   output logic valid,
@@ -16,7 +15,7 @@ module blackwell_tc_record_select (
     valid = locked;
     rec = locked ? saved : 0;
     for (int age = 2; age >= 0; age--) begin
-      if (!halt && !locked && live[age].valid && eligible[live[age].rec]) begin
+      if (!locked && live[age].valid && eligible[live[age].rec]) begin
         valid = 1;
         rec = live[age].rec;
       end
@@ -38,12 +37,10 @@ module blackwell_tc_mma_control
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic stop_i,
   input logic [15:0] epoch_i,
   output logic idle_o,
   output logic drained_o,
-  output logic fault_o,
   input logic cmd_valid,
   output logic cmd_ready,
   input mma_cmd_t cmd_payload,
@@ -93,7 +90,7 @@ module blackwell_tc_mma_control
 );
   typedef struct packed {
     mma_cmd_t cmd;
-    logic valid, checked, pin_sent, pinned, bank_bound, bank;
+    logic valid, pin_eligible, pin_sent, pinned, bank_bound, bank;
     logic classified, hit, load_sent, installed, assigned, launched;
     logic [1:0] base_part;
     logic snap_started, sources_done, terminal, reported;
@@ -111,19 +108,9 @@ module blackwell_tc_mma_control
   logic [15:0] previous_epoch;
   logic [2:0][1:0] order_q, order_d;
   logic [1:0] count_q, count_d;
-  logic halt, fault_d;
-  assign halt = halt_i || fault_o;
   assign idle_o = count_q == 0;
   assign drained_o = idle_o;
 
-  function automatic int k_size(logic [2:0] kind);
-    case (kind)
-      0: return 16;
-      1: return 8;
-      5, 6: return 64;
-      default: return 32;
-    endcase
-  endfunction
   function automatic logic [89:0] key(mma_cmd_t c);
     return {c.id.epoch, c.b_desc, c.b_type, c.kind, c.transpose_b, c.n_code};
   endfunction
@@ -132,6 +119,15 @@ module blackwell_tc_mma_control
       0: return 4'b0001 << base;
       1: return 4'b0011 << base;
       default: return 4'b1111;
+    endcase
+  endfunction
+`ifndef SYNTHESIS
+  function automatic int k_size(logic [2:0] kind);
+    case (kind)
+      0: return 16;
+      1: return 8;
+      5, 6: return 64;
+      default: return 32;
     endcase
   endfunction
   function automatic logic desc_ok(mma_cmd_t c, logic side_b);
@@ -172,7 +168,7 @@ module blackwell_tc_mma_control
   function automatic logic cmd_ok(mma_cmd_t c);
     int n, acols, lanes;
     n = 64 << c.n_code;
-    if (c.n_code == 3 || c.id.epoch != epoch_i) return 0;
+    if (c.n_code == 3 || c.id.epoch != epoch_i || (&c.id.seq)) return 0;
     case (c.kind)
       0: if (c.a_type > 1 || c.b_type > 1) return 0;
       1: if (c.a_type != 2 || c.b_type != 2) return 0;
@@ -211,6 +207,7 @@ module blackwell_tc_mma_control
     end else if (!desc_ok(c, 0)) return 0;
     return 1;
   endfunction
+`endif
   function automatic logic overlaps(int a, aw, b, bw);
     return a < b + bw && b < a + aw;
   endfunction
@@ -271,7 +268,7 @@ module blackwell_tc_mma_control
     assign freeing[i] = rec_q[i].bank_bound &&
         (rec_q[i].cmd.kind < 4 ?
          source_free[i] : (release_valid && release_ready && release_rec == i));
-    assign pin_candidates[i] = rec_q[i].checked && !rec_q[i].pin_sent;
+    assign pin_candidates[i] = rec_q[i].pin_eligible && !rec_q[i].pin_sent;
     assign unpin_candidates[i] = rec_q[i].pinned && (&rec_q[i].finished) &&
         (rec_q[i].sources_done || freeing[i]) && (rec_q[i].installed || rec_q[i].hit);
     assign done_candidates[i] = rec_q[i].terminal && !rec_q[i].reported;
@@ -282,7 +279,6 @@ module blackwell_tc_mma_control
   blackwell_tc_record_select pin_pick (
     .clk,
     .rst_n,
-    .halt,
     .live(live_o),
     .eligible(pin_candidates),
     .valid(pin_req_valid),
@@ -292,7 +288,6 @@ module blackwell_tc_mma_control
   blackwell_tc_record_select unpin_pick (
     .clk,
     .rst_n,
-    .halt,
     .live(live_o),
     .eligible(unpin_candidates),
     .valid(unpin_valid),
@@ -302,7 +297,6 @@ module blackwell_tc_mma_control
   blackwell_tc_record_select done_pick (
     .clk,
     .rst_n,
-    .halt,
     .live(live_o),
     .eligible(done_candidates),
     .valid(done_valid),
@@ -312,7 +306,6 @@ module blackwell_tc_mma_control
   blackwell_tc_record_select snapshot_pick (
     .clk,
     .rst_n,
-    .halt,
     .live(live_o),
     .eligible(snap_candidates),
     .valid(start_valid),
@@ -322,7 +315,6 @@ module blackwell_tc_mma_control
   blackwell_tc_record_select release_pick (
     .clk,
     .rst_n,
-    .halt,
     .live(live_o),
     .eligible(release_candidates),
     .valid(release_valid),
@@ -332,7 +324,6 @@ module blackwell_tc_mma_control
   blackwell_tc_record_select load_pick (
     .clk,
     .rst_n,
-    .halt,
     .live(live_o),
     .eligible(load_candidates),
     .valid(load_valid),
@@ -341,7 +332,7 @@ module blackwell_tc_mma_control
   );
   assign pin_req_payload = {rec_q[pin_rec].cmd.id, 1'b0, pin_rec};
   assign unpin_payload = {rec_q[unpin_rec].cmd.id, 1'b0, unpin_rec};
-  assign done_payload = {rec_q[done_rec].cmd.id, OK};
+  assign done_payload = '{id: rec_q[done_rec].cmd.id};
   assign start_payload = {snap_rec, rec_q[snap_rec].bank, rec_q[snap_rec].cmd};
   assign release_payload = rec_q[release_rec].cmd.id;
   assign load_payload = {
@@ -352,7 +343,7 @@ module blackwell_tc_mma_control
     rec_q[load_rec].cmd.transpose_b,
     rec_q[load_rec].cmd.n_code
   };
-  assign pin_rsp_ready = !halt, result_ready = !halt, local_done_ready = {4{!halt}};
+  assign pin_rsp_ready = 1'b1, result_ready = 1'b1, local_done_ready = 4'hf;
 
   always_comb begin
     occupied_banks = 0;
@@ -371,18 +362,18 @@ module blackwell_tc_mma_control
       if (live_o[a].valid) begin
         if (!rec_q[order_q[a]].bank_bound && !rec_q[order_q[a]].sources_done) begin
           bank_rec = order_q[a];
-          bank_offer = rec_q[order_q[a]].pinned && !(&occupied_banks) && !halt;
+          bank_offer = rec_q[order_q[a]].pinned && !(&occupied_banks);
         end
         if (!rec_q[order_q[a]].classified) begin
           lookup_rec = order_q[a];
-          lookup_valid = rec_q[order_q[a]].pinned && !halt;
+          lookup_valid = rec_q[order_q[a]].pinned;
         end
         if (!rec_q[order_q[a]].assigned) begin
           assign_rec = order_q[a];
-          assign_valid = rec_q[order_q[a]].classified && !halt;
+          assign_valid = rec_q[order_q[a]].classified;
         end
         if (!rec_q[order_q[a]].launched) begin
-          first_valid = !halt;
+          first_valid = 1;
           first_rec = order_q[a];
         end
       end
@@ -402,7 +393,6 @@ module blackwell_tc_mma_control
     blackwell_tc_record_select prep_pick (
       .clk,
       .rst_n,
-      .halt,
       .live(live_o),
       .eligible(prep_candidates[c]),
       .valid(prepare_valid[c]),
@@ -412,7 +402,6 @@ module blackwell_tc_mma_control
     blackwell_tc_record_select select_pick (
       .clk,
       .rst_n,
-      .halt,
       .live(live_o),
       .eligible(sel_candidates[c]),
       .valid(b_select_valid[c]),
@@ -517,42 +506,49 @@ module blackwell_tc_mma_control
     free_rec = 0;
     for (int r = 2; r >= 0; r--) if (!rec_q[r].valid) free_rec = 2'(r);
   end
-  assign cmd_ready = !stop_i && !halt && count_q < 3;
+  assign cmd_ready = !stop_i && count_q < 3;
   assign reclaim = count_q != 0 &&
       (rec_q[order_q[0]].reported || (done_valid && done_ready && done_rec == order_q[0]));
+  logic [2:0] pin_match, load_match;
+  logic [3:0][2:0] local_match;
+  for (genvar r = 0; r < 3; r++) begin : g_completion_id
+    assign pin_match[r] = rec_q[r].valid && rec_q[r].cmd.id == pin_rsp_payload.id;
+    assign load_match[r] = rec_q[r].valid && rec_q[r].cmd.id == result_payload.id;
+    for (genvar c = 0; c < 4; c++)
+      assign local_match[c][r] = rec_q[r].valid && rec_q[r].cmd.id == local_done_payload[c].id;
+  end
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) if (rst_n) begin
+    if (cmd_valid) assert (cmd_ok(cmd_payload));
+    if (pin_rsp_valid) assert ($onehot(pin_match));
+    if (result_valid) assert ($onehot(load_match));
+    for (int c = 0; c < 4; c++)
+      if (local_done_valid[c]) assert ($onehot(local_match[c]));
+    for (int r = 0; r < 3; r++) begin
+      if (cmd_valid && cmd_ready) assert (!(rec_q[r].valid && rec_q[r].cmd.id == cmd_payload.id));
+      if (pin_rsp_valid && pin_match[r])
+        assert (rec_q[r].pin_sent && !rec_q[r].pinned && !rec_q[r].terminal);
+      if (result_valid && load_match[r])
+        assert (rec_q[r].load_sent && rec_q[r].assigned && (&rec_q[r].selected) && !rec_q[r].installed);
+      for (int c = 0; c < 4; c++)
+        if (local_done_valid[c] && local_match[c][r])
+          assert (rec_q[r].launched && !rec_q[r].finished[c] && writes_done[c][r]);
+    end
+  end
+`endif
   always_comb begin
-    logic pin_matched, result_matched, duplicate;
-    logic [3:0] local_matched;
     logic [1:0] publish_name;
-    pin_matched = 0;
-    result_matched = 0;
-    duplicate = 0;
-    local_matched = 0;
     publish_name = 0;
     rec_d = rec_q;
     resident_d = resident_q;
     order_d = order_q;
     count_d = count_q;
-    fault_d = fault_o;
-    if (!halt) begin
-      for (int r = 0; r < 3; r++) begin
-        if (rec_q[r].valid && !rec_q[r].checked) begin
-          if (cmd_ok(rec_q[r].cmd)) rec_d[r].checked = 1;
-          else fault_d = 1;
-        end
-      end
+    for (int r = 0; r < 3; r++) begin
+      rec_d[r].pin_eligible = rec_q[r].valid;
+      if (pin_rsp_valid && pin_match[r]) rec_d[r].pinned = 1;
     end
     if (pin_req_valid && pin_req_ready) rec_d[pin_rec].pin_sent = 1;
-    if (pin_rsp_valid && pin_rsp_ready) begin
-      for (int r = 0; r < 3; r++) begin
-        if (rec_q[r].valid && rec_q[r].cmd.id == pin_rsp_payload.id && rec_q[r].pin_sent &&
-            !rec_q[r].pinned && !rec_q[r].terminal && pin_rsp_payload.status == OK) begin
-          rec_d[r].pinned = 1;
-          pin_matched = 1;
-        end
-      end
-      if (!pin_matched) fault_d = 1;
-    end
     if (bank_offer) begin
       rec_d[bank_rec].bank_bound = 1;
       rec_d[bank_rec].bank = bank_number;
@@ -588,11 +584,8 @@ module blackwell_tc_mma_control
     end
     if (result_valid && result_ready) begin
       for (int r = 0; r < 3; r++) begin
-        if (rec_q[r].valid && rec_q[r].cmd.id == result_payload.id && rec_q[r].load_sent &&
-            rec_q[r].assigned && (&rec_q[r].selected) && !rec_q[r].installed &&
-            result_payload.status == OK) begin
+        if (load_match[r]) begin
           publish_name = rec_q[r].cmd.collector_buffer;
-          result_matched = 1;
           rec_d[r].installed = 1;
           if (rec_q[r].cmd.ws && rec_q[r].cmd.collector_op inside {2'd1, 2'd2}) begin
             drop_name(resident_d, publish_name);
@@ -605,19 +598,13 @@ module blackwell_tc_mma_control
           end
         end
       end
-      if (!result_matched) fault_d = 1;
     end
     for (int c = 0; c < 4; c++) begin
       if (prepare_valid[c] && prepare_ready[c]) rec_d[prep_rec[c]].prepared[c] = 1;
       if (b_select_valid[c] && b_select_ready[c]) rec_d[sel_rec[c]].selected[c] = 1;
       if (local_done_valid[c] && local_done_ready[c]) begin
         for (int r = 0; r < 3; r++)
-        if (rec_q[r].valid && rec_q[r].cmd.id == local_done_payload[c].id && rec_q[r].launched &&
-            !rec_q[r].finished[c] && writes_done[c][r] && local_done_payload[c].status == OK) begin
-          local_matched[c] = 1;
-          rec_d[r].finished[c] = 1;
-        end
-        if (!local_matched[c]) fault_d = 1;
+          if (local_match[c][r]) rec_d[r].finished[c] = 1;
       end
     end
     if (launch) rec_d[first_rec].launched = 1;
@@ -632,15 +619,11 @@ module blackwell_tc_mma_control
       count_d = count_q - 1'b1;
     end
     if (cmd_valid && cmd_ready) begin
-      for (int r = 0; r < 3; r++) duplicate |= rec_q[r].valid && rec_q[r].cmd.id == cmd_payload.id;
-      if (duplicate) fault_d = 1;
-      else begin
-        rec_d[free_rec] = '0;
-        rec_d[free_rec].cmd = cmd_payload;
-        rec_d[free_rec].valid = 1;
-        order_d[count_d] = free_rec;
-        count_d = count_d + 1'b1;
-      end
+      rec_d[free_rec] = '0;
+      rec_d[free_rec].cmd = cmd_payload;
+      rec_d[free_rec].valid = 1;
+      order_d[count_d] = free_rec;
+      count_d = count_d + 1'b1;
     end
     if (previous_epoch != epoch_i) for (int n = 0; n < 4; n++) resident_d[n].valid = 0;
   end
@@ -648,14 +631,12 @@ module blackwell_tc_mma_control
     if (!rst_n) begin
       count_q <= 0;
       order_q <= 0;
-      fault_o <= 0;
       previous_epoch <= 0;
       for (int r = 0; r < 3; r++) rec_q[r] <= '0;
       for (int n = 0; n < 4; n++) resident_q[n] <= '0;
     end else begin
       count_q <= count_d;
       order_q <= order_d;
-      fault_o <= fault_d;
       previous_epoch <= epoch_i;
       rec_q <= rec_d;
       resident_q <= resident_d;

@@ -1,7 +1,7 @@
 module tmem_control_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
-  logic clk = 0, rst_n = 0, halt_i = 0, stop_i = 0;
+  logic clk = 0, rst_n = 0, stop_i = 0;
   always #5 clk = !clk;
   logic [15:0] epoch_i;
   logic
@@ -16,9 +16,9 @@ module tmem_control_tb;
   logic pin_req_valid, pin_req_ready, pin_rsp_valid, pin_rsp_ready, unpin_valid, unpin_ready;
   tmem_pin_req_t pin_req_payload, unpin_payload;
   tmem_pin_rsp_t pin_rsp_payload;
-  logic alloc_credit_o, empty_o, mgr_drained, mgr_fault;
+  logic alloc_credit_o, empty_o, mgr_drained;
   logic alloc_valid, alloc_ready, slot_valid, slot_ready, complete_valid, complete_ready;
-  logic wait_cmd_valid, wait_cmd_ready, wait_done_valid, wait_done_ready, wait_drained, wait_fault;
+  logic wait_cmd_valid, wait_cmd_ready, wait_done_valid, wait_done_ready, wait_drained;
   rf_track_alloc_t alloc_payload;
   rf_track_slot_t slot_payload;
   rf_track_done_t complete_payload;
@@ -26,24 +26,24 @@ module tmem_control_tb;
   op_done_t wait_done_payload;
   blackwell_tmem_manager manager (
     .drained_o(mgr_drained),
-    .fault_o(mgr_fault),
     .*
   );
   blackwell_tmem_wait_tracker tracker (
     .drained_o(wait_drained),
-    .fault_o(wait_fault),
     .*
   );
   function automatic async_id_t id(input int seqnum, warp = 0);
     return '{epoch: epoch_i, issuer: 10'(warp * 32), seq: 32'(seqnum)};
   endfunction
-  task automatic management(input logic [1:0] op, input status_t expected);
+  int manage_seq;
+  task automatic management(input logic [1:0] op);
+    manage_seq++;
     manage_cmd_valid = 1;
-    manage_cmd_payload = '{id: id(1), op: op, base: 0, columns: op == 2 ? 10'd0 : 10'd512};
+    manage_cmd_payload = '{id: id(manage_seq), op: op, base: 0, columns: op == 2 ? 10'd0 : 10'd512};
     do @(posedge clk); while (!manage_cmd_ready);
     @(negedge clk);
     manage_cmd_valid = 0;
-    if (!manage_rsp_valid || manage_rsp_payload.status != expected || manage_rsp_payload.base != 0)
+    if (!manage_rsp_valid || manage_rsp_payload.id != manage_cmd_payload.id || manage_rsp_payload.base != 0)
       $fatal;
   endtask
   task automatic register_op(input async_id_t key, input bit is_store, output logic [4:0] slot);
@@ -57,7 +57,7 @@ module tmem_control_tb;
     @(negedge clk);
   endtask
   task automatic complete_op(input async_id_t key, input logic [4:0] slot);
-    complete_payload = '{slot: slot, id: key, status: OK};
+    complete_payload = '{slot: slot, id: key};
     complete_valid = 1;
     do @(posedge clk); while (!complete_ready);
     @(negedge clk);
@@ -70,8 +70,8 @@ module tmem_control_tb;
     epoch_i = 1;
     @(negedge clk);
     if (!alloc_credit_o || !empty_o) $fatal;
-    manage_rsp_ready = 1;
-    management(0, OK);
+    manage_rsp_ready = 0;
+    management(0);
     if (alloc_credit_o || empty_o) $fatal;
     for (int u = 0; u < 5; u++) begin
       pin_req_valid = 1;
@@ -80,12 +80,15 @@ module tmem_control_tb;
       do @(posedge clk); while (!pin_req_ready);
       @(negedge clk);
       pin_req_valid = 0;
-      if (!pin_rsp_valid || pin_rsp_payload.id != id(u + 10) || pin_rsp_payload.status != OK)
+      if (!pin_rsp_valid || pin_rsp_payload.id != id(u + 10))
         $fatal;
     end
     pin_rsp_ready = 0;
-    management(1, INVALID);
-    manage_rsp_ready = 0;
+    if ($test$plusargs("dealloc_pinned")) begin
+      manage_rsp_ready = 1;
+      management(1);
+      $fatal(1, "Expected deallocation lifetime assertion");
+    end
     for (int u = 4; u >= 0; u--) begin
       unpin_valid = 1;
       unpin_payload = '{id: id(u + 10), user: 3'(u)};
@@ -93,14 +96,14 @@ module tmem_control_tb;
       @(negedge clk);
     end
     unpin_valid = 0;
-    if (!pin_rsp_valid || !manage_rsp_valid || mgr_fault) $fatal;
+    if (!pin_rsp_valid || !manage_rsp_valid) $fatal;
     pin_rsp_ready = 1;
     manage_rsp_ready = 1;
-    management(1, OK);
+    management(1);
     if (!alloc_credit_o) $fatal;
-    management(0, OK);
-    management(2, OK);
-    management(1, OK);
+    management(0);
+    management(2);
+    management(1);
     if (alloc_credit_o) $fatal;
     @(negedge clk);
     epoch_end_valid = 1;
@@ -119,7 +122,7 @@ module tmem_control_tb;
     alloc_valid = 1;
     alloc_payload = '{id: id(4), store: 1};
     complete_valid = 1;
-    complete_payload = '{slot: op_slot[0], id: id(1), status: OK};
+    complete_payload = '{slot: op_slot[0], id: id(1)};
     wait_cmd_valid = 1;
     wait_cmd_payload.id = id(3);
     @(posedge clk);
@@ -147,7 +150,7 @@ module tmem_control_tb;
     if (!wait_done_valid || wait_done_payload.id != id(5)) $fatal;
     wait_done_ready = 1;
     @(negedge clk);
-    if (!wait_drained || wait_fault || mgr_fault) $fatal;
+    if (!wait_drained) $fatal;
     stop_i = 0;
     for (int i = 0; i < 64; i++) begin
       register_op(id(6 + i), 1, op_slot[0]);
@@ -156,7 +159,7 @@ module tmem_control_tb;
     wait_cmd_valid = 1;
     wait_cmd_payload.id = id(70);
     @(negedge clk);
-    if (!wait_done_valid || wait_fault) $fatal;
+    if (!wait_done_valid) $fatal;
     $display(
         "PASS TMEM allocation, five independent pins, held responses, wait snapshots and 64 reuses");
     $finish;

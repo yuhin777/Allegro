@@ -1,11 +1,11 @@
 module tmem_subsystem_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
-  logic clk = 0, rst_n = 0, halt_i = 0, stop_i = 0;
+  logic clk = 0, rst_n = 0, stop_i = 0;
   always #5 clk = !clk;
   logic [15:0] epoch_i;
   logic [2:0][60:0] live_i;
-  logic epoch_end_valid, epoch_end_ready, tmem_alloc_credit, drained_o, empty_o, fault_o;
+  logic epoch_end_valid, epoch_end_ready, tmem_alloc_credit, drained_o, empty_o;
   logic tmem_manage_valid, tmem_manage_ready, tmem_manage_rsp_valid, tmem_manage_rsp_ready = 1;
   tmem_manage_cmd_t tmem_manage_payload;
   tmem_manage_rsp_t tmem_manage_rsp_payload;
@@ -75,7 +75,7 @@ module tmem_subsystem_tb;
     do @(posedge clk); while (!tmem_manage_ready);
     @(negedge clk);
     tmem_manage_valid = 0;
-    if (!tmem_manage_rsp_valid || tmem_manage_rsp_payload.status != OK) $fatal;
+    if (!tmem_manage_rsp_valid || tmem_manage_rsp_payload.id != id(1)) $fatal;
     mma_pin_req_valid = 1;
     mma_pin_req_payload = '{id: id(10), user: 0};
     do @(posedge clk); while (!mma_pin_req_ready);
@@ -156,16 +156,15 @@ module tmem_subsystem_tb;
         tc_wr_ack_payload[0][0].tag.token != 128)
       $fatal(
           1,
-          "second returns rd=%b ack=%b token=%h fault=%b",
+          "second returns rd=%b ack=%b token=%h",
           tc_rd_rsp_valid[1][0],
           tc_wr_ack_valid[0][0],
-          tc_wr_ack_payload[0][0].tag.token,
-          fault_o
+          tc_wr_ack_payload[0][0].tag.token
       );
     next_read_ready[1][0] = 1;
     @(negedge clk);
     @(negedge clk);
-    if (!drained_o || fault_o) $fatal;
+    if (!drained_o) $fatal;
     stop_i = 1;
     epoch_end_valid = 1;
     @(posedge clk);

@@ -8,7 +8,6 @@ package blackwell_tmem_pkg;
   } tmem_manage_cmd_t;
   typedef struct packed {
     async_id_t id;
-    status_t status;
     logic [31:0] base;
   } tmem_manage_rsp_t;
   typedef struct packed {
@@ -43,7 +42,6 @@ package blackwell_tmem_pkg;
   typedef struct packed {
     logic [4:0] slot;
     async_id_t id;
-    status_t status;
   } rf_track_done_t;
   typedef struct packed {async_id_t id;} tmem_wait_cmd_t;
   typedef struct packed {
@@ -60,10 +58,8 @@ package blackwell_tmem_pkg;
   typedef struct packed {
     mem_tag_t tag;
     logic [127:0] data;
-    status_t status;
   } tmem_rd_rsp_t;
   typedef struct packed {
     mem_tag_t tag;
-    status_t  status;
   } tmem_wr_ack_t;
 endpackage

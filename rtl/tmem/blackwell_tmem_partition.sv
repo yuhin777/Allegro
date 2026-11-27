@@ -6,7 +6,6 @@ module blackwell_tmem_partition
 ) (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic [31:0] rd_req_valid,
   output logic [31:0] rd_req_ready,
   input tmem_rd_req_t rd_req_payload[32],
@@ -21,10 +20,9 @@ module blackwell_tmem_partition
   output tmem_wr_ack_t wr_ack_payload[32],
   output logic [31:0][1:0] read_credit_o,
   output logic [1:0] write_credit_o,
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
-  logic [31:0] sampling, writing, read_busy, rd_fault, wr_fault;
+  logic [31:0] sampling, writing, read_busy;
   logic [31:0][6:0] read_addr, write_addr;
   logic [31:0][15:0] write_mask;
   logic [31:0][127:0] read_q, write_data;
@@ -47,7 +45,6 @@ module blackwell_tmem_partition
       writing <= '0;
       oldest <= 0;
       writing_slot <= 0;
-      fault_o <= 0;
     end else begin
       writing <= write_fire;
       outstanding <= after_ack;
@@ -56,26 +53,21 @@ module blackwell_tmem_partition
         outstanding[free_slot] <= write_fire;
         oldest <= after_ack[!free_slot] != 0 ? !free_slot : free_slot;
       end else if (after_ack[oldest] == 0) oldest <= !oldest;
-      if (|rd_fault || |wr_fault) fault_o <= 1;
     end
   end
 
   for (genvar b = 0; b < 32; b++) begin : bank
     localparam logic [6:0] LANE = 7'(32 * PARTITION_ID + b);
     logic [1:0] ack_available;
-    logic selected, ack_held, response_held;
+    logic selected;
     for (genvar f = 0; f < 2; f++) begin : ack
       assign ack_available[f] = outstanding[f][b] && !(writing[b] && writing_slot == 1'(f));
       assign retire[f][b] = wr_ack_valid[b] && wr_ack_ready[b] && selected == 1'(f);
     end
     assign selected = ack_available[oldest] ? oldest : !oldest;
-    assign wr_ack_valid[b] = (|ack_available) && (!halt_i || ack_held);
-    assign wr_ack_payload[b] = '{tag: ack_tag[selected][b], status: OK};
-    logic duplicate_wr;
-    assign duplicate_wr = (after_ack[0][b] && ack_tag[0][b] == wr_req_payload[b].tag) ||
-        (after_ack[1][b] && ack_tag[1][b] == wr_req_payload[b].tag);
-    assign wr_fault[b] = wr_req_valid[b] && (wr_req_payload[b].lane != LANE || duplicate_wr);
-    assign wr_req_ready[b] = !halt_i && !fault_o && |free_frame && !wr_fault[b];
+    assign wr_ack_valid[b] = |ack_available;
+    assign wr_ack_payload[b] = '{tag: ack_tag[selected][b]};
+    assign wr_req_ready[b] = |free_frame;
     always_ff @(posedge clk) begin
       if (write_fire[b]) begin
         write_addr[b] <= wr_req_payload[b].word;
@@ -95,34 +87,23 @@ module blackwell_tmem_partition
     tmem_rd_rsp_t response[2];
     logic [127:0] masked_data;
     for (genvar i = 0; i < 16; i++) assign masked_data[8*i+:8] = read_q[b][8*i+:8] & {8{q_mask[i]}};
-    assign rd_rsp_valid[b] = count != 0 && (!halt_i || response_held);
+    assign rd_rsp_valid[b] = count != 0;
     assign rd_rsp_payload[b] = response[head];
     assign deliver = rd_rsp_valid[b] && rd_rsp_ready[b];
-    assign move_q = q_valid && (count < 2 || deliver) && (!halt_i || sampling[b]);
+    assign move_q = q_valid && (count < 2 || deliver);
     wire [2:0] reservations = 3'(count) + 3'(q_valid) + 3'(sampling[b]);
     assign read_credit_o[b] = 2'(3'd3 - reservations + 3'(deliver));
     assign read_busy[b] = reservations != 0;
-    logic duplicate_rd;
-    assign duplicate_rd = (sampling[b] && sample_tag == rd_req_payload[b].tag) ||
-        (q_valid && q_tag == rd_req_payload[b].tag) ||
-        (count != 0 && !deliver && response[head].tag == rd_req_payload[b].tag) ||
-        (count == 2 && response[!head].tag == rd_req_payload[b].tag);
-    assign rd_fault[b] = (rd_req_valid[b] && (rd_req_payload[b].lane != LANE || duplicate_rd)) ||
-        reservations > 3 || (sampling[b] && q_valid && !move_q && !halt_i);
-    assign rd_req_ready[b] = !halt_i && !fault_o && !rd_fault[b] && read_credit_o[b] != 0 &&
+    assign rd_req_ready[b] = read_credit_o[b] != 0 &&
         !(write_fire[b] && wr_req_payload[b].word == rd_req_payload[b].word);
     always_ff @(posedge clk) begin
       if (!rst_n) begin
-        ack_held <= 0;
-        response_held <= 0;
         sampling[b] <= 0;
         q_valid <= 0;
         count <= 0;
         head <= 0;
         tail <= 0;
       end else begin
-        ack_held <= wr_ack_valid[b] && !wr_ack_ready[b];
-        response_held <= rd_rsp_valid[b] && !rd_rsp_ready[b];
         sampling[b] <= rd_req_valid[b] && rd_req_ready[b];
         if (rd_req_valid[b] && rd_req_ready[b]) begin
           read_addr[b] <= rd_req_payload[b].word;
@@ -130,7 +111,7 @@ module blackwell_tmem_partition
           sample_mask <= rd_req_payload[b].byte_mask;
         end
         if (move_q) begin
-          response[tail] <= '{tag: q_tag, data: masked_data, status: OK};
+          response[tail] <= '{tag: q_tag, data: masked_data};
           tail <= !tail;
           q_valid <= 0;
         end
@@ -143,6 +124,25 @@ module blackwell_tmem_partition
         count <= count + 2'(move_q) - 2'(deliver);
       end
     end
+`ifndef SYNTHESIS
+    logic duplicate_wr;
+    assign duplicate_wr = (after_ack[0][b] && ack_tag[0][b] == wr_req_payload[b].tag) ||
+        (after_ack[1][b] && ack_tag[1][b] == wr_req_payload[b].tag);
+    logic duplicate_rd;
+    assign duplicate_rd = (sampling[b] && sample_tag == rd_req_payload[b].tag) ||
+        (q_valid && q_tag == rd_req_payload[b].tag) ||
+        (count != 0 && !deliver && response[head].tag == rd_req_payload[b].tag) ||
+        (count == 2 && response[!head].tag == rd_req_payload[b].tag);
+    always_ff @(posedge clk) begin
+      if (rst_n) begin
+        if (rd_req_valid[b]) assert (rd_req_payload[b].lane == LANE && !duplicate_rd);
+        if (wr_req_valid[b]) assert (wr_req_payload[b].lane == LANE && !duplicate_wr);
+        assert (reservations <= 3 && !(sampling[b] && q_valid && !move_q));
+        if (wr_ack_valid[b] && wr_ack_ready[b]) assert (outstanding[selected][b]);
+        if (deliver) assert (count != 0 && read_busy[b]);
+      end
+    end
+`endif
   end
 
   blackwell_banked_sram #(

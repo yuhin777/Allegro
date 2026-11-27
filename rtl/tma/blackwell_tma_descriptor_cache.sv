@@ -4,7 +4,6 @@ module blackwell_tma_descriptor_cache
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic [15:0] epoch,
   input logic lookup_valid,
   input logic result_ready,
@@ -17,9 +16,8 @@ module blackwell_tma_descriptor_cache
   input tma_desc_req_t lookup_payload,
   output tma_desc_rsp_t result_payload,
   output gmem_req_t gmem_req_payload,
-  input gmem_rsp_t gmem_rsp_payload,
-  output logic drained,
-  output logic fault
+  input tma_gmem_return_t gmem_rsp_payload,
+  output logic drained
 );
   typedef enum logic [1:0] {
     IDLE,
@@ -47,7 +45,7 @@ module blackwell_tma_descriptor_cache
         hit_slot = 2'(i);
       end
     end
-    lookup_ready = rst_n && !fault &&
+    lookup_ready = rst_n &&
         (state == IDLE || (state == COMPARE && hit && (!result_valid || result_ready)));
     gmem_req_valid = state == ISSUE;
     gmem_req_payload = '0;
@@ -57,30 +55,26 @@ module blackwell_tma_descriptor_cache
   end
   // COMPARE reserves the sole result register before launching a miss.
   // No other lookup can fill it before this response.
-  assign gmem_rsp_ready = rst_n && !fault;
+  assign gmem_rsp_ready = rst_n;
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       state <= IDLE;
       valid <= 0;
       result_valid <= 0;
-      fault <= 0;
       cursor <= 0;
       phase <= 0;
       epoch_q <= 0;
-    end else if (!fault) begin
+    end else begin
       if (epoch_q != epoch) begin
-        if (!drained) fault <= 1;
-        else begin
-          valid <= 0;
-          epoch_q <= epoch;
-          cursor <= 0;
-        end
+        valid <= 0;
+        epoch_q <= epoch;
+        cursor <= 0;
       end
       if (result_valid && result_ready) result_valid <= 0;
       if (state == COMPARE && (!result_valid || result_ready)) begin
         if (hit) begin
           result_valid <= 1;
-          result_payload <= '{ticket: owner.ticket, raw: data[hit_slot], status: OK};
+          result_payload <= '{ticket: owner.ticket, raw: data[hit_slot]};
           state <= IDLE;
         end else begin
           victim <= choice;
@@ -90,24 +84,29 @@ module blackwell_tma_descriptor_cache
       if (lookup_valid && lookup_ready) begin
         owner <= lookup_payload;
         state <= COMPARE;
-        if (lookup_payload.id.epoch != epoch || lookup_payload.addr[6:0] != 0) fault <= 1;
       end
       if (gmem_req_valid && gmem_req_ready) state <= WAIT_RSP;
       if (gmem_rsp_valid && gmem_rsp_ready) begin
-        if (state != WAIT_RSP || gmem_rsp_payload.id != gmem_req_payload.id ||
-            gmem_rsp_payload.status != OK)
-          fault <= 1;
-        else begin
-          phase <= !phase;
-          valid[victim] <= 1;
-          addr[victim] <= owner.addr[63:7];
-          data[victim] <= gmem_rsp_payload.data;
-          cursor <= victim + 2'd1;
-          result_valid <= 1;
-          result_payload <= '{ticket: owner.ticket, raw: gmem_rsp_payload.data, status: OK};
-          state <= IDLE;
-        end
+        phase <= !phase;
+        valid[victim] <= 1;
+        addr[victim] <= owner.addr[63:7];
+        data[victim] <= gmem_rsp_payload.data;
+        cursor <= victim + 2'd1;
+        result_valid <= 1;
+        result_payload <= '{ticket: owner.ticket, raw: gmem_rsp_payload.data};
+        state <= IDLE;
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n) begin
+      if (epoch_q != epoch) assert (drained);
+      if (lookup_valid) assert (lookup_payload.id.epoch == epoch && lookup_payload.addr[6:0] == 0);
+      if (gmem_rsp_valid)
+        assert (state == WAIT_RSP && gmem_rsp_payload.id == gmem_req_payload.id)
+            else $fatal(1, "TMA_DESC_RETURN");
+    end
+  end
+`endif
 endmodule

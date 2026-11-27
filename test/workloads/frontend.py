@@ -10,8 +10,8 @@ from workload_protocol import MASK128, pack
 class FrontEnd:
     """Advance one common clock and settle real RF, memory and ordering obligations."""
     wait_cycles = 200_000
-    returns = {"tc_op_done":4,"tc_commit_done":4,"tmem_ldst_done":4,"tmem_wait_done":4,
-               "bar_rsp":5,"tma_rsp":68,"tmem_manage_rsp":36}
+    returns = {"tc_op_done":0,"tc_commit_done":0,"tmem_ldst_done":0,"tmem_wait_done":0,
+               "bar_rsp":1,"tma_rsp":64,"tmem_manage_rsp":32}
     def __init__(self, dut, memory=None):
         self.d = dut
         self.mem = memory
@@ -62,14 +62,11 @@ class FrontEnd:
         await Timer(1,units="ns")
         ready = self.read(probe) if probe else None
         if self.read("rst_n"):
-            assert not self.read("fault"), f"sticky fault at cycle {self.cycle}, requests {list(self.results)[-4:]}"
             for channel,bits in self.returns.items():
                 if self.fired(channel):
                     value=self.read(channel+"_payload")
                     op=value>>bits
                     assert op not in self.results,(channel,op)
-                    status=(value>>(bits-4))&15
-                    assert status==0,(channel,op,status,self.cycle)
                     if channel=="bar_rsp" and op in self.wait_address and value&1:
                         assert op in self.acquired and self.acquired[op]<self.cycle, "wait result bypassed acquire"
                     self.results[op]=(channel,value)
@@ -80,14 +77,12 @@ class FrontEnd:
                 self.rf[op].append((last,(value & ((1<<1024)-1)).to_bytes(128,"little")))
             for channel in ("close_rsp","open_rsp"):
                 if self.fired(channel):
-                    assert self.read(channel+"_payload")==0
                     self.lifecycle.add(channel)
             ack_mask=self.fired("smem_wr_ack")
             for g in range(8):
                 if ack_mask>>g & 1:
-                    value=int(d.smem_wr_ack_payload[g].value)
-                    tag=value>>4
-                    assert value&15==0 and tag in self.written_atoms
+                    tag=int(d.smem_wr_ack_payload[g].value)
+                    assert tag in self.written_atoms
                     del self.written_atoms[tag]
                     self.acks.add(tag)
             if self.fired("gmem_rsp"):
@@ -175,7 +170,7 @@ class FrontEnd:
         op=self.sign(issuer)
         if opcode==4: self.wait_address[op]=addr
         await self.send("bar_cmd",pack((58,op),(4,opcode),(32,addr),(32,count),(32,nbytes),
-                        (1,self.phase[addr] if opcode==4 else 0),(1,0),(32,10000000 if opcode==4 else 0)))
+                        (1,self.phase[addr] if opcode==4 else 0),(32,10000000 if opcode==4 else 0)))
         return op
 
     async def wait_barrier(self,addr,issuer=320):
@@ -242,11 +237,11 @@ class FrontEnd:
         self.d.smem_rd_valid.value=0
         await self.wait_edge("smem_rd_rsp_valid", 1 << group, transaction=tag)
         response=int(self.d.smem_rd_rsp_payload[group].value)
-        assert response>>132==tag and response&15==0
+        assert response>>128==tag
         self.d.smem_rd_rsp_ready.value=255
         await self.edge()
         self.d.lsu_quiescent.value=1
-        return (response>>4)&MASK128
+        return response&MASK128
 
     async def write_smem_lines(self, lines):
         self.d.lsu_quiescent.value=0

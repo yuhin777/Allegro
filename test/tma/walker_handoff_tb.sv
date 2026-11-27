@@ -3,7 +3,7 @@ module walker_handoff_tb;
   bit clk;
   always #1 clk = !clk;
   logic rst_n, head_valid, segment_ready, generated_ready;
-  logic walk_start_valid, slot_release_valid, segment_valid, generated_valid, fault, drained;
+  logic walk_start_valid, slot_release_valid, segment_valid, generated_valid, drained;
   tma_context_ref_t head_payload, walk_start_payload, slot_release_payload;
   tma_context_t ctx[2];
   tma_segment_t segment_payload;
@@ -22,7 +22,6 @@ module walker_handoff_tb;
     head_payload = '{ticket: ticket, context_slot: 1'b0};
   end
   blackwell_tma_request_generator dut (
-    .halt_i(1'b0),
     .*
   );
 
@@ -75,7 +74,7 @@ module walker_handoff_tb;
     @(negedge clk);
     check_segment(3);
     @(negedge clk);
-    if (!drained || fault) $fatal(1, "walker failed to drain");
+    if (!drained) $fatal(1, "walker failed to drain");
     $display("PASS consecutive slot releases and stalled segment / close-only handoffs");
     $finish;
   end

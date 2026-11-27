@@ -3,7 +3,6 @@ module blackwell_tma_request_generator
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic head_valid,
   input tma_context_ref_t head_payload,
   input tma_context_t ctx[2],
@@ -17,8 +16,7 @@ module blackwell_tma_request_generator
   output logic generated_valid,
   output tma_segment_t segment_payload,
   output ticket_t generated_payload,
-  output logic drained,
-  output logic fault
+  output logic drained
 );
   logic walking;
   tma_context_ref_t saved, ref_sel;
@@ -167,7 +165,7 @@ module blackwell_tma_request_generator
   assign segment_valid = valid[2] && !empty[2], generated_valid = valid[2] && empty[2];
   assign space2 = !valid[2] || (empty[2] ? generated_ready : segment_ready);
   assign space1 = !valid[1] || space2, space0 = !valid[0] || space1;
-  assign accept = rst_n && !fault && (walking || head_valid) && space0;
+  assign accept = rst_n && (walking || head_valid) && space0;
   assign walk_start_valid = accept && !walking, slot_release_valid = accept && selected.meta.last;
   assign walk_start_payload = ref_sel, slot_release_payload = ref_sel;
   assign drained = !walking && valid == 0;
@@ -176,8 +174,7 @@ module blackwell_tma_request_generator
     if (!rst_n) begin
       valid <= 0;
       walking <= 0;
-      fault <= 0;
-    end else if (!halt_i) begin
+    end else begin
       if (space2) begin
         valid[2] <= valid[1];
         empty[2] <= empty[1];
@@ -203,9 +200,12 @@ module blackwell_tma_request_generator
         for (int d = 1; d < 4; d++) anchor_q[d] <= next_anchor[d];
         srow_q <= next_srow;
         spanel_q <= next_spanel;
-        if (current_ctx.ticket != ref_sel.ticket || (!zero_length && selected.meta.logical_bytes == 0))
-          fault <= 1;
       end
     end
   end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)
+    if (accept) assert (current_ctx.ticket == ref_sel.ticket &&
+                        (zero_length || selected.meta.logical_bytes != 0));
+`endif
 endmodule

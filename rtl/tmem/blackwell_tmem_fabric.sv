@@ -4,7 +4,6 @@ module blackwell_tmem_fabric
 (
   input logic clk,
   input logic rst_n,
-  input logic halt_i,
   input logic [15:0] epoch_i,
   input logic [2:0][60:0] live_i,
   input logic [5:0][127:0] rd_req_valid,
@@ -19,16 +18,11 @@ module blackwell_tmem_fabric
   output logic [5:0][127:0] wr_ack_valid,
   input logic [5:0][127:0] wr_ack_ready,
   output tmem_wr_ack_t wr_ack_payload[6][128],
-  output logic drained_o,
-  output logic fault_o
+  output logic drained_o
 );
-  logic [3:0] drained, fault;
-  logic [127:0] held_request, bad_port;
+  logic [3:0] drained;
+  logic [127:0] held_request;
   assign drained_o = &drained && held_request == 0;
-  always_ff @(posedge clk)
-    if (!rst_n) fault_o <= 0;
-    else if (|fault || |bad_port) fault_o <= 1;
-
   // The valid bit precedes the index. The cursor points to the next client
   // after the previous successful grant. Priority never displaces a held grant.
   function automatic logic [3:0] select_client(input logic [5:0] choices, input logic [2:0] cursor,
@@ -55,7 +49,6 @@ module blackwell_tmem_fabric
     ) partition (
       .clk,
       .rst_n,
-      .halt_i,
       .rd_req_valid(rv),
       .rd_req_ready(rr),
       .rd_req_payload(r),
@@ -70,16 +63,14 @@ module blackwell_tmem_fabric
       .wr_ack_payload(a),
       .read_credit_o(),
       .write_credit_o(),
-      .drained_o(drained[p]),
-      .fault_o(fault[p])
+      .drained_o(drained[p])
     );
     for (genvar b = 0; b < 32; b++) begin : bank
       localparam int LANE = p * 32 + b;
       logic [3:0] read_pick, write_pick, read_lock, write_lock;
       logic [2:0] read_cursor, write_cursor;
-      logic [5:0] can_read, can_write, bad_read, bad_write;
+      logic [5:0] can_read, can_write;
       logic [5:0] take_return, take_ack;
-      wire choose_new = !halt_i && !fault_o;
       wire [2:0] read_preference = rd_req_payload[p][LANE].tag.token[15:13] == 2 ? 3'(p) : 3'd7;
       wire [2:0] write_preference = wr_req_payload[p][LANE].tag.token[15:13] == 0 ? 3'(p) : 3'd7;
       assign write_pick = write_lock[3] ? write_lock : select_client(
@@ -94,17 +85,22 @@ module blackwell_tmem_fabric
       assign w[b] = wr_req_payload[write_pick[2:0]][LANE];
       assign dr[b] = |take_return;
       assign ar[b] = |take_ack;
-      assign bad_port[LANE] = |bad_read || |bad_write;
       assign held_request[LANE] = read_lock[3] || write_lock[3];
       for (genvar c = 0; c < 6; c++) begin : client
-        assign bad_read[c] = rd_req_valid[c][LANE] &&
-            (rd_req_payload[c][LANE].lane != 7'(LANE) || rd_req_payload[c][LANE].tag.client !=
-             4'(c) || rd_req_payload[c][LANE].tag.id.epoch != epoch_i);
-        assign bad_write[c] = wr_req_valid[c][LANE] &&
-            (wr_req_payload[c][LANE].lane != 7'(LANE) || wr_req_payload[c][LANE].tag.client !=
-             4'(c) || wr_req_payload[c][LANE].tag.id.epoch != epoch_i || c == 4);
-        assign can_write[c] = choose_new && wr_req_valid[c][LANE] && !bad_write[c];
-        assign can_read[c] = choose_new && rd_req_valid[c][LANE] && !bad_read[c] &&
+`ifndef SYNTHESIS
+        always_ff @(posedge clk) begin
+          if (rst_n && rd_req_valid[c][LANE])
+            assert (rd_req_payload[c][LANE].lane == 7'(LANE) &&
+                    rd_req_payload[c][LANE].tag.client == 4'(c) &&
+                    rd_req_payload[c][LANE].tag.id.epoch == epoch_i);
+          if (rst_n && wr_req_valid[c][LANE])
+            assert (wr_req_payload[c][LANE].lane == 7'(LANE) &&
+                    wr_req_payload[c][LANE].tag.client == 4'(c) &&
+                    wr_req_payload[c][LANE].tag.id.epoch == epoch_i && c != 4);
+        end
+`endif
+        assign can_write[c] = wr_req_valid[c][LANE];
+        assign can_read[c] = rd_req_valid[c][LANE] &&
             !(wv[b] && wr[b] && w[b].word == rd_req_payload[c][LANE].word);
         assign wr_req_ready[c][LANE] = write_pick == {1'b1, 3'(c)} && wr[b];
         assign rd_req_ready[c][LANE] = read_pick == {1'b1, 3'(c)} && rr[b];

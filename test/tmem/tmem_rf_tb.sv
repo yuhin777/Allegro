@@ -3,7 +3,7 @@
 module tmem_rf_tb;
   import blackwell_async_pkg::*;
   import blackwell_tmem_pkg::*;
-  logic clk = 0, rst_n = 0, halt_i = 0, stop_i = 0;
+  logic clk = 0, rst_n = 0, stop_i = 0;
   always #5 clk = !clk;
   int cycle;
   always @(posedge clk) cycle <= cycle + 1;
@@ -24,21 +24,21 @@ module tmem_rf_tb;
   tmem_unpin_t unpin_payload;
   op_done_t done_payload;
   rf_track_done_t track_done_payload;
-  logic fault_o, drained_o;
+  logic drained_o;
   localparam int BASE_LANE = 64;
   logic [31:0] read_ready, write_ready, return_valid, ack_valid;
   tmem_rd_req_t read_data[32];
   tmem_rd_rsp_t return_data[32];
   tmem_wr_req_t write_data[32];
   tmem_wr_ack_t ack_data[32];
-  logic part_fault, part_drained, inject_final_error, allow_fault;
+  logic part_drained;
+  bit corrupt_final_ack;
   blackwell_tmem_ldst_engine dut (.*);
   blackwell_tmem_partition #(
     .PARTITION_ID(BASE_LANE / 32)
   ) part (
     .clk,
     .rst_n,
-    .halt_i,
     .rd_req_valid(rd_req_valid[BASE_LANE+:32]),
     .rd_req_ready(read_ready),
     .rd_req_payload(read_data),
@@ -53,8 +53,7 @@ module tmem_rf_tb;
     .wr_ack_payload(ack_data),
     .read_credit_o(),
     .write_credit_o(),
-    .drained_o(part_drained),
-    .fault_o(part_fault)
+    .drained_o(part_drained)
   );
   for (genvar t = 0; t < 128; t++) begin
     if (t >= BASE_LANE && t < BASE_LANE + 32) begin
@@ -66,9 +65,11 @@ module tmem_rf_tb;
       assign rd_rsp_valid[t] = return_valid[B];
       assign wr_ack_valid[t] = ack_valid[B];
       assign rd_rsp_payload[t] = return_data[B];
-      assign wr_ack_payload[t].tag = ack_data[B].tag;
-      assign wr_ack_payload[t].status = B == 0 && inject_final_error &&
-          ack_data[B].tag.token[14:8] == 15 ? MEMORY : ack_data[B].status;
+      always_comb begin
+        wr_ack_payload[t] = ack_data[B];
+        if (B == 0 && corrupt_final_ack && ack_data[B].tag.token[14:8] == 15)
+          wr_ack_payload[t].tag.token[0] = 1;
+      end
     end else begin
       assign rd_req_ready[t] = 0;
       assign wr_req_ready[t] = 0;
@@ -84,10 +85,8 @@ module tmem_rf_tb;
       if (pin_rsp_valid && pin_rsp_ready) pin_rsp_valid <= 0;
       if (pin_req_valid && pin_req_ready) begin
         pin_rsp_valid <= 1;
-        pin_rsp_payload <= '{id: pin_req_payload.id, status: OK};
+        pin_rsp_payload <= '{id: pin_req_payload.id};
       end
-      if ((fault_o && !allow_fault) || part_fault)
-        $fatal(1, "unexpected fault at cycle %0d", cycle);
     end
   end
   int first_read, last_read, nread, last_ack;
@@ -188,7 +187,13 @@ module tmem_rf_tb;
   initial begin
     repeat (3) @(negedge clk);
     rst_n = 1;
+    if ($test$plusargs("bad_range")) begin
+      issue(0, 1, 65535, 1);
+      $fatal(1, "Expected widened LD range assertion");
+    end
+    corrupt_final_ack = $test$plusargs("wrong_ack");
     store16(464, 1);
+    if (corrupt_final_ack) $fatal(1, "Expected store ACK assertion");
     store16(480, 2);
     store16(496, 3);
     load_regs(1, 0, 480, 4);
@@ -196,30 +201,7 @@ module tmem_rf_tb;
       load_regs(0, 0, 468 + offset, 5 + offset);
       load_regs(1, 1, 468 + offset, 9 + offset);
     end
-    allow_fault = 1;
-    issue(0, 1, 65535, 15);
-    @(negedge clk);
-    if (!fault_o || pin_req_valid || (|rd_req_valid)) $fatal(1, "range precheck");
-    rst_n = 0;
-    @(negedge clk);
-    rst_n = 1;
-    inject_final_error = 1;
-    issue(1, 0, 0, 20);
-    for (int j = 0; j < 16; j++) begin
-      rf_store_valid = 1;
-      rf_store_payload = '{id: issue_payload.cmd.id, index: 7'(j), last: j == 15, data: '1};
-      do @(posedge clk); while (!rf_store_ready);
-      @(negedge clk);
-    end
-    rf_store_valid = 0;
-    repeat (6) begin
-      @(negedge clk);
-      if (unpin_valid || done_valid || track_done_valid)
-        $fatal(1, "failed ACK settled the dependency");
-    end
-    if (!fault_o || drained_o) $fatal;
-    $display(
-        "PASS TMEM RF masked writes, ACK and RF edges, unaligned handoff, range and late MEMORY");
+    $display("PASS TMEM RF masked writes, ACK and RF edges, and unaligned handoff");
     $finish;
   end
   initial begin

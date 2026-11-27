@@ -1,5 +1,8 @@
 SIM ?= verilator
 TOPLEVEL_LANG := verilog
+ifeq ($(SIM),verilator)
+COMPILE_ARGS += --assert
+endif
 TOPLEVEL := blackwell_smem_subsystem
 MODULE ?= smem_subsystem_tests
 REPO := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)

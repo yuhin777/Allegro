@@ -28,7 +28,7 @@ class Fabric:
     def __init__(self, dut):
         self.d = dut
         self.d.clk.value = self.d.rst_n.value = 0
-        self.d.epoch.value = self.d.stop.value = self.d.halt_i.value = 0
+        self.d.epoch.value = self.d.stop.value = 0
         for name in ("tma_cmd", "bar_cmd", "tc_req", "gmem_rsp", "order_rsp", "flush_req",
                      "tc_smem_req", "smem_rd", "smem_wr"):
             getattr(dut, name + "_valid").value = 0
@@ -42,7 +42,6 @@ class Fabric:
         self.pending = deque()
         self.order = [deque() for _ in range(3)]
         self.results = {}
-        self.expected_status = {}
         self.cycle = 0
         self.seq = 0
         self.gmem_requests = 0
@@ -57,7 +56,7 @@ class Fabric:
     def val(self, name):
         return int(getattr(self.d, name).value)
 
-    async def edge(self, probe=None, allow_fault=False):
+    async def edge(self, probe=None):
         d = self.d
         d.gmem_rsp_valid.value = bool(self.pending)
         d.gmem_rsp_payload.value = self.pending[0] if self.pending else 0
@@ -69,8 +68,6 @@ class Fabric:
         if self.val("rst_n"):
             if self.load_write_addresses is not None and self.val("t_req_v") & self.val("t_req_r") & 1:
                 self.load_write_addresses.append((int(d.t_req[0].value) >> 144) & 0xffffffff)
-            if not allow_fault:
-                assert not self.val("fault"), self.cycle
             if self.pending and self.val("gmem_rsp_ready"):
                 self.pending.popleft()
             if self.val("gmem_req_valid") and self.val("gmem_req_ready"):
@@ -104,17 +101,14 @@ class Fabric:
                 if q and self.val("order_rsp_ready") >> i & 1:
                     q.popleft()
                 if self.val("order_req_valid") >> i & 1:
-                    q.append((int(d.order_req_payload[i].value) >> 105) << 4)
+                    q.append(int(d.order_req_payload[i].value) >> 105)
             for g in range(8):
                 if self.val("smem_rd_rsp_valid") >> g & 1:
                     val = int(d.smem_rd_rsp_payload[g].value)
-                    assert not val & 15
-                    self.atoms[val >> 132] = ((val >> 4) & ((1 << 128) - 1)).to_bytes(16, "little")
-            for channel, suffix in [("tma_rsp", 68), ("bar_rsp", 5)]:
+                    self.atoms[val >> 128] = (val & ((1 << 128) - 1)).to_bytes(16, "little")
+            for channel, suffix in [("tma_rsp", 64), ("bar_rsp", 1)]:
                 if self.val(channel + "_valid") and self.val(channel + "_ready"):
                     p = self.val(channel + "_payload")
-                    expected = self.expected_status.pop(p >> suffix, 0)
-                    assert ((p >> (suffix - 4)) & 15) == expected
                     assert p >> suffix not in self.results
                     self.results[p >> suffix] = p & ((1 << suffix) - 1)
         d.clk.value = 1
@@ -124,7 +118,6 @@ class Fabric:
         if self.cycle >= 20000:
             raise TimeoutError(
                 f"cycle {self.cycle}, probe={probe}, last sequence={self.seq}, "
-                f"pending response IDs={list(self.expected_status)}, "
                 f"held reads={len(self.held_reads)}, held store ACKs={len(self.store_acks)}"
             )
         return ready
@@ -146,12 +139,14 @@ class Fabric:
         self.seq += 1
         return (1 << 42) | self.seq
 
-    async def tma(self, opcode, map_addr=0, coord=(0, 0, 0, 0), smem=0xf0, expected_status=0):
-        key = self.id()
-        self.expected_status[key] = expected_status
+    async def tma(self, opcode, map_addr=0, coord=(0, 0, 0, 0), smem=0xf0, issuer=0, wait_n=0):
+        assert wait_n in (0, 1)
+        key = self.id() | (issuer << 32)
+        smem = smem if opcode in (0, 1) else 0
+        barrier = 0x1000 if opcode == 0 else 0
         coords = sum((c & 0xffffffff) << (i * 32) for i, c in enumerate(coord))
         await self.send("tma_cmd", packed((58, key), (3, opcode), (64, map_addr), (32, smem),
-                                         (64, 0), (32, 0), (32, 0x1000), (128, coords), (64, 0), (1, 0)))
+                                         (64, 0), (32, 0), (32, barrier), (128, coords), (64, 0), (1, wait_n)))
         return key
 
     async def linear(self, origin, target, size):
@@ -171,11 +166,10 @@ class Fabric:
                 pass
         self.d.smem_wr_valid.value = 0
 
-    async def bar(self, op, count=0, nbytes=0, hint=0, addr=0x1000, issuer=0, expected_status=0):
+    async def bar(self, op, count=0, nbytes=0, hint=0, addr=0x1000, issuer=0):
         key = self.id() | (issuer << 32)
-        self.expected_status[key] = expected_status
         await self.send("bar_cmd", packed((58, key), (4, op), (32, addr), (32, count), (32, nbytes),
-                                         (1, 0), (1, 0), (32, hint)))
+                                         (1, 0), (32, hint)))
         return key
 
     async def check_smem(self, addresses):

@@ -1,7 +1,7 @@
 module wait_boundary_tb;
   import blackwell_async_pkg::*;
   import blackwell_mbarrier_pkg::*;
-  logic clk = 0, rst_n = 0, halt_i = 0, stop = 0;
+  logic clk = 0, rst_n = 0, stop = 0;
   logic [15:0] epoch = 1;
   logic
       wait_cmd_valid,
@@ -21,8 +21,8 @@ module wait_boundary_tb;
   bar_service_req_t probe_req_payload;
   bar_service_rsp_t probe_rsp_payload;
   order_req_t acquire_req_payload;
-  order_rsp_t acquire_rsp_payload;
-  logic change_valid, addr_busy, drained, fault;
+  op_done_t acquire_rsp_payload;
+  logic change_valid, addr_busy, drained;
   bar_change_t change_payload;
   logic [31:0] busy_addr = 128;
   blackwell_mbarrier_wait dut (
@@ -51,7 +51,7 @@ module wait_boundary_tb;
     probe_rsp_payload = '{
         route: 2'd1,
         slot: probe_req_payload.slot,
-        rsp: '{id: id, status: OK, completed: 0},
+        rsp: '{id: id, completed: 0},
         phase: 0,
         initialized: 1
     };
@@ -80,7 +80,7 @@ module wait_boundary_tb;
       acquire_req_ready = 1;
       @(negedge clk);
       acquire_req_ready = 0;
-      acquire_rsp_payload = '{id: id, status: OK};
+      acquire_rsp_payload = '{id: id};
       acquire_rsp_valid = 1;
       @(negedge clk);
       acquire_rsp_valid = 0;
@@ -88,7 +88,7 @@ module wait_boundary_tb;
     repeat (2) begin
       @(posedge clk);
       if (!wait_rsp_valid || wait_rsp_payload.id != id || wait_rsp_payload.completed !=
-          (flip_at == 64) || wait_rsp_payload.status != OK || !addr_busy || fault)
+          (flip_at == 64) || !addr_busy)
         $fatal(1, "wrong parity at boundary");
       @(negedge clk);
     end
@@ -97,6 +97,61 @@ module wait_boundary_tb;
     wait_rsp_ready = 0;
     if (!drained || addr_busy) $fatal(1, "wait slot retained");
   endtask
+  // An already queued wait must allocate during drain. A phase match before
+  // dispatch may complete its acquire, but the initial QUERY still owns a return.
+  task automatic early_match_during_drain;
+    async_id_t key;
+    bar_service_req_t held;
+    key = '{epoch: epoch, issuer: 10'd9, seq: 32'd4};
+    @(negedge clk);
+    stop = 1;
+    wait_cmd_payload = '0;
+    wait_cmd_payload.op = BAR_TRY;
+    wait_cmd_payload.id = key;
+    wait_cmd_payload.addr = busy_addr;
+    wait_cmd_valid = 1;
+    @(posedge clk);
+    if (!wait_cmd_ready) $fatal(1, "queued wait blocked during drain");
+    @(negedge clk);
+    wait_cmd_valid = 0;
+    held = probe_req_payload;
+    change_valid = 1;
+    change_payload = '{addr: busy_addr, phase: 1, initialized: 1};
+    @(posedge clk);
+    if (!probe_req_valid || held.route != 1 || held.cmd.op != BAR_QUERY || held.cmd.id != key)
+      $fatal(1, "missing initial QUERY");
+    @(negedge clk);
+    change_valid = 0;
+    acquire_req_ready = 1;
+    @(posedge clk);
+    if (!acquire_req_valid || acquire_req_payload.id != key) $fatal;
+    @(negedge clk);
+    acquire_req_ready = 0;
+    acquire_rsp_valid = 1;
+    acquire_rsp_payload.id = key;
+    @(negedge clk);
+    acquire_rsp_valid = 0;
+    repeat (3) begin
+      @(posedge clk);
+      if (!probe_req_valid || probe_req_payload != held || wait_rsp_valid) $fatal;
+      @(negedge clk);
+    end
+    probe_req_ready = 1;
+    @(negedge clk);
+    probe_req_ready = 0;
+    if (probe_req_valid || wait_rsp_valid) $fatal;
+    probe_rsp_valid = 1;
+    probe_rsp_payload = '{route: held.route, slot: held.slot, rsp: '{id: key, completed: 0},
+                          phase: 0, initialized: 1};
+    @(negedge clk);
+    probe_rsp_valid = 0;
+    wait_rsp_ready = 1;
+    @(posedge clk);
+    if (!wait_rsp_valid || wait_rsp_payload.id != key || !wait_rsp_payload.completed) $fatal;
+    @(negedge clk);
+    wait_rsp_ready = 0;
+    if (!drained || addr_busy) $fatal;
+  endtask
   initial begin
     repeat (3) @(negedge clk);
     rst_n = 1;
@@ -104,7 +159,8 @@ module wait_boundary_tb;
     check(1, 0, 65);
     check(2, 641, 64);
     check(3, 641, 65);
-    $display("PASS ARMED deadline and following edge for hints 0 and 641");
+    early_match_during_drain();
+    $display("PASS early match with stalled drain QUERY, ARMED deadline and following edge for hints 0 and 641");
     $finish;
   end
 endmodule

@@ -6,7 +6,7 @@ module linear_two_phase_tb;
   logic clk, rst_n, stop;
   logic [15:0] epoch;
   mma_live_t live[3];
-  logic drained, fault;
+  logic drained;
   logic tma_cmd_valid, tma_rsp_ready, bar_cmd_valid, bar_rsp_ready, tc_req_valid, tc_rsp_ready;
   logic tma_cmd_ready, tma_rsp_valid, bar_cmd_ready, bar_rsp_valid, tc_req_ready, tc_rsp_valid;
   tma_cmd_t tma_cmd_payload;
@@ -22,14 +22,13 @@ module linear_two_phase_tb;
   logic [2:0] order_req_ready, order_rsp_valid;
   logic [2:0] order_req_valid, order_rsp_ready;
   order_req_t order_req_payload[3];
-  order_rsp_t order_rsp_payload[3];
+  op_done_t order_rsp_payload[3];
   logic [31:0] commit_candidate_addr;
   logic commit_blocked;
   logic [31:0] commit_busy_addr;
   logic commit_addr_busy;
   logic flush_req_valid, flush_rsp_ready;
   logic flush_req_ready, flush_rsp_valid;
-  status_t flush_rsp_payload;
   logic [4:0][7:0] tc_smem_req_valid, tc_smem_rsp_ready;
   logic [4:0][7:0] tc_smem_req_ready, tc_smem_rsp_valid;
   smem_rd_req_t tc_smem_req_payload[5][8];
@@ -56,7 +55,6 @@ module linear_two_phase_tb;
   always #1 clk = !clk;
   int cycle, sequence_number, done_count, arrivals, flips, reads_issued, acks;
   logic [7:0] phase_results;
-  logic halt_i = 0;
   function automatic async_id_t new_id(input int n);
     return '{epoch: 16'd1, issuer: '0, seq: 32'(n)};
   endfunction
@@ -92,34 +90,11 @@ module linear_two_phase_tb;
           // In this single-clock model GMEM read samples initialized data.
           // LSU observations issue only after acquire; writes commit in the SRAM macro.
           order_rsp_valid[s] <= 1;
-          order_rsp_payload[s] <= '{id: order_req_payload[s].id, status: OK};
+          order_rsp_payload[s] <= '{id: order_req_payload[s].id};
           if (s == 2 && flips <= arrivals) $fatal(1, "acquire before phase flip");
         end
       end
     end
-  end
-  for (genvar g = 0; g < 8; g++) begin
-    always @(posedge clk)
-      if (rst_n) begin
-        if (dut.fabric.groups[g].capture && dut.fabric.groups[g].rd_bad)
-          $fatal(
-              1,
-              "invalid read g=%0d client=%0d addr=%h tag=%h",
-              g,
-              dut.fabric.groups[g].reader,
-              dut.fabric.rd_req_payload[dut.fabric.groups[g].reader][g].addr,
-              dut.fabric.groups[g].new_dest.tag
-          );
-        if (dut.fabric.groups[g].write_fire && dut.fabric.groups[g].wr_bad)
-          $fatal(
-              1,
-              "invalid write g=%0d client=%0d addr=%h tag=%h",
-              g,
-              dut.fabric.groups[g].writer,
-              dut.fabric.wr_req_payload[dut.fabric.groups[g].writer][g].addr,
-              dut.fabric.wr_req_payload[dut.fabric.groups[g].writer][g].tag
-          );
-      end
   end
   logic last_phase;
   always_ff @(posedge clk) begin
@@ -130,21 +105,7 @@ module linear_two_phase_tb;
       acks <= 0;
       last_phase <= 0;
     end else begin
-      if (fault)
-        $fatal(
-            1,
-            "fault at %0d local=%b tma=%b%b%b%b%b%b",
-            cycle,
-            dut.local_fault,
-            dut.tma.unit_fault,
-            dut.tma.setup_fault,
-            dut.tma.walk_fault,
-            dut.tma.track_fault,
-            dut.tma.data_fault,
-            dut.tma.cache_fault
-        );
       if (tma_rsp_valid && tma_rsp_ready) begin
-        if (tma_rsp_payload.done.status != OK) $fatal(1, "TMA rejected command");
         if (tma_rsp_payload.logical_bytes == 4096) done_count <= done_count + 1;
         else if (tma_rsp_payload.logical_bytes != 0) $fatal(1, "wrong byte count");
       end
@@ -185,7 +146,7 @@ module linear_two_phase_tb;
     @(negedge clk);
     bar_cmd_valid = 0;
     do @(posedge clk); while (!bar_rsp_valid);
-    if (bar_rsp_payload.status != OK || bar_rsp_payload.id != id)
+    if (bar_rsp_payload.id != id)
       $fatal(1, "barrier response mismatch");
     predicate = bar_rsp_payload.completed;
   endtask
