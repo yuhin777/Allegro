@@ -433,3 +433,63 @@ async def full_wait_table_with_dirty_evictions(dut):
     for addr in addresses[1:]:
         assert await f.result(await f.bar(4, addr=addr)) == 0
     assert await f.result(await f.bar(4)) == 1
+
+
+@cocotb.test()
+async def fifo_ticket_holds_until_command_transfer(dut):
+    f = Fabric(dut)
+    await f.reset()
+    dut.gmem_req_ready.value = 0
+    dut.tma_rsp_ready.value = 0
+    commit = await f.tma(3)
+    f.mem[:128] = descriptor(0x4000, (64, 1, 1, 1), (128, 128, 128), box=(64, 1, 1, 1))
+    issued = [await f.tma(6) for _ in range(8)]
+    pending = f.id()
+    dut.tma_cmd_valid.value = 1
+    dut.tma_cmd_payload.value = packed((58, pending), (3, 6), (417, 0))
+    assert not await f.edge("tma_cmd_ready")
+    held = int(dut.tma.in_payload.value)
+    dut.tma_rsp_ready.value = 1
+    assert not await f.edge("tma_cmd_ready")
+    assert commit in f.results
+    for _ in range(2):
+        assert not await f.edge("tma_cmd_ready")
+        assert int(dut.tma.in_valid.value) and int(dut.tma.in_payload.value) == held
+    dut.gmem_req_ready.value = 1
+    await f.send("tma_cmd", packed((58, pending), (3, 6), (417, 0)))
+    for op in [commit, *issued, pending]:
+        assert await f.result(op) == 0
+    assert f.map_reads == [0]
+
+
+@cocotb.test()
+async def service_driver_samples_only_transferred_lanes(dut):
+    f = Fabric(dut)
+    await f.reset()
+    dut.order_req_ready.value = 6
+    fence = await f.tma(5)
+    while not (await f.edge("order_req_valid") & 1):
+        pass
+    for _ in range(3):
+        assert not f.order[0] and fence not in f.results
+        assert await f.edge("order_req_valid") & 1
+    dut.order_req_ready.value = 7
+    assert await f.result(fence) == 0
+
+    tags = [packed((58, f.id()), (4, 12), (16, g)) for g in range(2)]
+    dut.smem_rd_rsp_ready.value = 2
+    for g, tag in enumerate(tags):
+        dut.smem_rd_payload[g].value = packed((78, tag), (32, 16*g), (16, 65535))
+    mask = 3
+    while mask:
+        dut.smem_rd_valid.value = mask
+        mask &= ~await f.edge("smem_rd_ready")
+    dut.smem_rd_valid.value = 0
+    while tags[1] not in f.atoms:
+        await f.edge()
+    for _ in range(3):
+        assert await f.edge("smem_rd_rsp_valid") & 1
+        assert tags[0] not in f.atoms
+    dut.smem_rd_rsp_ready.value = 255
+    await f.edge()
+    assert tags[0] in f.atoms

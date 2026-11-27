@@ -84,7 +84,8 @@ module blackwell_tma_unit
   logic cache_drained, setup_drained, walk_drained, track_drained, data_drained;
   logic available, uses_fifo, is_control;
   ticket_t new_ticket, head_t, rsp_t, rsp_cursor, held_rsp;
-  logic rsp_locked;
+  logic rsp_locked, ticket_locked;
+  ticket_t held_ticket;
   assign head_t = out_payload.ticket;
   logic
       lookup_valid, lookup_ready, desc_valid, desc_ready, cg_req_valid, cg_req_ready, cg_rsp_ready;
@@ -295,6 +296,7 @@ module blackwell_tma_unit
     // Preserve the general tickets while either reserved control ticket is free.
     if (is_control && state[19] == FREE) new_ticket = 19;
     if (is_control && state[18] == FREE) new_ticket = 18;
+    if (ticket_locked) new_ticket = held_ticket;
     if (rsp_locked) begin
       rsp_t = held_rsp;
       rsp_valid = 1;
@@ -394,7 +396,11 @@ module blackwell_tma_unit
       mem_turn <= 0;
       rsp_cursor <= 0;
       rsp_locked <= 0;
+      ticket_locked <= 0;
     end else begin
+      // Only this ingress allocates tickets. A held ticket stays free until fire.
+      ticket_locked <= in_valid && !in_ready;
+      if (in_valid && !in_ready && !ticket_locked) held_ticket <= new_ticket;
       if (gmem_req_valid) begin
         mem_lock <= !gmem_req_ready;
         mem_hold <= req_cache;
@@ -521,6 +527,8 @@ module blackwell_tma_unit
         assert (out_valid && state[head_t] == FENCE_WAIT && order_rsp_payload.id == id[head_t]);
     end
   end
+  assert property (@(posedge clk) disable iff (!rst_n)
+      in_valid && !in_ready |=> in_valid && $stable(in_payload));
   assert property (@(posedge clk) disable iff (!rst_n)
       cmd_valid && !cmd_ready |=> cmd_valid && $stable(cmd_payload));
   assert property (@(posedge clk) disable iff (!rst_n)

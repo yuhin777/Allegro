@@ -73,7 +73,7 @@ For larger environments, OpenTitan SPI_HOST illustrates separate stimulus, monit
 
 ### SMEM, TMA and memory barriers
 
-The [SMEM subsystem scenarios](tma/smem_subsystem_tests.py) exercise tensor addressing, copy throughput, store groups and barrier waits. Their [fabric driver](tma/smem_fabric_driver.py) drives the clock and ports, serves GMEM and ordering responses, and records handshakes. The bound setup product checker runs in the same model. Seven [negative cases](tma/run_assertions.sh) run in separate simulations and require the designated assertion for each illegal opcode, map alignment, unsolicited return, malformed descriptor or expanded address overflow.
+The [SMEM subsystem scenarios](tma/smem_subsystem_tests.py) exercise tensor addressing, copy throughput, store groups and barrier waits. Their [fabric driver](tma/smem_fabric_driver.py) drives the clock and ports, serves GMEM and ordering responses, and records handshakes. `fifo_ticket_holds_until_command_transfer` fills the ingress FIFO and releases a preferred ticket while the next command is stalled. `service_driver_samples_only_transferred_lanes` stalls an ordering request and one of two SMEM read-return groups, then checks when each transaction is recorded. The bound setup product checker runs in the same model. Seven [negative cases](tma/run_assertions.sh) run in separate simulations and require the designated assertion for each illegal opcode, map alignment, unsolicited return, malformed descriptor or expanded address overflow.
 
 | Specification | Executable check and pass condition | Planned checks |
 | --- | --- | --- |

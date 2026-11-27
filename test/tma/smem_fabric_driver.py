@@ -97,13 +97,15 @@ class Fabric:
                     self.store_acks.append(reply)
                 else:
                     self.pending.append(reply)
+            order_fire = self.val("order_req_valid") & self.val("order_req_ready")
             for i, q in enumerate(self.order):
                 if q and self.val("order_rsp_ready") >> i & 1:
                     q.popleft()
-                if self.val("order_req_valid") >> i & 1:
+                if order_fire >> i & 1:
                     q.append(int(d.order_req_payload[i].value) >> 105)
+            read_fire = self.val("smem_rd_rsp_valid") & self.val("smem_rd_rsp_ready")
             for g in range(8):
-                if self.val("smem_rd_rsp_valid") >> g & 1:
+                if read_fire >> g & 1:
                     val = int(d.smem_rd_rsp_payload[g].value)
                     self.atoms[val >> 128] = (val & ((1 << 128) - 1)).to_bytes(16, "little")
             for channel, suffix in [("tma_rsp", 64), ("bar_rsp", 1)]:
