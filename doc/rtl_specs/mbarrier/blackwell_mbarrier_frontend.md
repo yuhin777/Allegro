@@ -6,22 +6,22 @@ The front end arbitrates software commands, wait probes, TC commits, and TMA pro
 
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
-| `sw_cmd` | Input | [bar_cmd_t](#command) (192 bits) | Software front end | On `sw_cmd.fire`, accept the software command and route TRY_WAIT to the wait unit. |
-| `sw_rsp` | Output | [bar_rsp_t](#command) (63 bits) | Software front end | On `sw_rsp.fire`, deliver the held status and predicate under the original ID. |
-| `wait_cmd` | Output | [bar_cmd_t](#command) (192 bits) | Wait unit | On `wait_cmd.fire`, allocate the TRY_WAIT observation and retain its software queue position until QUERY enters object service. |
-| `wait_rsp` | Input | [bar_rsp_t](#command) (63 bits) | Wait unit | On `wait_rsp.fire`, accept the wait result for the software response. |
+| `sw_cmd` | Input | [bar_cmd_t](#command) (191 bits) | Software front end | On `sw_cmd.fire`, accept the software command and route TRY_WAIT to the wait unit. |
+| `sw_rsp` | Output | [bar_rsp_t](#command) (59 bits) | Software front end | On `sw_rsp.fire`, deliver the held predicate under the original ID. |
+| `wait_cmd` | Output | [bar_cmd_t](#command) (191 bits) | Wait unit | On `wait_cmd.fire`, allocate the TRY_WAIT observation and retain its software queue position until QUERY enters object service. |
+| `wait_rsp` | Input | [bar_rsp_t](#command) (59 bits) | Wait unit | On `wait_rsp.fire`, accept the wait result for the software response. |
 | `bind_req` | Input | [bar_bind_t](#command) (90 bits) | TMA unit | On `bind_req.fire`, reserve the producer binding and both result positions. |
-| `bind_rsp` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | TMA unit | On `bind_rsp.fire`, return the binding status. |
-| `producer_done` | Input | [bar_producer_done_t](#command) (94 bits) | TMA unit | On `producer_done.fire`, accept completion from the bound TMA producer with a reserved result position. |
-| `producer_rsp` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | TMA unit | On `producer_rsp.fire`, return the status of the matching object update. |
+| `bind_rsp` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | TMA unit | On `bind_rsp.fire`, acknowledge the binding by ID. |
+| `producer_done` | Input | [bar_producer_done_t](#command) (90 bits) | TMA unit | On `producer_done.fire`, accept completion from the bound TMA producer with a reserved result position. |
+| `producer_rsp` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | TMA unit | On `producer_rsp.fire`, acknowledge the matching object update by ID. |
 | `tc_req` | Input | [tc_bar_req_t](#command) (90 bits) | TC completion bridge | On `tc_req.fire`, accept ARRIVE for an already registered commit into its separate slot. |
-| `tc_rsp` | Output | op_done_t (62 bits) | TC completion bridge | On `tc_rsp.fire`, return the matching commit status. |
-| `service_req` | Output | [bar_service_req_t](#command) (199 bits) | Object unit | On `service_req.fire`, submit one routed object operation with a reserved return position. |
-| `service_rsp` | Input | [bar_service_rsp_t](#command) (72 bits) | Object unit | On `service_rsp.fire`, accept the serialized result by route and slot. |
-| `wait_probe_req` | Input | [bar_service_req_t](#command) (199 bits) | Wait unit | On `wait_probe_req.fire`, accept the wait unit’s QUERY. |
-| `wait_probe_rsp` | Output | [bar_service_rsp_t](#command) (72 bits) | Wait unit | On `wait_probe_rsp.fire`, return the sampled object state to the reserved wait slot. |
+| `tc_rsp` | Output | op_done_t (58 bits) | TC completion bridge | On `tc_rsp.fire`, acknowledge the matching commit arrival by ID. |
+| `service_req` | Output | [bar_service_req_t](#command) (198 bits) | Object unit | On `service_req.fire`, submit one routed object operation with a reserved return position. |
+| `service_rsp` | Input | [bar_service_rsp_t](#command) (68 bits) | Object unit | On `service_rsp.fire`, accept the serialized result by route and slot. |
+| `wait_probe_req` | Input | [bar_service_req_t](#command) (198 bits) | Wait unit | On `wait_probe_req.fire`, accept the wait unit’s QUERY. |
+| `wait_probe_rsp` | Output | [bar_service_rsp_t](#command) (68 bits) | Wait unit | On `wait_probe_rsp.fire`, return the sampled object state to the reserved wait slot. |
 | `release_req` | Output | [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) (163 bits) | Ordering service | On `release_req.fire`, issue ordering for a software release or FENCE_INIT within the shared outstanding budget. |
-| `release_rsp` | Input | [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) (62 bits) | Ordering service | On `release_rsp.fire`, settle the matching ordering operation. |
+| `release_rsp` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | Top-level ordering router | On `release_rsp.fire`, settle the matching ordering operation. |
 | `wait_busy_addr` | Output | 32 bits | Wait unit | Level. Present the INIT/INVAL address to check for active wait references. |
 | `wait_addr_busy` | Input | 1 bit | Wait unit | Level. Observe whether a wait entry references that address. |
 | `commit_busy_addr` | Output | 32 bits | TC tracker | Level. Present the INIT/INVAL address to check for unretired commits. |
@@ -31,7 +31,6 @@ The front end arbitrates software commands, wait probes, TC commits, and TMA pro
 | `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
 | `stop` | Input | 1 bit | Top level | Close new software operations and drain accepted work, including internal producer and commit traffic. |
 | `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
-| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
@@ -50,21 +49,23 @@ flowchart LR
 
 ### Acceptance and resource reservation
 
-The eight software entries each contain cmd192, state3, and rsp63 (258 bits/entry), plus a shared 8×8-bit acceptance-order matrix. The separate TC slot holds tc_bar_req90 and state2. Each of 16 producer entries holds id58, addr32, phase1, bytes32, and state3 (FREE/QUERY_REQ/QUERY_WAIT/BIND_RSP/WAIT_DATA/UPDATE_REQ/UPDATE_WAIT/PRODUCER_RSP), totaling 126 bits/entry. Hold a stalled service, release, or software result selection until fire.
+The eight software entries each contain cmd191, state3, and rsp59 (253 bits/entry), plus a shared 8×8-bit acceptance-order matrix. The separate TC slot holds tc_bar_req90 and state2. Each of 16 producer entries holds id58, addr32, bytes32, and state3 (FREE/QUERY_REQ/QUERY_WAIT/BIND_RSP/WAIT_DATA/UPDATE_REQ/UPDATE_WAIT/PRODUCER_RSP), totaling 125 bits/entry. Hold a stalled service, release, or software result selection until fire.
 
 ### Software commands and object lifetime
 
-After precheck, software commands from the same issuer enter object service in acceptance order. Release forms first complete the common generic→async release. FENCE_INIT orders after earlier INIT commits from its issuer and retires on a distinct kind5 cluster ACK. A stalled fence result allows older service and producer work to continue. On `wait_cmd.fire`, TRY reserves a wait record and retains its software entry. The wait unit presents its initial QUERY on the next cycle. Only one allocated wait can be awaiting QUERY dispatch. When that QUERY transfers to the object unit, the front end frees the software entry. The next command from the issuer can then advance while the wait record retains the probe return, the observation and its eventual software response. All 32 wait records can hold unretired observations.
+Simulation assertions check each presented command’s normalized opcode, operands, aligned local address where applicable, epoch and fresh ID. The ID stays live through response retirement, including after a TRY hands off to the wait table.
 
-An INIT/INVAL that passes ingress precheck owns its address exclusively from acceptance until its software response retires. A rejected command reserves only its software entry and response ID. A same-address software operation, producer binding or new TC commit can proceed while the error response is held. Before a valid INIT/INVAL occupies the unit, it waits for earlier same-address software services, active bindings, waits, the TC slot, and unretired tracker commits for that address. On each edge `commit_blocked(addr)` matches an existing gate or a same-edge INIT/INVAL(addr) transfer that passes precheck. A new lifecycle command takes priority on that edge. The top gates only **new commit registration** and must let tc_req from old commits through. Bound producer_done, already presented waits/probes, and all old responses keep advancing. Other addresses remain eligible. The gate query uses existing owners, software admission, ingress precheck and address comparison. It is independent of new commit.ready to avoid a combinational loop.
+Software commands from the same issuer enter object service in acceptance order. Release forms first complete the common generic→async release. FENCE_INIT orders after earlier INIT commits from its issuer and retires on a distinct kind5 cluster ACK. A stalled fence result allows older service and producer work to continue. On `wait_cmd.fire`, TRY reserves a wait record and retains its software entry. The wait unit presents its initial QUERY on the next cycle. Only one allocated wait can be awaiting QUERY dispatch. When that QUERY transfers to the object unit, the front end frees the software entry. The next command from the issuer can then advance while the wait record retains the probe return, the observation and its eventual software response. All 32 wait records can hold unretired observations.
+
+An accepted INIT/INVAL excludes younger same-address software operations, producer bindings, and new TC commits until its software response retires. Before the lifecycle command occupies the unit, it waits for earlier same-address software services, active bindings, waits, the TC slot, and unretired tracker commits for that address. On each edge `commit_blocked(addr)` matches an existing gate or a same-edge INIT/INVAL(addr) transfer. A new lifecycle command takes priority on that edge. The top gates only **new commit registration** and must let tc_req from old commits through. Bound producer_done, already presented waits/probes, and all old responses keep advancing. Other addresses remain eligible. The gate query uses existing owners, software admission, and address comparison. It is independent of new commit.ready to avoid a combinational loop.
 
 ### Producer binding and completion
 
-bind.fire reserves a producer entry. A successful QUERY records the initialized object's phase and retains it until producer_rsp is consumed. producer_done uses the bound phase and logical byte count for one COMPLETE_TX. Check the guard and decrement at the same object commit point. A TC request performs exactly one ARRIVE(1). Both wait for service_rsp on the original route/slot. Report non-OK status, wrong identity, duplicate update, or phase guard mismatch as a top-level fault.
+bind_req.fire reserves a producer entry. Its serialized QUERY binds the producer to the initialized object's observed phase before bind_rsp. The binding retains the address until producer_rsp.fire. Each bound producer submits one COMPLETE_TX with its logical byte count while that phase is current. A simulation assertion compares the phase sampled at QUERY with the pre-update phase at the atomic decrement. A TC request submits one ARRIVE(1). Each requester receives its acknowledgment after service_rsp transfers on the reserved route and slot.
 
 ### Service selection and progress
 
-Round-robin across software, wait probe, TC, and producer classes and within each class. A continuously eligible class can be bypassed by at most three other service fires. unit.commit is independent of front-end result capture. A reserved slot does not wait for software ready. stop closes new software operations but continues accepting older TMA bind/producer_done, TC, service, and ordering traffic. drained requires no held or outstanding work. Synchronous reset clears ownership and fault. Duplicate or unknown identities raise fault.
+Round-robin across software, wait probe, TC, and producer classes and within each class. A continuously eligible class can be bypassed by at most three other service fires. unit.commit is independent of front-end result capture. A reserved slot does not wait for software ready. stop closes new software operations but continues accepting older TMA bind/producer_done, TC, service, and ordering traffic. drained requires no held or outstanding work. Synchronous reset clears ownership, outstanding selections and held results.
 
 ### Request and response edges
 
@@ -74,16 +75,16 @@ A software command or binding occupies its slot at g and may present release or 
 
 ### Commands, bindings, and object service
 
-The [Supported PTX list](../../proposals/supported_ptx.md) defines software-visible variants. The [object specification](blackwell_mbarrier_unit.md#object) defines counts and phase. Ingress accepts only normalized 8 B aligned addresses in this CTA. The front end expands omitted/default PTX modifiers. Arrival permits a discarded result, and wait compares parity. The response payload contains only the predicate and status.
+The [Supported PTX list](../../proposals/supported_ptx.md) defines software-visible variants. The [object specification](blackwell_mbarrier_unit.md#object) defines counts and phase. Ingress accepts only normalized 8 B aligned addresses in this CTA. The front end expands omitted/default PTX modifiers. Arrival permits a discarded result, and wait compares parity. The software response carries the original ID and the wait predicate.
 
 | bar_cmd_t fields (high to low) | bit | Use |
 |---|---:|---|
 | id, op | 58, 4 | async_id_t and the encodings below. |
 | addr, count, bytes | 32 each | CTA-local address, INIT/ARRIVE count, and transaction byte count. |
-| parity, guard | 1, 1 | Old phase for TRY or bound phase for the producer's final update. The guard is internal to updates. |
+| parity | 1 | Expected phase for TRY_WAIT. |
 | time_hint | 32 | Optional TRY_WAIT suspendTimeHint. Set to 0 when omitted and pass explicit values through wait_cmd. Every value uses the same [fixed wait budget](blackwell_mbarrier_wait.md#wait-budget). |
 
-`bar_cmd_t` is **192 bits** and `bar_rsp_t={id:58,status:4,completed:1}` is **63 bits**. Zero unused fields. Reject unsupported opcodes/modifiers before narrowing. Return exactly one error for a known identity.
+`bar_cmd_t` is **191 bits** and `bar_rsp_t={id:58,completed:1}` is **59 bits**. The issuer supplies a supported operation with unused fields zero. TRY_WAIT returns its resolved predicate in completed. Other software operations return completed=0.
 
 | op | Source | Effect |
 |---:|---|---|
@@ -94,15 +95,15 @@ The [Supported PTX list](../../proposals/supported_ptx.md) defines software-visi
 | 4 TRY_WAIT | Software | .parity.shared or .shared::cta compares only the current object phase, then obtains default acquire acknowledgment after a successful observation. |
 | 5 FENCE_INIT | Software | fence.mbarrier_init.release.cluster orders local INITs already committed by this issuer. See completion conditions below. |
 | 6 QUERY | Internal | On success return initialized/phase without updating the object. |
-| 7 COMPLETE_TX | Internal TMA | Atomically deduct bytes under the bound phase. Only success may flip the phase. |
+| 7 COMPLETE_TX | Internal TMA | Atomically deduct bytes under the bound phase. Apply the phase-completion test at the decrement. |
 
-`bar_service_req_t={route2,slot5,cmd192}` is 199 bits and `bar_service_rsp_t={route2,slot5,rsp63,phase1,initialized1}` is 72 bits. route=0 selects software, 1 wait probe, 2 TC, and 3 TMA. Each request reserves the corresponding result position. Only a successful QUERY provides valid phase and initialized.
+`bar_service_req_t={route2,slot5,cmd191}` is 198 bits and `bar_service_rsp_t={route2,slot5,rsp59,phase1,initialized1}` is 68 bits. route=0 selects software, 1 wait probe, 2 TC, and 3 TMA. Each request reserves the corresponding result position. QUERY returns the sampled phase and initialized bit.
 
 See [unit](blackwell_mbarrier_unit.md#change-type) for object change events and [backing](blackwell_mbarrier_backing.md#backing-types) for backing requests.
 
 #### Bindings and TC arrivals
 
-`bar_bind_t={id58,addr32}` is 90 bits. The front end acknowledges a successful binding with op_done_t. `bar_producer_done_t={id58,bytes32,status4}` is 94 bits, with status=OK during normal execution. Each binding has exactly one COMPLETE_TX(bytes) and one matching acknowledgment. TMA publishes full only after receiving producer_rsp. TC separately uses `tc_bar_req_t={id58,addr32}` (90 bits) for one ARRIVE(1) per commit ID.
+`bar_bind_t={id58,addr32}` is 90 bits. The front end acknowledges a successful binding with op_done_t. `bar_producer_done_t={id58,bytes32}` is 90 bits. Each binding has exactly one COMPLETE_TX(bytes) and one matching acknowledgment. TMA publishes full only after receiving producer_rsp. TC separately uses `tc_bar_req_t={id58,addr32}` (90 bits) for one ARRIVE(1) per commit ID.
 
 #### Ordering
 

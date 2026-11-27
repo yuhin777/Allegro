@@ -13,7 +13,6 @@ The single walker consumes ARMED setup slots in FIFO order and generates segment
 | `segment` | Output | [tma_segment_t](#segment) (193 bits) | tracker | On `segment.fire`, send an ordinary S2 segment to allocate. Its final handshake also closes enumeration. |
 | `generated` | Output | [tma_finish_t](blackwell_tma_completion_tracker.md#transfer-types) (5 bits) | tracker | On `generated.fire`, send the empty enumeration’s close-only marker without taking a tag. |
 | `drained` | Output | 1 bit | TMA unit | Assert with the cursor, three elastic stages and held generated event empty. |
-| `fault` | Output | 1 bit | TMA unit | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
@@ -39,7 +38,7 @@ S0 accepts a new segment when empty or moving its old entry on this edge. Comput
 | S1 | Add the captured row offset to the GMEM row base and its within-panel offset to the SMEM panel base. Linear adds ordinal to both command bases. Form the aligned line, sector and offsets, clearing GMEM fields for OOB. See [setup](blackwell_tma_setup.md#tensor-map) for panel stepping. | Both bases and offsets, swizzle selection, and n |
 | S2 | Register segment or close marker. For a segment entering S0 at f without stalls, S1 captures at f+1, S2 at f+2, and the tracker at f+3. | At most one token per edge, including the last segment. No separate end-of-command slot. |
 
-For each outer dimension the walker holds the GMEM address at its current slice origin. On a row carry into dimension d, increment that anchor by stride[d] and copy the result to inner anchors. At row end, advance the SMEM row base by 128 B and restart its panel base there. A panel crossing within a row advances the panel base by row_count × 128 B. Update cursors only on S0 acceptance. These recurrences preserve nonmonotonic strides and avoid per-segment multiplication. The virtual GMEM cursor advances modulo 2⁶⁴ through OOB regions. Only in-bounds segments use the cursor to form a GMEM request, within the [span checked by setup](blackwell_tma_setup.md#copy-span).
+For each outer dimension the walker holds the GMEM address at its current slice origin. On a row carry into dimension d, increment that anchor by stride[d] and copy the result to inner anchors. At row end, advance the SMEM row base by 128 B and restart its panel base there. A panel crossing within a row advances the panel base by row_count × 128 B. Update cursors only on S0 acceptance. These recurrences preserve nonmonotonic strides and avoid per-segment multiplication. The virtual GMEM cursor advances modulo 2⁶⁴ through OOB regions. Only in-bounds segments use the cursor to form a GMEM request, within the [span computed by setup](blackwell_tma_setup.md#copy-span).
 
 ### Final segment and empty enumeration
 
@@ -47,7 +46,7 @@ A nonempty command releases its setup slot on its final S0.fire. Its ticket trav
 
 ### Reset and boundary conditions
 
-Clear valid, cursor valid, result, and fault. The data side drains responses independently.
+Reset clears stage valid bits, cursor valid and held results. Simulation asserts that each S0 acceptance references its assigned slot and each ordinary segment has a nonempty length. The data side drains responses independently.
 
 <a id="segment"></a>
 

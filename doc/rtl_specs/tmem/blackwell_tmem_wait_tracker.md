@@ -8,13 +8,12 @@ The 32 live records track LD/ST from registration through complete after ordinar
 |---|---|---|---|---|
 | `alloc` | Input | [rf_track_alloc_t](#wait-types) (59 bits) | Top-level R_RF_ISSUE | Transfer on `alloc.fire`. `{id:58,store:1}`, register before engine execution. |
 | `slot` | Output | [rf_track_slot_t](#wait-types) (63 bits) | Top-level R_RF_ISSUE | Transfer on `slot.fire`. Original ID and 5-bit live slot. |
-| `complete` | Input | [rf_track_done_t](#wait-types) (67 bits) | LD/ST engine | Transfer on `complete.fire`. `{slot:5,id:58,status:4}`, sent after ordinary done consumption. |
+| `complete` | Input | [rf_track_done_t](#wait-types) (63 bits) | LD/ST engine | Transfer on `complete.fire`. `{slot:5,id:58}`, sent after ordinary done consumption. |
 | `wait_cmd` | Input | [tmem_wait_cmd_t](#wait-types) (58 bits) | Software front end | Transfer on `wait_cmd.fire`. Capture this warp's stores preceding the cutoff. |
-| `wait_done` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (62 bits) | Software front end | Transfer on `wait_done.fire`. Publish `{id,OK}` once pending reaches zero. |
+| `wait_done` | Output | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | Software front end | Transfer on `wait_done.fire`. Publish the wait ID once pending reaches zero. |
 | `epoch_i` | Input | 16 bits | Top level | Level. Current CTA lifetime. |
 | `stop_i` | Input | 1 bit | Top level | Level. Stop new alloc/wait. Registered slots, completes, and results continue. |
 | `drained_o` | Output | 1 bit | Top level | Assert after live entries, waits, slot responses and held outputs drain. |
-| `fault_o` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ## Functionality
 
@@ -29,7 +28,7 @@ RF/wait commands require the low five issuer bits zero. issuer[9:5] identifies t
 | `tmem_wait_cmd_t` | id58 | 58 |
 | `rf_track_alloc_t` | id58, store1 | 59 |
 | `rf_track_slot_t` | id58, slot5 | 63 |
-| `rf_track_done_t` | slot5, id58, status4 | 67 |
+| `rf_track_done_t` | slot5, id58 | 63 |
 
 Software wait returns op_done_t. [LDST engine](blackwell_tmem_ldst_engine.md) defines actual LD/ST data completion edges.
 
@@ -37,8 +36,8 @@ Software wait returns op_done_t. [LDST engine](blackwell_tmem_ldst_engine.md) de
 
 Each of 32 live entries holds valid1, id58, and store1. alloc.fire selects the lowest free slot and reserves its slot response (5-bit index and valid1, with ID from the entry). Stall the next alloc until slot consumption. The top issues to the engine after receiving slot. complete and wait may still handshake when the table is full.
 
-After final LD RF writeback or actual ST write ACK, the engine returns pin and outputs ordinary done. It sends complete only after done is consumed. A matching OK complete by slot and full ID clears the corresponding wait.pending bit and releases the live entry on that edge. Reuse can start on the next edge. Ordinary done ready is independent of wait_done to avoid mutual waiting. Non-OK or mismatched results follow [runtime fault handling](../top/blackwell_async_subsystem_top.md#common-protocol).
+After final LD RF writeback or actual ST write ACK, the engine returns pin and outputs ordinary done. It sends complete only after done is consumed. A matching complete by slot and full ID clears the corresponding wait.pending bit and releases the live entry on that edge. Reuse can start on the next edge. Ordinary done ready is independent of wait_done to avoid mutual waiting. Simulation asserts that each complete identifies its live slot and full ID.
 
-One wait entry holds valid1, id58, and pending32, totaling 91 bits. wait_cmd.fire captures pre-edge live stores of the same epoch and warp, subtracting old slots completing on this edge. Exclude LD and same-edge new alloc. Later allocations cannot enlarge the set. When pending is zero, OK can deliver at the next edge at the earliest, including for an empty set. Hold wait_done until consumed. A busy wait stalls new waits while LD/ST can register in other free slots and complete.
+One wait entry holds valid1, id58, and pending32, totaling 91 bits. wait_cmd.fire captures pre-edge live stores of the same epoch and warp, subtracting old slots completing on this edge. Exclude LD and same-edge new alloc. Later allocations cannot enlarge the set. When pending is zero, wait_done can deliver at the next edge at the earliest, including for an empty set. Hold wait_done until consumed. A busy wait stalls new waits while LD/ST can register in other free slots and complete.
 
 Normal stop prevents new external commands. Old complete, slot, and results continue. Synchronous reset clears valid and selections. Normal epoch change requires drained.

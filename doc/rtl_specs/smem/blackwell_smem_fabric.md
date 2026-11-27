@@ -7,15 +7,14 @@ The shared SMEM fabric provides eight independent 16 B atom group ports to TC, T
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
 | `rd_req[16][8]` | Input | [smem_rd_req_t](#transactions) (126 bits) | TC, TMA, backing, LSU | On `rd_req.fire`, accept one candidate per client and group on its own handshake. |
-| `rd_rsp[16][8]` | Output | [smem_rd_rsp_t](#transactions) (210 bits) | TC, TMA, backing, LSU | On `rd_rsp.fire`, deliver the tagged result on the matching group channel. |
+| `rd_rsp[16][8]` | Output | [smem_rd_rsp_t](#transactions) (206 bits) | TC, TMA, backing, LSU | On `rd_rsp.fire`, deliver the tagged result on the matching group channel. |
 | `wr_req[16][8]` | Input | [smem_wr_req_t](#transactions) (254 bits) | TMA, backing, LSU | On `wr_req.fire`, accept the write in its addressed group. |
-| `wr_ack[16][8]` | Output | [smem_wr_ack_t](#transactions) (82 bits) | TMA, backing, LSU | On `wr_ack.fire`, deliver one acknowledgment per original transaction on the same group index. |
+| `wr_ack[16][8]` | Output | [smem_wr_ack_t](#transactions) (78 bits) | TMA, backing, LSU | On `wr_ack.fire`, deliver one acknowledgment per original transaction on the same group index. |
 | `live[3]` | Input | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | MMA engine | Level. The top connects the engine's live list for MMA candidate age. External service is independent of MMA activity. |
 | `clk` | Input | 1 bit | Top level | Rising edge samples synchronous state. |
 | `rst_n` | Input | 1 bit | Top level | Sample low on a rising edge to reset control. |
 | `epoch_i` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
 | `drained_o` | Output | 1 bit | Top level | Level covering R_BREQ, macro Q, primary and backup returns, ACKs and held selections. |
-| `fault_o` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
@@ -39,18 +38,18 @@ flowchart LR
 |---|---|---:|
 | `smem_rd_req_t` | tag78, addr32, byte_mask16 | 126 |
 | `smem_wr_req_t` | tag78, addr32, byte_mask16, data128 | 254 |
-| `smem_rd_rsp_t` | tag78, data128, status4 | 210 |
-| `smem_wr_ack_t` | tag78, status4 | 82 |
+| `smem_rd_rsp_t` | tag78, data128 | 206 |
+| `smem_wr_ack_t` | tag78 | 78 |
 
 Mask bit b selects data[8b+:8] in a 16 B atom. Unselected bytes are preserved on writes and returned as zero on reads. See top-level memory-routing for tag78. A successful write ACK proves actual commit. For TMA loads (client8), selected bytes have committed to this CTA's SMEM shared with generic accesses. A consuming thread can read them after successfully waiting on the corresponding mbarrier.
 
-`smem_atom_req_t={write:1,tag:78,addr:32,byte_mask:16,data:128}` is 255 bits and `smem_atom_rsp_t={write:1,tag:78,data:128,status:4}` is 211 bits. Write responses return data=0. addr is a 16 B aligned logical byte address. Physical bank mapping occurs in the fabric. For an 8 B barrier write use original object address bit3 to select mask=0x00ff/0xff00 and the corresponding half-line.
+`smem_atom_req_t={write:1,tag:78,addr:32,byte_mask:16,data:128}` is 255 bits and `smem_atom_rsp_t={write:1,tag:78,data:128}` is 207 bits. Write responses return data=0. addr is a 16 B aligned logical byte address. Physical bank mapping occurs in the fabric. For an 8 B barrier write use original object address bit3 to select mask=0x00ff/0xff00 and the corresponding half-line.
 
 ### Address mapping and group state
 
-A logical atom is 16 B aligned. For byte address a, physical bank=(a>>2)&31, word=a>>7, and group=(a>>4)&7. The atom's four 4 B subwords occupy bank=4×group+s, s=0…3. Matrix or Tensor Map address generation has already swizzled the logical address. The fabric validates the group index and maps physical banks.
+A logical atom is 16 B aligned. For byte address a, physical bank=(a>>2)&31, word=a>>7, and group=(a>>4)&7. The atom's four 4 B subwords occupy bank=4×group+s, s=0…3. Matrix or Tensor Map address generation has already swizzled the logical address. The fabric maps these addresses to physical banks. Simulation asserts that the group index matches the request port and each enabled byte is in range.
 
-Data SRAM occupies 233,472 B. Macro Q, primary return, and backup return each occupy 8×16 B=128 B. Each group holds one ungranted R_BREQ, read/write selections and RR cursors, three sets of read identity/valid subwords/destination mask, and per-destination delivered bits. Subwords move together. Reserve one return position per whole atom (up to three per group), limiting any enabled physical bank to three outstanding reads. Each group independently manages its two write ACK frames as a two-entry FIFO with tag/status/valid and order. A credit retiring on this edge can accept a new write on the same edge. A slow group blocks only itself once its two entries fill. See the [transaction fields](#transactions) for return types.
+Data SRAM occupies 233,472 B. Macro Q, primary return, and backup return each occupy 8×16 B=128 B. Each group holds one ungranted R_BREQ, read/write selections and RR cursors, three sets of read identity/valid subwords/destination mask, and per-destination delivered bits. Subwords move together. Reserve one return position per whole atom (up to three per group), limiting any enabled physical bank to three outstanding reads. Each group independently manages its two write ACK frames as a two-entry FIFO with tag, valid bit and order. A credit retiring on this edge can accept a new write on the same edge. A slow group blocks only itself once its two entries fill. See the [transaction fields](#transactions) for return types.
 
 ### Request selection, grant, and return
 
@@ -66,7 +65,7 @@ Data SRAM occupies 233,472 B. Macro Q, primary return, and backup return each oc
 
 With grants at 0, 1, and 2 and a continuously ready reader, deliver at 2, 3, and 4 respectively. If the head stalls from edge 2, the third read can still occupy Q. Once full, the fourth stays in R_BREQ. Upon resumption, head delivery, enqueue of old Q, and sampling of a new grant can coincide. A stalled broadcast destination cannot cause duplicate delivery to a served destination. A winning read sees the old word. A read granted after a winning write sees the updated word.
 
-Reset clears control valid bits. Drain before a normal epoch change. Tag/group mismatches and duplicate returns set sticky fault. Deliver matched source MEMORY status with its original transaction and never report a successful write in its place. In ideal K-major layout, each 128 B half-block uses all eight groups and 32 physical banks on one edge. Inserting eight external reads in one group extends service of its original 64 requests to at least 72 cycles. Count logical atoms, enabled subwords, and destination deliveries separately.
+Reset clears control valid bits. Drain before a normal epoch change. Simulation asserts that each read return and write ACK identifies a live request on its original group and retires once per destination. In ideal K-major layout, each 128 B half-block uses all eight groups and 32 physical banks on one edge. Inserting eight external reads in one group extends service of its original 64 requests to at least 72 cycles. Count logical atoms, enabled subwords, and destination deliveries separately.
 
 ## Submodules
 

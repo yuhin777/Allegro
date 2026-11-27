@@ -9,40 +9,39 @@ Allegro v1 uses `SHARE_FP_DOT_ADDER_TREE=1` on all four MMA cores. The [dot arra
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
 | `mma_cmd` | Input | [mma_cmd_t](../tensor_core/blackwell_tc_mma_engine.md#mma-command) (446 bits) | Warp front end | On `mma_cmd.fire`, allocate one of three records atomically with tracker.register_op. |
-| `tc_op_done` | Output | [op_done_t](#identity) (62 bits) | Warp front end | On `tc_op_done.fire`, deliver one completion per accepted ID. |
+| `tc_op_done` | Output | [op_done_t](#identity) (58 bits) | Warp front end | On `tc_op_done.fire`, deliver one completion per accepted ID. |
 | `tc_commit` | Input | [tc_commit_t](../tensor_core/blackwell_tc_completion_tracker.md#commit-contract) (90 bits) | Warp front end | On `tc_commit.fire`, capture the issuer’s earlier operations for one arrival. |
-| `tc_commit_done` | Output | op_done_t (62 bits) | Warp front end | On `tc_commit_done.fire`, deliver the original commit ID and status. |
+| `tc_commit_done` | Output | op_done_t (58 bits) | Warp front end | On `tc_commit_done.fire`, deliver the original commit ID. |
 | `tmem_manage` | Input | [tmem_manage_cmd_t](../tmem/blackwell_tmem_manager.md#management-types) (102 bits) | Management front end | On `tmem_manage.fire`, accept a management operation from the front end responsible for same-address ordering. |
-| `tmem_manage_rsp` | Output | [tmem_manage_rsp_t](../tmem/blackwell_tmem_manager.md#management-types) (94 bits) | Management front end | On `tmem_manage_rsp.fire`, return the status and ALLOC base for the front end’s weak SMEM write. |
+| `tmem_manage_rsp` | Output | [tmem_manage_rsp_t](../tmem/blackwell_tmem_manager.md#management-types) (90 bits) | Management front end | On `tmem_manage_rsp.fire`, return the ID and ALLOC base for the front end’s weak SMEM write. |
 | `tmem_alloc_credit` | Output | 1 bit | Management front-end warp arbiter | Connect directly to manager.alloc_credit_o. The arbiter filters ALLOC before driving tmem_manage.valid. DEALLOC is independently eligible. [Admission and release edges](../tmem/blackwell_tmem_manager.md#alloc-admission) |
 | `tmem_ldst` | Input | [tmem_ldst_cmd_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) (92 bits) | Warp front end | On `tmem_ldst.fire`, accept the warp LD/ST command. |
-| `tmem_ldst_done` | Output | op_done_t (62 bits) | Warp front end | On `tmem_ldst_done.fire`, deliver final status by ID. |
+| `tmem_ldst_done` | Output | op_done_t (58 bits) | Warp front end | On `tmem_ldst_done.fire`, deliver the completed ID. |
 | `rf_store` | Input | [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) (1,090 bits) | RF | On `rf_store.fire`, accept the next RF source beat. |
 | `rf_load` | Output | [rf_beat_t](../tmem/blackwell_tmem_ldst_engine.md#rf-types) (1,090 bits) | RF | On `rf_load.fire`, write the reserved RF destination. The final beat settles the read dependency. |
 | `tmem_wait` | Input | [tmem_wait_cmd_t](../tmem/blackwell_tmem_wait_tracker.md#wait-types) (58 bits) | Warp front end | On `tmem_wait.fire`, capture the issuing warp’s preceding stores at its cutoff. |
-| `tmem_wait_done` | Output | op_done_t (62 bits) | Warp front end | On `tmem_wait_done.fire`, deliver the wait result after the captured stores settle. |
+| `tmem_wait_done` | Output | op_done_t (58 bits) | Warp front end | On `tmem_wait_done.fire`, deliver the wait result after the captured stores settle. |
 | `tma_cmd` | Input | [tma_cmd_t](../tma/blackwell_tma_unit.md#command) (478 bits) | Warp front end | On `tma_cmd.fire`, accept a load, store, descriptor prefetch or bulk-group command. |
-| `tma_rsp` | Output | [tma_rsp_t](../tma/blackwell_tma_unit.md#command) (126 bits) | Warp front end | On `tma_rsp.fire`, deliver the matching ticket’s software result. |
-| `bar_cmd` | Input | [bar_cmd_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (192 bits) | Warp front end | On `bar_cmd.fire`, accept init, arrive, try_wait, inval or the associated visibility command. |
-| `bar_rsp` | Output | [bar_rsp_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (63 bits) | Warp front end | On `bar_rsp.fire`, deliver the command’s status and applicable predicate. |
+| `tma_rsp` | Output | [tma_rsp_t](../tma/blackwell_tma_unit.md#command) (122 bits) | Warp front end | On `tma_rsp.fire`, deliver the matching ticket’s software result. |
+| `bar_cmd` | Input | [bar_cmd_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (191 bits) | Warp front end | On `bar_cmd.fire`, accept init, arrive, try_wait, inval or the associated visibility command. |
+| `bar_rsp` | Output | [bar_rsp_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (59 bits) | Warp front end | On `bar_rsp.fire`, deliver the command ID and applicable predicate. |
 | `smem_rd[8]` | Input | [smem_rd_req_t](../smem/blackwell_smem_fabric.md#transactions) (126 bits) | External LSU | On `smem_rd.fire`, accept a client 12 read on its group subject to barrier-object exclusion. |
-| `smem_rd_rsp[8]` | Output | [smem_rd_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (210 bits) | External LSU | On `smem_rd_rsp.fire`, return the matching read data and status. |
+| `smem_rd_rsp[8]` | Output | [smem_rd_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (206 bits) | External LSU | On `smem_rd_rsp.fire`, return the tagged read data. |
 | `smem_wr[8]` | Input | [smem_wr_req_t](../smem/blackwell_smem_fabric.md#transactions) (254 bits) | External LSU | On `smem_wr.fire`, accept a client 12 write on its group subject to barrier-object exclusion. |
-| `smem_wr_ack[8]` | Output | [smem_wr_ack_t](../smem/blackwell_smem_fabric.md#transactions) (82 bits) | External LSU | On `smem_wr_ack.fire`, return one acknowledgment for the accepted write. |
+| `smem_wr_ack[8]` | Output | [smem_wr_ack_t](../smem/blackwell_smem_fabric.md#transactions) (78 bits) | External LSU | On `smem_wr_ack.fire`, return one acknowledgment for the accepted write. |
 | `gmem_req` | Output | [gmem_req_t](../tma/blackwell_tma_unit.md#gmem-types) (1,292 bits) | GMEM | On `gmem_req.fire`, issue a TMA data or descriptor transaction on the shared 128 B bus. |
 | `gmem_rsp` | Input | [gmem_rsp_t](../tma/blackwell_tma_unit.md#gmem-types) (1,037 bits) | GMEM | On `gmem_rsp.fire`, match out-of-order returns by 9-bit ID. Response ready is independent of request ready. |
 | `order_req` | Output | [order_req_t](#ordering) (163 bits) | Ordering service | On `order_req.fire`, issue release, acquire, proxy/init fence or CTA_CLOSE. |
 | `order_rsp` | Input | [order_rsp_t](#ordering) (62 bits) | Ordering service | On `order_rsp.fire`, settle the matching visibility operation. |
 | `close_req` | Input | Event without payload | CTA controller | On `close_req.fire`, begin closing the active CTA. |
-| `close_rsp` | Output | status_t (4 bits) | CTA controller | On `close_rsp.fire`, deliver close status after drain and close processing. |
+| `close_rsp` | Output | Event without payload | CTA controller | On `close_rsp.fire`, acknowledge completion of drain and close processing. |
 | `open_req` | Input | 16 bits | CTA controller | On `open_req.fire`, accept the new epoch after isolation under the lifetime protocol. |
-| `open_rsp` | Output | status_t (4 bits) | CTA controller | On `open_rsp.fire`, deliver open status. |
+| `open_rsp` | Output | Event without payload | CTA controller | On `open_rsp.fire`, acknowledge the open. |
 | `lsu_quiescent` | Input | 1 bit | External LSU | Level. Observe completion of old LSU work and visibility obligations. |
 | `isolated` | Input | 1 bit | Isolation control | Level. Observe isolation of external responses for reset and epoch control. |
 | `epoch` | Output | 16 bits | CTA controller | Current epoch level, updated on an accepted open. |
 | `stopped` | Output | 1 bit | CTA controller | Level indicating closure of normal issue. |
 | `drained` | Output | 1 bit | CTA controller | Level asserted after outstanding work and held transfers drain. |
-| `fault` | Output | 1 bit | CTA controller | Sticky runtime fault level, cleared by isolated reset. |
 | `clk` | Input | 1 bit | External clock and reset | Rising edge samples synchronous state. |
 | `rst_n` | Input | 1 bit | External clock and reset | Sample low on a rising edge to reset control. |
 
@@ -74,7 +73,7 @@ flowchart LR
 
 <a id="common-protocol"></a>
 
-### Common protocol, reset, and status codes
+### Common protocol and reset
 
 #### Clock and handshakes
 
@@ -98,24 +97,13 @@ Reset clears valid, credit state, live IDs, allocation, and cache valid bits. Pa
 
 At an authorized epoch change modules clear static cache/collector valid bits, allocation/permit, and local sequence numbers while preserving payload.
 
-Modules report fault on non-OK memory or ordering replies to active transactions, illegal internal identities, duplicate returns, and execution protocol violations. The external LSU performs the weak SMEM write of a management result. Its non-OK ACK takes the same fault path. The top aggregates faults into sticky `fault`. Its registered level supplies the common 1-bit `halt_i` to execution control modules (it may be omitted from port tables) and signals run termination to the CTA controller. An error cannot advance a dependent writeback, arrival, complete-tx, successful done, or close. Preserve committed writes and completed handshakes. Hold already presented valid/payload until handshake or external isolated reset. On detection suppress only successful commits depending on the error and settle independent actual fires. During `halt_i=1` close new instructions and derived work. After an already presented channel handshakes, do not refill it. Recovery isolates old requests, responses, RF, and ordering interfaces externally and then applies a full synchronous reset. Neither drained nor close_rsp is required first.
+#### Legal execution and simulation assertions
 
-#### Status codes
+The subsystem guarantees the specified data, ordering and timing for supported commands with legal operands, conforming ready/valid handshakes and external services that return the requested data or acknowledge the specified effect. Behavior outside these conditions is unspecified.
 
-The common `status_t` is 4 bits. Static ingress rejections use the encodings below. Exceptional status during execution follows the fault contract above.
+Simulation assertions at each ingress check the command encoding, current epoch, identity and operand restrictions when the command is presented. While stalled, each source must keep valid and its payload stable through the accepting edge. When a return is presented, assert that its ID or tag names a live request of the expected class. On transfer, retire its outstanding response obligation exactly once. Whenever the external GMEM or ordering service presents a response, also assert that its four-bit status is zero (OK). The receiving module checks descriptor, object and expanded-address constraints when their values first become available. Assertions are simulation checks and allocate no execution records or response slots.
 
-| Value | Name | Meaning |
-|---:|---|---|
-| 0 | OK | Success. An unsatisfied wait predicate may still return OK |
-| 1 | UNSUPPORTED | Outside the project instruction subset |
-| 2 | INVALID | Illegal field or combination |
-| 3 | RANGE | Address, count, or size out of range |
-| 4 | MEMORY | External transaction error |
-| 5 | STALE | Epoch/object lifetime mismatch |
-| 6 | PROTOCOL | Nonlive ID, duplicate response, or hardware protocol order violation (software collector sequences are not checked) |
-| 7…15 | reserved | Never issued. Treat as PROTOCOL if received |
-
-Ingress precheck may reject illegal commands with UNSUPPORTED/INVALID/RANGE before asynchronous registration. Synchronous TMEM management precheck uses its own response slot. These rejections have no data or synchronization side effects. A violation discoverable only after reading a descriptor, object, or expanded address terminates the run if the command has already registered. Legal tensor OOB, physical collector misses, and wait timeouts take their modules' normal paths.
+Finite capacity and outstanding dependencies can delay a legal transfer. A tensor coordinate outside the extent of a legal descriptor, a physical collector miss and an expired wait budget each follow the corresponding module's normal execution rules.
 
 #### Configuration and resource accounting
 
@@ -135,7 +123,7 @@ In port tables `T[N]` denotes N channels or a bus of T entries. Specify whether 
 | `async_id_t.issuer` | 10 | CTA thread index, `warp=issuer[9:5]`, `lane=issuer[4:0]` |
 | `async_id_t.seq` | 32 | External commands use 0…0xfffffffe in increasing order without wrap or reuse |
 | `async_id_t` | 58 | Packed order `{epoch,issuer,seq}` |
-| `op_done_t` | 62 | `{id:async_id_t,status:status_t}` |
+| `op_done_t` | 58 | `{id:async_id_t}` |
 
 All commands from one issuer share an increasing seq. Do not compare seq across issuers. The caller submits TC MMA/COMMIT in each issuing thread's program order. A commit covers only operations in its epoch accepted before the cutoff with **the same full 10-bit issuer**. Different lanes of the same warp have independent sets. The external instruction front end handles cross-thread synchronization.
 
@@ -145,7 +133,7 @@ Reserve `{epoch,issuer=1023,seq=0xffffffff}` exclusively for the top-level final
 
 ### Ordering service
 
-`order_req_t={id:58, kind:3, scope:2, from_proxy:2, to_proxy:2, addr:64, bytes:32}` totals 163 bits, with `order_rsp_t=op_done_t`. kind=0 RELEASE, 1 ACQUIRE, 2 PROXY_FENCE, 3 reserved, 4 CTA_CLOSE, 5 MBARRIER_INIT_RELEASE. Other values are invalid. scope=0 CTA, 1 GPU, 2 SYS, 3 CLUSTER (the single-CTA cluster containing this CTA). proxy=0 generic, 1 async, 2 tensormap, 3 reserved.
+`order_req_t={id:58, kind:3, scope:2, from_proxy:2, to_proxy:2, addr:64, bytes:32}` totals 163 bits, with external `order_rsp_t={id:58,status:4}` (62 bits). At the response transfer the top routes the 58-bit completion ID to the selected ordering client. kind=0 RELEASE, 1 ACQUIRE, 2 PROXY_FENCE, 3 reserved, 4 CTA_CLOSE, 5 MBARRIER_INIT_RELEASE. Other values are invalid. scope=0 CTA, 1 GPU, 2 SYS, 3 CLUSTER (the single-CTA cluster containing this CTA). proxy=0 generic, 1 async, 2 tensormap, 3 reserved.
 
 Match acknowledgments by ID, with at most one ordering transaction outstanding per ID. Except for CTA_CLOSE, bytes=0 covers the issuer's relevant preceding accesses at the specified scope. Nonzero bytes covers the half-open range [addr,addr+bytes). Check addition overflow in 65 bits.
 
@@ -199,7 +187,6 @@ Frame arrays have independent valid/ready per atom. Do not generally require a w
 | engine → SMEM / TMEM fabric | live[3] holds {valid1,rec2,id58} in acceptance order, oldest first. SMEM uses live at R_BREQ ingress to compare ages of same-group A candidates. TMEM identifies C reads from the local core's token.kind. Modules share one epoch. |
 | TMA ↔ frontend | bind_req/rsp precedes the first load request. Route producer_done/rsp directly as a pair with separate storage from software responses. During normal execution each successfully bound load submits exactly one complete-tx. |
 | frontend ↔ unit ↔ backing, frontend ↔ wait | Reserve service_req/rsp by route/slot. unit.change broadcasts without backpressure. wait.probe queries through the front end. Same-address busy from waits and old commits feeds the INIT/INVAL exclusive gate. Only backing initiates writeback and refill. |
-| Execution modules → top → CTA controller and modules | Aggregate local runtime faults into a termination level. Isolated reset takes priority over normal close. |
 
 The front end enforces program order. See [MMA core](../tensor_core/blackwell_tc_mma_core.md) for MMA handoff and blockwise same-address dependencies. Settle bar.sync, thread synchronization, and RF dependencies according to actual external visibility, RF writeback, and fences.
 
@@ -207,7 +194,7 @@ The front end enforces program order. See [MMA core](../tensor_core/blackwell_tc
 
 TMEM clients0…3 are the cores, 4 is scale B, and 5 is LDST, each with 128 lane routes. SMEM clients0…3 are core A, 6 is B loader, 8 is TMA data, 11 is barrier backing, and 12 is external LSU (including ordinary management result writes). Each client selects one of eight atom ports by group=(addr>>4)&7. TMA req[g] connects to client8 group g and routes by write to wr_req[8][g] or rd_req[8][g]. Multiplex wr_ack[8][g] and rd_rsp[8][g] onto rsp[g], preserving direction and original tag. All eight readies are independent. If both response classes compete in one group, round-robin among acceptable candidates, then lock the presented selection until fire. Other groups may retire concurrently. Group and tag distinguish each copy's reads and writes. The [client8 token](../tma/blackwell_tma_completion_tracker.md#transfer-types) carries transaction tag, group, and phase. Reuse its data slot after write request acceptance. The single backing port round-robins among candidate groups and holds a presented reply.
 
-Ordering sources are the TMA unit (including proxy fence), barrier front end (including init-release fence), wait, and final close. Round-robin fairly. Keep one held selection/source and one outstanding source/ID until matching ACK. Before init release, the barrier front end waits for actual commit of preceding init objects. Reject accesses outside the local singleton cluster. Ordering ACK service must be independent of subsequent software wait consumption. At close the reserved ID serves routing only. kind=CTA_CLOSE covers all issuers, including internal dirty backing writes.
+Ordering sources are the TMA unit (including proxy fence), barrier front end (including init-release fence), wait, and final close. Round-robin fairly. Keep one held selection/source and one outstanding source/ID until matching ACK. Before init release, the barrier front end waits for actual commit of preceding init objects. At request presentation, simulation asserts that a cluster access targets the local singleton cluster. Ordering ACK service must be independent of subsequent software wait consumption. At close the reserved ID serves routing only. kind=CTA_CLOSE covers all issuers, including internal dirty backing writes.
 
 | Lifetime | Entry and exit conditions |
 |---|---|
@@ -218,7 +205,7 @@ Ordering sources are the TMA unit (including proxy fence), barrier front end (in
 | ORDER → END | Receive the matching successful CTA_CLOSE ACK. |
 | END → CLOSED | Once free of pins and held responses the manager accepts epoch_end and clears allocation. After final close_rsp consumption retain the old epoch for comparison on the next open. |
 
-The top holds epoch/FSM, fault, arbiter held/source, outstanding ordering and pin identities, R_RF_ISSUE, flush/close-order handshake state, and final response valid. Publish normal close result only after END.
+The top holds epoch/FSM, arbiter held/source, outstanding ordering and pin identities, R_RF_ISSUE, flush/close-order handshake state, and final response valid. Publish normal close result only after END.
 
 <a id="mma-nonempty-commit"></a>
 
@@ -226,14 +213,14 @@ The top holds epoch/FSM, fault, arbiter held/source, outstanding ordering and pi
 
 A commit captures its issuer’s preceding unfinished operations. Independent issuers in the same warp can commit and complete separately.
 
-Once a younger MMA’s own writes and unpin settle, it can notify the tracker and satisfy its issuer’s commit while an older MMA awaits a write ACK. Both records remain occupied until in-order reclamation. A later fault on the older MMA preserves the younger MMA’s committed arrival and suppresses a successful arrival dependent on the failed write.
+Once a younger MMA’s own writes and unpin settle, it can notify the tracker and satisfy its issuer’s commit while an older MMA awaits a write ACK. Both records remain occupied until in-order reclamation.
 
 ### MMA pipeline timing
 
 <a id="cycles"></a>
 #### Cycle boundaries for consecutive MMAs
 
-Let M0 and M1 be successive N128 FP16→FP32 same-address accumulations with all write lanes enabled. SMEM A and B are independent and each 4 KiB aligned, K-major, with no swizzle, LBO=128 B, and SBO=256 B. Precheck/pin in advance, select partitions in time, use same-address four-cell-aligned D, and assume no core backpressure or other client contention. Map each 128 B half-block's eight atoms to distinct groups across all 32 physical banks. Column block j has four eight-row groups. Each instruction issues Q=N/2 microtiles per core. All table entries are handshake edges. F=64i is instruction i's first N128 dot and S=F+4j. Negative edges of the first instruction come from warmup.
+Let M0 and M1 be successive N128 FP16→FP32 same-address accumulations with all write lanes enabled. SMEM A and B are independent and each 4 KiB aligned, K-major, with no swizzle, LBO=128 B, and SBO=256 B. Complete command setup and pin in advance, select partitions in time, use same-address four-cell-aligned D, and assume no core backpressure or other client contention. Map each 128 B half-block's eight atoms to distinct groups across all 32 physical banks. Column block j has four eight-row groups. Each instruction issues Q=N/2 microtiles per core. All table entries are handshake edges. F=64i is instruction i's first N128 dot and S=F+4j. Negative edges of the first instruction come from warmup.
 
 | object specification | grant | Readiness and consumption |
 |---|---|---|

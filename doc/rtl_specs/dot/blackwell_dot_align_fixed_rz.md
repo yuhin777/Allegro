@@ -13,6 +13,6 @@ This combinational aligner implements rounding toward zero by shifting the unsig
 
 ## Functionality
 
-Compute `d=emax−term_exp` in EXP_W+1 bits. Valid inputs require d≥0. If d≥MAG_W, use zero. Otherwise q=term_mag>>d. The output is `term_sign ? -signed({0,q}) : signed({0,q})`. An invalid input produces zero. A negative d is an internal upstream protocol error.
+When term_valid is low, the term contributes zero. For a valid term compute `d=emax−term_exp` in EXP_W+1 bits. The maximum exponent supplied by the parent guarantees d≥0. A simulation assertion checks this relation for valid terms. If d≥MAG_W, use zero. Otherwise q=term_mag>>d. The output is `term_sign ? -signed({0,q}) : signed({0,q})`.
 
 The aligner has no registers and adds zero cycles. The parent defines the binary point when left-shifting the input magnitude. `signed_negative >>> d` rounds toward negative infinity and is not equivalent.

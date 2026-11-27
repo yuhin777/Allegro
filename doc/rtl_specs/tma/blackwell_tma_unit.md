@@ -7,21 +7,20 @@ The TMA top level owns the command FIFO, ticket table, and bulk group member age
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
 | `cmd` | Input | [tma_cmd_t](#command) (478 bits) | Software front end | On `cmd.fire`, reserve a ticket for the command. |
-| `rsp` | Output | [tma_rsp_t](#command) (126 bits) | Software front end | On `rsp.fire`, deliver the held response. Responses may reorder across issuers. |
+| `rsp` | Output | [tma_rsp_t](#command) (122 bits) | Software front end | On `rsp.fire`, deliver the held response. Responses may reorder across issuers. |
 | `gmem_req` | Output | [gmem_req_t](#gmem-types) (1,292 bits) | GMEM | On `gmem_req.fire`, issue on the shared 128 B bus. |
 | `gmem_rsp` | Input | [gmem_rsp_t](#gmem-types) (1,037 bits) | GMEM | On `gmem_rsp.fire`, route the return by class. |
 | `smem_req[8]` | Output | [smem_atom_req_t](../smem/blackwell_smem_fabric.md#transactions) (255 bits) | SMEM fabric | On `smem_req.fire`, issue independently per client 8 group for load writes and store reads. |
-| `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (211 bits) | SMEM fabric | On `smem_rsp.fire`, accept the matching group’s write ACK or read data. |
+| `smem_rsp[8]` | Input | [smem_atom_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (207 bits) | SMEM fabric | On `smem_rsp.fire`, accept the matching group’s write ACK or read data. |
 | `order_req` | Output | [order_req_t](../top/blackwell_async_subsystem_top.md#ordering) (163 bits) | Ordering service | On `order_req.fire`, submit the explicit PROXY_FENCE. |
-| `order_rsp` | Input | [order_rsp_t](../top/blackwell_async_subsystem_top.md#ordering) (62 bits) | Ordering service | On `order_rsp.fire`, accept its ordering acknowledgment. |
-| `bar_bind` | Output | [bar_bind_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (90 bits) | barrier frontend | On `bar_bind.fire`, bind the load after successful precheck. |
-| `bar_bind_rsp` | Input | op_done_t (62 bits) | barrier frontend | On `bar_bind_rsp.fire`, capture the binding status. |
-| `producer_done` | Output | [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (94 bits) | barrier frontend | On `producer_done.fire`, submit the bound load’s completion once. |
-| `producer_rsp` | Input | op_done_t (62 bits) | barrier frontend | On `producer_rsp.fire`, accept the matching object update acknowledgment. |
+| `order_rsp` | Input | [op_done_t](../top/blackwell_async_subsystem_top.md#identity) (58 bits) | Top-level ordering arbiter | On `order_rsp.fire`, accept its ordering acknowledgment. |
+| `bar_bind` | Output | [bar_bind_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (90 bits) | barrier frontend | On `bar_bind.fire`, bind the load after setup and dependency checks. |
+| `bar_bind_rsp` | Input | op_done_t (58 bits) | barrier frontend | On `bar_bind_rsp.fire`, confirm the binding by ID. |
+| `producer_done` | Output | [bar_producer_done_t](../mbarrier/blackwell_mbarrier_frontend.md#command) (90 bits) | barrier frontend | On `producer_done.fire`, submit the bound load’s completion once. |
+| `producer_rsp` | Input | op_done_t (58 bits) | barrier frontend | On `producer_rsp.fire`, accept the matching object update acknowledgment. |
 | `stop` | Input | 1 bit | Top level | Close new external commands. Accepted tickets continue. |
 | `epoch` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
 | `drained` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
-| `fault` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-protocol) defines clock, reset, and channel sampling.
 
@@ -29,9 +28,7 @@ The [top-level common protocol](../top/blackwell_async_subsystem_top.md#common-p
 flowchart LR
   I[cmd] --> Q[FIFO and tickets]
   Q --> C[descriptor cache]
-  C --> G{result status}
-  G -->|OK| S[setup]
-  G -->|error| XFAULT["Run termination"]
+  C -->|demand descriptor| S[setup]
   F[ticket and group]
   S -->|load| B[bar bind]
   B --> W[walker]
@@ -65,9 +62,9 @@ The public interface uses normalized single-CTA addresses and the project [Tenso
 | bytes, barrier_addr | 32, 32 | Linear length (explicit fence fixes bytes=0). Loads use an 8 B aligned object address. |
 | coord | 128 | Four s32 coordinates for a 4D tile, with coord[0] in the low bits. Opcode and the fixed descriptor subset determine rank. |
 | cache_policy | 64 | Both 4D tensor copy forms carry .L2::cache_hint. Other commands use zero. The hint does not alter data or completion order. |
-| wait_n | 1 | WAIT_GROUP_READ accepts only immediate 0 or 1, validated before narrowing. |
+| wait_n | 1 | WAIT_GROUP_READ accepts only immediate 0 or 1, checked by the simulation harness before narrowing. |
 
-These fields total **478 bits**. For an unsupported opcode or modifier with a valid ID, the front end returns UNSUPPORTED before allocating a data ticket. `tma_rsp_t={done:op_done_t,logical_bytes:u64}` is 126 bits. Successful data commands return full logical_bytes. Control commands return zero. Static ingress rejection returns zero bytes. Runtime errors report fault directly to the top level.
+These fields total **478 bits**. `tma_rsp_t={done:op_done_t,logical_bytes:u64}` is 122 bits. Data commands return the full logical_bytes and control commands return zero.
 
 | opcode | Name | Data effect and completion |
 |---:|---|---|
@@ -78,9 +75,9 @@ These fields total **478 bits**. For an unsupported opcode or modifier with a va
 | 5 | PROXY_FENCE | Fixed generic→async, shared::cta, covering the issuing thread's relevant preceding writes. Request actual ordering service and complete on matching acknowledgment. |
 | 6 | PREFETCH_MAP | prefetch.tensormap hints the descriptor cache only. It has no tile data, binding, copy group, or visibility obligation. |
 
-Both SMEM and GMEM linear bases are 16 B aligned and bytes is a multiple of 16 B. See [Tensor Map](blackwell_tma_setup.md#tensor-map) for tile data/address effects and OOB. One load has logical_bytes≤1,048,575. Validate all ranges before bind. Normalize an address to CTA-local only if it provably targets this CTA. Preserve remote/multicast checks. fence.proxy.async.shared::cta makes this issuer's preceding generic writes visible to subsequent async accesses and requires actual ordering acknowledgment. GMEM data requests use only the common READ/WRITE.
+Both SMEM and GMEM linear bases are 16 B aligned and bytes is a multiple of 16 B. See [Tensor Map](blackwell_tma_setup.md#tensor-map) for tile data/address effects and OOB. One load has logical_bytes≤1,048,575. Normalized shared addresses target this CTA. Simulation checks alignment, actual address ranges and the byte bound. fence.proxy.async.shared::cta makes this issuer's preceding generic writes visible to subsequent async accesses and requires actual ordering acknowledgment. GMEM data requests use only the common READ/WRITE.
 
-opcode=7 denotes rejection. Before normalization the front end rejects unsupported linear store, tensormap.replace, masked store, reduce, packed, im2col, multicast, and other unlisted forms, without issuing control transactions. See the [support table](../../proposals/supported_ptx.md) for actual instruction spellings. Cluster addresses must provably target the current CTA's SMEM.
+Opcode 7 is reserved. Simulation asserts that the input opcode and fields correspond to a normalized command in the [support table](../../proposals/supported_ptx.md).
 
 #### Bulk group read cutoff
 
@@ -104,10 +101,11 @@ The GMEM bus is 128 B (1024 bits), with a 64-bit address and 128-bit mask. `gmem
 |---|---|
 | `gmem_req_t` | id9, op3, addr64, data1024, byte_mask128, cache_policy64 |
 | `gmem_rsp_t` | id9, data1024, status4 |
+| `tma_gmem_return_t` | id9, data1024 |
 
-op=0 READ and 1 WRITE. Others are reserved. addr is 128 B aligned. Handle prefetch.tensormap as a descriptor hint. Successful READ means data has been captured. For a TMA store, the GMEM adapter returns OK only once the selected bytes of that WRITE have committed and the issuing thread can see their effects through the generic proxy after observing full completion. Non-OK raises runtime fault. Already committed effects remain.
+op=0 READ and 1 WRITE. Others are reserved. addr is 128 B aligned. Handle prefetch.tensormap as a descriptor hint. Successful READ means data has been captured. For a TMA store, the GMEM adapter returns OK only once the selected bytes of that WRITE have committed and the issuing thread can see their effects through the generic proxy after observing full completion. Simulation asserts status=OK whenever the GMEM service presents a valid response. The unit routes the 1,033-bit ID and data payload to the selected child on the same handshake.
 
-Every accepted request receives one single-beat response with its original ID. Different IDs may return out of order. The current response class selects ready from the data path or descriptor cache. If ready=0, the external producer holds valid, full ID, data, and status until fire. A locked response can delay a later class on the same physical port. Data row commits to SMEM and their ACKs must progress independently. Returns must not wait for acceptance of a new request. Errors also return under their original ID.
+Every accepted request receives one single-beat response with its original ID. Different IDs may return out of order. The current response class selects ready from the data path or descriptor cache. If ready=0, the external producer holds valid, full ID, data, and status until fire. A locked response can delay a later class on the same physical port. Data row commits to SMEM and their ACKs must progress independently. Returns must not wait for acceptance of a new request.
 
 <a id="tickets"></a>
 
@@ -115,23 +113,23 @@ Every accepted request receives one single-beat response with its original ID. D
 
 - There are 20 tickets: 0…17 general-purpose and 18/19 reserved for group or control. Each holds id58, opcode3, execution stage, descriptor/source/full, and response state. A data ticket stores logical_bytes64, a tensor member also stores two age bits, and each unfinished wait stores its 18-bit cutoff bitmap. Reuse a ticket only after all child references release and software consumes its response.
 - Allocate group age with the member ticket and zero it when accepting a group member command. The unit binds using the general ticket's barrier_addr32 and checks copy dependencies against that address and the [setup access spans](blackwell_tma_setup.md#copy-span). The two setup slots serve only preparation and S0 enumeration. Hold the selected software response ticket until fire.
-- GMEM round-robins between class0=data and class1=descriptor. Other classes are reserved. The eight SMEM groups can transfer eight atoms with different tags on one edge. Lock bus source selection until fire. Route responses by actual live class/ID and consume and diagnose unknown classes. The top passes valid/ready by fixed group, retaining tag/group/phase. A stalled group locks only its own presented response.
+- GMEM round-robins between class0=data and class1=descriptor. Other classes are reserved. The eight SMEM groups can transfer eight atoms with different tags on one edge. Lock bus source selection until fire. Route responses by class and original transaction ID. Simulation asserts that valid responses belong to class 0 or 1 and match an outstanding request. The top passes valid/ready by fixed group, retaining tag/group/phase. A stalled group locks only its own presented response.
 
-cmd_ready requires matching epoch, unique ID, available ticket, and FIFO space for commands using the FIFO. Reject statically illegal modifiers before registering a data ticket. Register group commit/wait at acceptance outside the data FIFO. A wait does not block dispatch of older instructions. Dispatch operations in FIFO order. A free setup slot may prepare the immediately following copy without crossing an explicit fence. Held arbiters continue operating after stop.
+With external admission open, cmd_ready requires an available ticket and FIFO space for commands using the FIFO. The source provides a unique live ID in the current epoch. Register group commit/wait at acceptance outside the data FIFO. A wait does not block dispatch of older instructions. Dispatch operations in FIFO order. A free setup slot may prepare the immediately following copy without crossing an explicit fence. Held arbiters continue operating after stop.
 
 <a id="owner-view"></a>
 #### Combinational general ticket view
 
 `owner_view[0…17]` is driven combinationally from each ticket's registers. Each `tma_owner_view_t={live:1,id:58,store:1,cache_policy:64,total_bytes:64,bound:1}` entry totals **189 bits** from high to low. The tracker and data path can read it on the same edge. There is no independent handshake or copy. `live` takes the ticket's occupied bit. Other fields of an empty entry are invalid.
 
-`store = (opcode == STORE_TENSOR)`. `id` and `cache_policy` come from the original command. `total_bytes` takes the logical byte count successfully published by setup. `bound` records successful bind response for this load and clears on allocation. After setup slot release, old segments still use `tag.ticket` to read their original ticket fields until all child references settle.
+`store = (opcode == STORE_TENSOR)`. `id` and `cache_policy` come from the original command. `total_bytes` takes the logical byte count published by setup. `bound` records a matching bind acknowledgment for this load and clears on allocation. After setup slot release, old segments still use `tag.ticket` to read their original ticket fields until all child references settle.
 
 ### Command lifetime
 
-1. Linear goes directly to setup. Tensor and descriptor hints use cache.lookup. A legal hint only attempts a descriptor cache fill. A successful demand passes its original ticket and descriptor to setup. A non-OK actual GMEM response raises fault.
-2. After successful setup write span and total_bytes into unit.ticket. When the head passes the dependency checks below, a load issues bind once and can enter the walker only after OK. Non-OK bind raises fault. Every successfully bound load, including an empty one, must receive one matching producer_rsp.
+1. Linear goes directly to setup. Tensor and descriptor hints use cache.lookup. A legal hint only attempts a descriptor cache fill. A demand lookup passes its original ticket and descriptor to setup.
+2. When setup returns, write span and total_bytes into unit.ticket. When the head passes the dependency checks below, a load issues bind once and can enter the walker only after the matching bind acknowledgment. Every bound load, including an empty one, must receive one matching producer_rsp.
 3. The unit arms an admitted READY head in advance. tracker.begin(ticket) initializes segment tracking for the existing ticket and may overlap enumeration of the preceding command. The walker samples the first segment directly from the ARMED head. First S0.fire issues the command. Relay walk_start to setup with the original reference. Release the setup slot on the edge where the last segment enters S0, carrying original ticket/slot in slot_release. Later stages read their pipeline registers. The unit independently accepts source, full, and finish. Reclaim the ticket only after child references and the software response settle.
-4. Store read progress satisfies the source requirement of committed group .read. Report full after all actual GMEM write ACKs and ticket obligations settle. Update load source and full completion as specified in [command](blackwell_tma_unit.md#command). The tracker's producer_done travels through top→frontend. Success indicates the object update committed. The unit does not deduct tx again. Old group read cutoff bits clear independently of full and software response consumption.
+4. Store read progress satisfies the source requirement of committed group .read. Report full after all actual GMEM write ACKs and ticket obligations settle. Update load source and full completion as specified in [command](blackwell_tma_unit.md#command). The tracker's producer_done travels through top→frontend. The matching producer_rsp confirms the object update committed. The unit does not deduct tx again. Old group read cutoff bits clear independently of full and software response consumption.
 5. PROXY_FENCE is a FIFO ordering boundary. Wait until covered older operations reach the required visibility, send actual ordering, and wait for ACK before releasing later memory accesses. Memory and service responses to issued operations continue retiring. Software consumption time of old rsp does not affect fence admission.
 
 <a id="copy-overlap"></a>
@@ -148,15 +146,15 @@ Two independent 16 KiB panels each contain 128 full segments. Take A's first all
 
 All copies share the 128 B/cycle data ports. Calculate transfer time from actual masks, grants, and returns. [Data path cycle baseline](blackwell_tma_data_path.md#peak)
 
-Synchronous reset clears ticket/FIFO/arbitration state and fault. Normal epoch transition requires drained. Unknown identities, duplicate responses, and non-OK active transactions (descriptor, data, ordering, or producer service) raise top-level runtime fault. Terminate this run and reset after isolation.
+Synchronous reset clears ticket, FIFO and arbitration state. Normal epoch transition requires drained. Simulation asserts that command IDs belong to the current epoch and are unique among live commands and that each acknowledgment matches an outstanding obligation.
 
 ## Submodules
 
 | Submodule | Instances | Connections and parent control |
 | --- | --- | --- |
 | [fifo](../base/blackwell_fifo.md) | 1 | Eight entries holding ticket5 and cmd478 each. The unit controls dispatch from the head. |
-| [tma_descriptor_cache](blackwell_tma_descriptor_cache.md) | 1 | Provides descriptors for setup precheck and shares GMEM with the data path. |
-| [tma_setup](blackwell_tma_setup.md) | 1 | Two context slots validate addresses and publish ARMED contexts to the walker. |
+| [tma_descriptor_cache](blackwell_tma_descriptor_cache.md) | 1 | Provides demand descriptors for setup and shares GMEM with the data path. |
+| [tma_setup](blackwell_tma_setup.md) | 1 | Two context slots compute address spans and publish ARMED contexts to the walker. |
 | [tma_request_generator](blackwell_tma_request_generator.md) | 1 | One walker enumerates the head command into segments. |
 | [tma_completion_tracker](blackwell_tma_completion_tracker.md) | 1 | Allocate tags under each ticket, match events, and report progress and terminal state to the unit. |
 | [tma_data_path](blackwell_tma_data_path.md) | 1 | Move GMEM lines and SMEM atoms by tag. All tickets share slots and ports. |

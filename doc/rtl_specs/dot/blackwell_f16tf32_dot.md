@@ -20,7 +20,7 @@ flowchart LR
 
 ## Functionality
 
-clk/rst_n and valid/ready follow the [common conventions](../top/blackwell_async_subsystem_top.md#common-protocol). The upstream checks the type combination and excludes invalid values. FP16/BF16 use 16-bit elements and TF32 uses a 32-bit container.
+clk/rst_n and valid/ready follow the [common conventions](../top/blackwell_async_subsystem_top.md#common-protocol). The upstream supplies a supported wide floating-point type combination. FP16/BF16 use 16-bit elements and TF32 uses a 32-bit container.
 
 <a id="formats"></a>
 
