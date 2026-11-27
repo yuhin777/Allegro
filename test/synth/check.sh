@@ -13,6 +13,13 @@ run_yosys() {
 top=blackwell_async_subsystem_top
 run_yosys "read_slang --ast-compilation-only -DSYNTHESIS --top $top -f rtl/files.f" >"$out/$top.elaboration.log"
 echo "PASS SystemVerilog elaboration $top"
+# Lower the integration logic independently of the three large subsystems.
+blackboxes="--blackboxed-module blackwell_tc_mma_engine --blackboxed-module blackwell_tmem_subsystem --blackboxed-module blackwell_smem_subsystem"
+run_yosys "read_slang -DSYNTHESIS $blackboxes --top $top -f rtl/files.f; hierarchy -check -top $top; stat" >"$out/$top.lowering.log"
+echo "PASS RTLIL lowering of top-level integration logic"
+module=blackwell_tc_scale_b_snapshot
+run_yosys "read_slang -DSYNTHESIS --top $module -f rtl/files.f; hierarchy -check -top $module; stat" >"$out/$module.lowering.log"
+echo "PASS RTLIL lowering $module"
 for module in blackwell_fifo blackwell_banked_sram blackwell_tc_async_completion blackwell_tc_completion_tracker blackwell_int8_dot; do
     run_yosys "read_slang -DSYNTHESIS --top $module -f rtl/files.f; synth -top $module; check -assert; stat" >"$out/$module.log"
     echo "PASS synthesis $module"

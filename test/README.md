@@ -10,7 +10,7 @@ Run these commands from the repository root on the RTX 5080 verification host. T
 | `test/run.sh unit` | Self-checking SystemVerilog benches, both dot configurations, simulation-assertion cases, and the SMEM/TMA/mbarrier cocotb integration tests. |
 | `test/run.sh workloads` | One top-level model shared by linear replay, commit ordering, accumulation, FA4 timing and FA4 replay. |
 | `test/run.sh all` | Lint, unit and workloads in sequence. |
-| `test/synth/check.sh` | Slang elaboration of the top and Yosys synthesis/check of the FIFO, SRAM, TC bridge, TC tracker and INT8 dot in the ORFS image. |
+| `test/synth/check.sh` | Full subsystem elaboration, RTLIL generation for the top-level integration logic and scale-B snapshot, and Yosys synthesis/check of the FIFO, SRAM, TC bridge, TC tracker and INT8 dot in the ORFS image. |
 
 Set `JOBS` to control build parallelism. Set `ALLEGRO_BUILD_DIR` to select the regression output directory. The [dot suite](dot/run.sh) also accepts `MMA_SIM_VECTORS`, a file of additional numerical transactions in the existing 17-field [reference format](dot/reference.py). External finite cases must share the decode, zero-term, alignment and packing rules of the DUT. [MMA-Sim finite accumulation reference](https://github.com/yuhin777/Allegro/blob/ac5b2a4/MMA-Sim/mmasim/simulator/arithmetic.py)
 

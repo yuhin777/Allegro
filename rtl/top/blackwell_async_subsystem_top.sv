@@ -304,7 +304,7 @@ module blackwell_async_subsystem_top
     src_req_ready = 0;
     if (candidate_found && pick < 3) src_req_ready[pick] = order_req_ready;
     src_rsp_valid = 0;
-    foreach (src_rsp_payload[i]) src_rsp_payload[i] = '{id: order_rsp_payload.id};
+    for (int i = 0; i < 3; i++) src_rsp_payload[i] = '{id: order_rsp_payload.id};
     order_rsp_ready = 1;
     if (order_outstanding && outstanding_src < 3) begin
       src_rsp_valid[outstanding_src] = order_rsp_valid;

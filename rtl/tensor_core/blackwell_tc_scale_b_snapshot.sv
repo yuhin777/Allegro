@@ -99,7 +99,7 @@ module blackwell_tc_scale_b_snapshot
     end
     rd_req_valid = 0;
     rd_rsp_ready = '1;
-    foreach (rd_req_payload[l]) rd_req_payload[l] = '0;
+    for (int l = 0; l < 128; l++) rd_req_payload[l] = '0;
     if (req_found) begin
       rd_req_valid[7'(req_lane)] = 1;
       rd_req_payload[7'(req_lane)].tag = '{ctx[req_bank].id, 4'd4, {9'b0, req_lane, req_atom}};
