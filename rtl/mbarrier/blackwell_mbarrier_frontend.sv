@@ -115,13 +115,25 @@ module blackwell_mbarrier_frontend
   logic [3:0] held_bind, held_done;
   logic free_sw, free_prod, have_svc, have_wait, have_order, have_result, have_bind, have_done;
   logic have_lifecycle, matches_prod, duplicate_prod, bind_blocked;
-  logic tc_busy, producer_busy, duplicate_sw;
+  logic tc_busy, producer_busy, duplicate_sw, try_awaits_probe;
+  status_t ingress_status;
   function automatic logic lifecycle_op(input bar_op_t op);
     return op inside {BAR_INIT, BAR_INVAL};
   endfunction
 
   always_comb begin
+    ingress_status = OK;
+    if (sw_cmd_payload.op > BAR_FENCE_INIT) ingress_status = UNSUPPORTED;
+    else if (sw_cmd_payload.id.epoch != epoch) ingress_status = STALE;
+    else if (sw_cmd_payload.op != BAR_FENCE_INIT &&
+             (sw_cmd_payload.addr[2:0] != 0 || sw_cmd_payload.addr >= 233472))
+      ingress_status = RANGE;
+    else if ((sw_cmd_payload.op inside {BAR_INIT, BAR_ARRIVE} &&
+              !(sw_cmd_payload.count inside {[1 : 1048575]})) ||
+             (sw_cmd_payload.op == BAR_EXPECT && sw_cmd_payload.bytes > 1048575))
+      ingress_status = RANGE;
     free_sw = 0;
+    try_awaits_probe = 0;
     duplicate_sw = wait_id_busy;
     free_s = 0;
     eligible = 0;
@@ -134,10 +146,11 @@ module blackwell_mbarrier_frontend
         free_sw = 1;
         free_s = 3'(i);
       end
+      try_awaits_probe |= sw[i] == S_TRY;
       if (sw[i] != S_FREE) begin
         duplicate_sw |= cmd[i].id == sw_cmd_payload.id;
         drained = 0;
-        if (lifecycle_op(cmd[i].op)) begin
+        if (result[i].status == OK && lifecycle_op(cmd[i].op)) begin
           commit_blocked |= cmd[i].addr == commit_candidate_addr;
           bind_blocked |= cmd[i].addr == bind_req_payload.addr;
         end
@@ -147,7 +160,7 @@ module blackwell_mbarrier_frontend
         logic same_object;
         same_object = cmd[i].op != BAR_FENCE_INIT && cmd[j].op != BAR_FENCE_INIT &&
             cmd[i].addr == cmd[j].addr;
-        if (older[i][j] && sw[j] != S_FREE) begin
+        if (older[i][j] && sw[j] != S_FREE && result[j].status == OK) begin
           if (cmd[i].id.issuer == cmd[j].id.issuer && sw[j] != S_RESULT) eligible[i] = 0;
           if (same_object && (lifecycle_op(cmd[i].op) || lifecycle_op(cmd[j].op))) eligible[i] = 0;
         end
@@ -155,7 +168,7 @@ module blackwell_mbarrier_frontend
       lifecycle[i] = eligible[i] && lifecycle_op(cmd[i].op);
     end
     sw_cmd_ready = rst_n && !stop && !fault && free_sw && !duplicate_sw;
-    if (sw_cmd_valid && sw_cmd_ready && lifecycle_op(sw_cmd_payload.op)) begin
+    if (sw_cmd_valid && sw_cmd_ready && ingress_status == OK && lifecycle_op(sw_cmd_payload.op)) begin
       commit_blocked |= sw_cmd_payload.addr == commit_candidate_addr;
       bind_blocked |= sw_cmd_payload.addr == bind_req_payload.addr;
     end
@@ -235,7 +248,7 @@ module blackwell_mbarrier_frontend
       have_result = 1;
       result_s = held_result;
     end
-    wait_cmd_valid = have_wait && !fault;
+    wait_cmd_valid = have_wait && !try_awaits_probe && !fault;
     wait_cmd_payload = cmd[wait_s];
     select_wait_rsp = wait_rsp_lock ||
         (!result_lock && wait_rsp_valid && (!have_result || prefer_wait_rsp));
@@ -378,20 +391,9 @@ module blackwell_mbarrier_frontend
       if (sw_cmd_valid && !stop && duplicate_sw) fault <= 1;
       lifecycle_cursor <= lifecycle_cursor + 3'd1;
       if (sw_cmd_valid && sw_cmd_ready) begin
-        status_t status;
-        status = OK;
-        if (sw_cmd_payload.op > BAR_FENCE_INIT) status = UNSUPPORTED;
-        else if (sw_cmd_payload.id.epoch != epoch) status = STALE;
-        else if (sw_cmd_payload.op != BAR_FENCE_INIT &&
-                 (sw_cmd_payload.addr[2:0] != 0 || sw_cmd_payload.addr >= 233472))
-          status = RANGE;
-        else if ((sw_cmd_payload.op inside {BAR_INIT, BAR_ARRIVE} &&
-                  !(sw_cmd_payload.count inside {[1 : 1048575]})) ||
-                 (sw_cmd_payload.op == BAR_EXPECT && sw_cmd_payload.bytes > 1048575))
-          status = RANGE;
         cmd[free_s] <= sw_cmd_payload;
-        result[free_s] <= '{id: sw_cmd_payload.id, status: status, completed: 0};
-        sw[free_s] <= status == OK ? S_NEW : S_RESULT;
+        result[free_s] <= '{id: sw_cmd_payload.id, status: ingress_status, completed: 0};
+        sw[free_s] <= ingress_status == OK ? S_NEW : S_RESULT;
         for (int i = 0; i < 8; i++) begin
           older[free_s][i] <= sw[i] != S_FREE &&
               !(sw_rsp_valid && sw_rsp_ready && !select_wait_rsp && result_s == 3'(i));
@@ -414,7 +416,7 @@ module blackwell_mbarrier_frontend
         wait_lock <= !wait_cmd_ready;
         held_wait <= wait_s;
         if (wait_cmd_ready) begin
-          sw[wait_s] <= S_FREE;
+          sw[wait_s] <= S_TRY;
           wait_cursor <= wait_s + 3'd1;
         end
       end
@@ -481,6 +483,8 @@ module blackwell_mbarrier_frontend
           class_cursor[service_class] <= service_req_payload.slot + 5'd1;
           case (service_class)
             0: sw[service_s] <= S_PENDING;
+            // The wait table owns the observation after its initial QUERY enters service.
+            1: sw[held_wait] <= S_FREE;
             2: ts <= T_PENDING;
             3: ps[update_p] <= ps[update_p] == P_QUERY ? P_QUERY_WAIT : P_UPDATE_WAIT;
             default: ;

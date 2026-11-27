@@ -42,7 +42,7 @@ class Fabric:
         self.pending = deque()
         self.order = [deque() for _ in range(3)]
         self.results = {}
-        self.expected_tma_status = {}
+        self.expected_status = {}
         self.cycle = 0
         self.seq = 0
         self.gmem_requests = 0
@@ -113,7 +113,7 @@ class Fabric:
             for channel, suffix in [("tma_rsp", 68), ("bar_rsp", 5)]:
                 if self.val(channel + "_valid") and self.val(channel + "_ready"):
                     p = self.val(channel + "_payload")
-                    expected = self.expected_tma_status.pop(p >> suffix, 0) if channel == "tma_rsp" else 0
+                    expected = self.expected_status.pop(p >> suffix, 0)
                     assert ((p >> (suffix - 4)) & 15) == expected
                     assert p >> suffix not in self.results
                     self.results[p >> suffix] = p & ((1 << suffix) - 1)
@@ -124,7 +124,7 @@ class Fabric:
         if self.cycle >= 20000:
             raise TimeoutError(
                 f"cycle {self.cycle}, probe={probe}, last sequence={self.seq}, "
-                f"pending TMA IDs={list(self.expected_tma_status)}, "
+                f"pending response IDs={list(self.expected_status)}, "
                 f"held reads={len(self.held_reads)}, held store ACKs={len(self.store_acks)}"
             )
         return ready
@@ -148,7 +148,7 @@ class Fabric:
 
     async def tma(self, opcode, map_addr=0, coord=(0, 0, 0, 0), smem=0xf0, expected_status=0):
         key = self.id()
-        self.expected_tma_status[key] = expected_status
+        self.expected_status[key] = expected_status
         coords = sum((c & 0xffffffff) << (i * 32) for i, c in enumerate(coord))
         await self.send("tma_cmd", packed((58, key), (3, opcode), (64, map_addr), (32, smem),
                                          (64, 0), (32, 0), (32, 0x1000), (128, coords), (64, 0), (1, 0)))
@@ -171,8 +171,9 @@ class Fabric:
                 pass
         self.d.smem_wr_valid.value = 0
 
-    async def bar(self, op, count=0, nbytes=0, hint=0, addr=0x1000, issuer=0):
+    async def bar(self, op, count=0, nbytes=0, hint=0, addr=0x1000, issuer=0, expected_status=0):
         key = self.id() | (issuer << 32)
+        self.expected_status[key] = expected_status
         await self.send("bar_cmd", packed((58, key), (4, op), (32, addr), (32, count), (32, nbytes),
                                          (1, 0), (1, 0), (32, hint)))
         return key

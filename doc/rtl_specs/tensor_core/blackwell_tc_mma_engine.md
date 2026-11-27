@@ -2,7 +2,7 @@
 
 ## Description
 
-One engine per SM manages three ordered MMA command records, four [core](blackwell_tc_mma_core.md), a shared [B loader](blackwell_tc_b_loader.md#types), and [scale B snapshot](blackwell_tc_scale_b_snapshot.md). Reclaim records in acceptance order and notify completion as each ID finishes. Release either input context once its sources have been used for the last time and issued reads have settled. The engine coordinates first-microtile loading across four cores. Each core advances independently afterward.
+One engine per SM manages three ordered MMA command records, four [cores](blackwell_tc_mma_core.md), a shared [B loader](blackwell_tc_b_loader.md#types), and [scale B snapshot](blackwell_tc_scale_b_snapshot.md). Reclaim records in acceptance order and notify completion as each ID finishes. Release either input context once its sources have been used for the last time and issued reads have settled. The engine coordinates first-microtile loading across four cores. Each core advances independently afterward.
 
 <a id="engine-ports"></a>
 
@@ -13,6 +13,26 @@ One engine per SM manages three ordered MMA command records, four [core](blackwe
 | `pin_req` | Output | 61 bits | TMEM manager | On `pin_req.fire`, request the [fixed user](../tmem/blackwell_tmem_manager.md#management-types) for the physical record in command order. |
 | `pin_rsp` | Input | 62 bits | TMEM manager | On `pin_rsp.fire`, accept the pin status by ID. |
 | `unpin` | Output | 61 bits | TMEM manager | On `unpin.fire`, release the settled ID’s reference. |
+| `live_o[3]` | Output | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | SMEM/TMEM fabrics and engine children | Level. Acceptance order, oldest at the head. |
+| `tc_smem_req` | Output | [smem_rd_req_t](../smem/blackwell_smem_fabric.md#transactions) (126 bits) | SMEM fabric | Eight independent group handshakes per engine port. Ports 0…3 serve the cores. Port 4 serves the B loader and maps to fabric client 6. |
+| `tc_smem_rsp` | Input | [smem_rd_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (210 bits) | SMEM fabric | On the addressed port’s handshake, accept the matching return by group and tag. |
+| `tc_rd_req` | Output | [tmem_rd_req_t](../tmem/blackwell_tmem_fabric.md#transactions) (108 bits) | TMEM fabric | 128 independent lane handshakes per client. Clients 0…3 serve the cores and client 4 serves scale B. Each core selects its C reads locally. |
+| `tc_rd_rsp` | Input | [tmem_rd_rsp_t](../tmem/blackwell_tmem_fabric.md#transactions) (210 bits) | TMEM fabric | On the addressed port’s handshake, accept the tagged return on its lane. |
+| `tc_wr_req` | Output | [tmem_wr_req_t](../tmem/blackwell_tmem_fabric.md#transactions) (236 bits) | TMEM fabric | On each lane handshake, issue the write from core client 0…3. Read-only scale client 4 holds write valid low. |
+| `tc_wr_ack` | Input | [tmem_wr_ack_t](../tmem/blackwell_tmem_fabric.md#transactions) (82 bits) | TMEM fabric | On the addressed port’s handshake, accept the acknowledgment of the original write. |
+| `clk` | Input | 1 bit | Top level | Rising edge samples synchronous state. |
+| `rst_n` | Input | 1 bit | Top level | Sample low on a rising edge to reset control. |
+| `epoch_i` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
+| `halt_i` | Input | 1 bit | Top level | Registered subsystem fault level, broadcast to the scheduler and all execution children. |
+| `stop_i` | Input | 1 bit | Top level | Level closing new commands. Accepted IDs continue to completion. |
+| `idle_o` | Output | 1 bit | Top level | Level indicating idle execution. |
+| `drained_o` | Output | 1 bit | Top level | Level asserted when the scheduler has no live records and all cores, the loader and the snapshot are drained. |
+| `fault_o` | Output | 1 bit | Top level | Combinational OR of sticky scheduler, core, loader and snapshot faults. The top samples this level and broadcasts its registered halt. |
+
+The following internal channels connect the command scheduler to the execution units. Directions are relative to the scheduler.
+
+| Signal / channel | Direction | Type / width | Peer | Sampling condition |
+|---|---|---|---|---|
 | `prepare[4]` | Output | [prepare_t](#engine-ports) (449 bits) | Four cores | On `prepare.fire`, bind each core independently to a record (0…2), input bank and command. |
 | `b_select[4]` | Output | [b_select_t](#engine-ports) (63 bits) | Four cores | On `b_select.fire`, select the base partition, size and reuse flag for the ID at each core. |
 | `first_id` | Output | 59 bits (valid and 58-bit ID) | Four cores | Level. Identify the oldest eligible unlaunched command. |
@@ -21,7 +41,6 @@ One engine per SM manages three ordered MMA command records, four [core](blackwe
 | `input_free` | Input | 4 × 3 bits | Four cores | Level. Sample source release per core and record. |
 | `writes_done` | Input | 4 × 3 bits | Four cores | Level. Sample settlement of actual writes per core and record. |
 | `local_done[4]` | Input | op_done_t (62 bits per core) | Four cores | On `local_done.fire`, accept completion by ID. |
-| `live[3]` | Output | 61 bits per entry (1-bit valid, 2-bit record, 58-bit ID) | core, loader, snapshot, SMEM/TMEM fabric | Level. Acceptance order, oldest at the head. Faults from these execution modules feed the top level. |
 | `older_writes_clear[3]` | Output | 4 bits per record | Four cores | Level. Gate TMEM A, scale A, scale B and offset-overlapping C/D against older unsettled writes. Write-after-write waits only for prior writes to settle. The engine gates snapshot.start with the scale B permission. |
 | `start` | Output | prepare_t (449 bits) | Scale B snapshot | On `start.fire`, start the permitted scale B snapshot. |
 | `release` | Output | async_id_t (58 bits) | Scale B snapshot | On `release.fire`, release the matching snapshot. |
@@ -29,19 +48,6 @@ One engine per SM manages three ordered MMA command records, four [core](blackwe
 | `quiescent` | Input | 3 bits | Scale B snapshot | Level. Sample before releasing the input context. |
 | `load` | Output | [b_load_t](blackwell_tc_b_loader.md#types) (132 bits) | B loader | On `load.fire`, start one load per miss. Data goes directly from loader to cores. |
 | `result` | Input | [b_result_t](blackwell_tc_b_loader.md#types) (62 bits) | B loader | On `result.fire`, accept successful distribution of the final block to every core or the error status. |
-| SMEM read request | Output | [smem_rd_req_t](../smem/blackwell_smem_fabric.md#transactions) (126 bits) | SMEM fabric | On the addressed port’s handshake, issue per group from B client 6 or core clients 0…3, eight ports per client. |
-| SMEM read response | Input | [smem_rd_rsp_t](../smem/blackwell_smem_fabric.md#transactions) (210 bits) | SMEM fabric | On the addressed port’s handshake, accept the matching return by group and tag. |
-| TMEM read request | Output | [tmem_rd_req_t](../tmem/blackwell_tmem_fabric.md#transactions) (108 bits) | TMEM fabric | On the addressed port’s handshake, issue per lane from cores 0…3 or scale client 4. Each core selects its C reads locally. |
-| TMEM read response | Input | [tmem_rd_rsp_t](../tmem/blackwell_tmem_fabric.md#transactions) (210 bits) | TMEM fabric | On the addressed port’s handshake, accept the tagged return on its lane. |
-| TMEM write request | Output | [tmem_wr_req_t](../tmem/blackwell_tmem_fabric.md#transactions) (236 bits) | TMEM fabric | On the addressed port’s handshake, issue the core write on its lane. |
-| TMEM write acknowledgment | Input | [tmem_wr_ack_t](../tmem/blackwell_tmem_fabric.md#transactions) (82 bits) | TMEM fabric | On the addressed port’s handshake, accept the acknowledgment of the original write. |
-| `clk` | Input | 1 bit | Top level | Rising edge samples synchronous state. |
-| `rst_n` | Input | 1 bit | Top level | Sample low on a rising edge to reset control. |
-| `epoch_i` | Input | 16 bits | Top level | Level identifying the active CTA lifetime. |
-| `stop_i` | Input | 1 bit | Top level | Level closing new commands. Accepted IDs continue to completion. |
-| `idle_o` | Output | 1 bit | Top level | Level indicating idle execution. |
-| `drained_o` | Output | 1 bit | Top level | Level asserted after outstanding work and held transfers drain. |
-| `fault_o` | Output | 1 bit | Top level | Sticky runtime fault level, cleared by isolated reset. |
 
 ```mermaid
 flowchart LR
@@ -203,6 +209,7 @@ Each core reads only installed blocks it has permission to use.
 
 | Submodule | Instances | Connections and parent control |
 | --- | --- | --- |
+| `blackwell_tc_mma_control` | 1 | The scheduler owns command records, input-bank assignment and B residency. It issues work to the execution units and reports completed IDs to the tracker. |
 | [tc_mma_core](blackwell_tc_mma_core.md) | 4 | Independent fills, computation, and writeback. The engine selects the first microtile and input context and collects IDs and terminal write state from all cores. |
 | [tc_b_loader](blackwell_tc_b_loader.md) | 1 | The engine dispatches misses. The loader delivers the same eight-column block independently to all four cores. |
 | [tc_scale_b_snapshot](blackwell_tc_scale_b_snapshot.md) | 1 | Snapshot using the input bank assigned by the engine. All four cores query by ID. |

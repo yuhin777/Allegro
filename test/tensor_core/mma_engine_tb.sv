@@ -44,7 +44,8 @@ module mma_engine_tb;
   logic [2:0][3:0] older_writes_clear;
   mma_live_t [2:0] live_o;
   b_load_t load_payload;
-  blackwell_tc_mma_engine dut (.*);
+  // Drive the scheduler independently to stagger per-core completion and selection.
+  blackwell_tc_mma_control dut (.*);
 
   localparam int CASES = 21;
   int loads[CASES], reports[CASES], launch_tick[CASES], selections[CASES], grants[CASES];

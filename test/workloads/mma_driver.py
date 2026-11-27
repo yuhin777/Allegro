@@ -20,7 +20,7 @@ class Accumulation(FrontEnd):
             return
         d = self.d
         def core(name):
-            return d._id("cores[0].core."+name, extended=False)
+            return d._id("engine.cores[0].core."+name, extended=False)
         if int(core("operand_valid").value) and int(core("operand_ready").value):
             op = int(core("dot_command").value) >> 388
             if op not in self.first_for_id:

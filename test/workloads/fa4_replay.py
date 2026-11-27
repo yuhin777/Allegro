@@ -36,7 +36,7 @@ class WorkTile:
         self.cold_op=None
         self.cold_a_grants=0
         self.incomplete_cold_fill=False
-        self.core_dots=[tuple(fe.d._id(f"cores[{c}].core.{port}",extended=False)
+        self.core_dots=[tuple(fe.d._id(f"engine.cores[{c}].core.{port}",extended=False)
                               for port in ("operand_valid","operand_ready","dot_command")) for c in range(4)]
         self.fe.observe=self.sample_dots
 

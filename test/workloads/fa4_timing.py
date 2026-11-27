@@ -15,7 +15,7 @@ class DotMonitor:
         self.ports = []
         for core in range(4):
             def port(name):
-                return frontend.d._id(f"cores[{core}].core.{name}", extended=False)
+                return frontend.d._id(f"engine.cores[{core}].core.{name}", extended=False)
             self.ports.append((port("operand_valid"), port("operand_ready"), port("operand_tag")))
 
     def watch(self, op):

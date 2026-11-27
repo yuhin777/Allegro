@@ -349,6 +349,91 @@ async def init_fence_progresses_while_other_issuer_holds_init_result(dut):
 # Barrier waits, phase changes and live command IDs
 
 @cocotb.test()
+async def same_issuer_waits_enter_service_in_acceptance_order(dut):
+    f = Fabric(dut)
+    await f.reset()
+    target, ready_object = 0x1000, 0x1010
+    services = {}
+
+    async def observe_services():
+        while True:
+            await RisingEdge(dut.clk)
+            if f.val("service_req_valid") and f.val("service_req_ready"):
+                payload = f.val("service_req_payload")
+                key = (payload >> 134) & ((1 << 58) - 1)
+                services[key] = f.cycle
+
+    monitor = cocotb.start_soon(observe_services())
+    try:
+        for addr in (target, ready_object):
+            await f.result(await f.bar(0, count=1, addr=addr))
+        await f.result(await f.bar(2, count=1, addr=ready_object, issuer=1))
+        first = await f.bar(4, addr=ready_object)
+        prefix = [await f.bar(4, addr=target) for _ in range(2)]
+        assert await f.result(first) == 1
+        older = await f.bar(4, addr=target)
+        younger = await f.bar(4, addr=target)
+        while older not in services or younger not in services:
+            await f.edge()
+
+        # Flip between the two timeout edges after the freed wait slot is reused.
+        while f.cycle < min(services[older], services[younger]) + 64:
+            await f.edge()
+        await f.result(await f.bar(2, count=1, addr=target, issuer=1))
+        assert [await f.result(key) for key in [*prefix, older, younger]] == [0, 0, 0, 1]
+
+        # A younger ordinary update also follows its issuer's pending TRY probes.
+        waits = [await f.bar(4, addr=target) for _ in range(4)]
+        update = await f.bar(2, count=1, addr=target)
+        await f.result(update)
+        assert [await f.result(key) for key in waits] == [1] * len(waits)
+        ordered = [first, *prefix, older, younger, *waits, update]
+        assert sorted(ordered, key=services.__getitem__) == ordered
+    finally:
+        monitor.kill()
+
+
+@cocotb.test()
+async def rejected_init_allows_same_address_peers(dut):
+    f = Fabric(dut)
+    await f.reset()
+    addr = 0x1000
+    await f.result(await f.bar(0, count=1, addr=addr))
+    dut.commit_candidate_addr.value = addr
+    dut.bar_rsp_ready.value = 0
+    load = await f.linear(0x4000, 0x2000, 16)
+    while not f.val("bind_req_valid"):
+        await f.edge()
+
+    async def check_rejection_edge():
+        await RisingEdge(dut.clk)
+        assert f.val("bar_cmd_valid") and f.val("bar_cmd_ready")
+        assert f.val("bind_req_valid") and f.val("bind_req_ready")
+        assert not f.val("commit_blocked")
+
+    edge_check = cocotb.start_soon(check_rejection_edge())
+    bad = await f.bar(0, count=0, addr=addr, expected_status=3)
+    await edge_check
+    held = packed((58, bad), (4, 3), (1, 0))
+    peer = await f.bar(3, nbytes=16, addr=addr, issuer=1)
+    saw_peer = False
+    for _ in range(256):
+        assert f.val("bar_rsp_valid") and f.val("bar_rsp_payload") == held
+        assert not f.val("commit_blocked")
+        if f.val("service_req_valid") and f.val("service_req_ready"):
+            payload = f.val("service_req_payload")
+            saw_peer |= (payload >> 197) == 0 and (payload >> 134) & ((1 << 58) - 1) == peer
+        if saw_peer and load in f.results:
+            break
+        await f.edge()
+    assert saw_peer and await f.result(load) == 16
+    dut.bar_rsp_ready.value = 1
+    assert await f.result(bad) == 3 << 1
+    await f.result(peer)
+    assert await f.result(await f.bar(4, addr=addr)) == 1
+
+
+@cocotb.test()
 async def timeout_hint_and_phase_change(dut):
     f = Fabric(dut)
     await f.reset()
@@ -378,6 +463,7 @@ async def full_wait_table_with_dirty_evictions(dut):
     pending = [await f.bar(4, addr=addresses[i % len(addresses)]) for i in range(32)]
     for _ in range(850):
         await f.edge()
+    assert not f.val("wait_cmd_ready"), "all 32 wait records should hold results"
     dut.bar_rsp_ready.value = 1
     for wait in pending:
         assert await f.result(wait) == 0

@@ -30,9 +30,10 @@ rtl/tensor_core/blackwell_tc_b_loader.sv
 rtl/tensor_core/blackwell_tc_completion_tracker.sv
 rtl/tensor_core/blackwell_tc_dot_array.sv
 rtl/tensor_core/blackwell_tc_mma_core.sv
-rtl/tensor_core/blackwell_tc_mma_engine.sv
 rtl/tensor_core/blackwell_tc_piece_map.sv
 rtl/tensor_core/blackwell_tc_scale_b_snapshot.sv
+rtl/tensor_core/blackwell_tc_mma_control.sv
+rtl/tensor_core/blackwell_tc_mma_engine.sv
 rtl/tma/blackwell_tma_completion_tracker.sv
 rtl/tma/blackwell_tma_data_path.sv
 rtl/tma/blackwell_tma_descriptor_cache.sv

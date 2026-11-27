@@ -3,6 +3,15 @@ module primitive_tb;
   logic signed [9:0] base_exp;
   logic special_valid;
   logic [31:0] special_result, canonical, keep_sign;
+  logic signed [31:0] exponent32;
+  logic signed [39:0] exponent40;
+  logic [31:0] result32, result40;
+  blackwell_dot_fp32_pack #(.EXP_W(32)) pack_exp32 (
+    .sum, .base_exp(exponent32), .special_valid, .special_result, .result(result32)
+  );
+  blackwell_dot_fp32_pack #(.EXP_W(40)) pack_exp40 (
+    .sum, .base_exp(exponent40), .special_valid, .special_result, .result(result40)
+  );
   blackwell_dot_fp32_pack pack_canonical (
     .sum,
     .base_exp,
@@ -117,6 +126,18 @@ module primitive_tb;
   initial begin
     special_valid = 0;
     special_result = 32'h7fffffff;
+    sum = 2;
+    exponent32 = 32'sh7fff_ffff;
+    exponent40 = 40'sh01_0000_0000;
+    #1;
+    if (result32 !== 32'h7f800000 || result40 !== 32'h7f800000)
+      $fatal(1, "wide positive exponents: got %h/%h, expected positive infinity", result32, result40);
+    sum = -2;
+    exponent32 = 32'sh8000_0000;
+    exponent40 = -40'sh01_0000_0000;
+    #1;
+    if (result32 !== 32'd0 || result40 !== 32'd0)
+      $fatal(1, "wide negative exponents: got %h/%h, expected canonical zero", result32, result40);
     check_pack(3, 0, 32'h40400000, 32'h40400000);
     check_pack(33'sh100000000, 0, 32'hcf800000, 32'hcf800000);
     check_pack(33'd16777219, -24, 32'h3f800001, 32'h3f800001);

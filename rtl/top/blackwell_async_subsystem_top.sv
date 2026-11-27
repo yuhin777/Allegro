@@ -102,16 +102,7 @@ module blackwell_async_subsystem_top
   output logic tmem_alloc_credit
 );
   logic engine_drained, engine_fault, tracker_drained, tracker_fault, bridge_drained, bridge_fault;
-  logic
-      sm_drained,
-      sm_fault,
-      tm_drained,
-      tm_fault,
-      loader_drained,
-      loader_fault,
-      snapshot_drained,
-      snapshot_fault;
-  logic [3:0] core_fault, core_drained;
+  logic sm_drained, sm_fault, tm_drained, tm_fault;
   logic engine_ready, register_ready;
   logic commit_blocked, commit_addr_busy;
   logic [31:0] commit_busy_addr;
@@ -126,41 +117,9 @@ module blackwell_async_subsystem_top
   tc_ready_commit_t ready_commit_payload;
   tc_commit_retire_t commit_retire_payload;
   logic tracker_commit_ready;
-  logic [3:0]
-      prepare_valid,
-      prepare_ready,
-      b_select_valid,
-      b_select_ready,
-      local_done_valid,
-      local_done_ready,
-      first_ready;
-  prepare_t prepare_payload[4], start_payload;
-  b_select_t b_select_payload  [4];
-  op_done_t  local_done_payload[4];
-  logic
-      first_valid,
-      launch,
-      start_valid,
-      start_ready,
-      release_valid,
-      release_ready,
-      load_valid,
-      load_ready,
-      result_valid,
-      result_ready;
-  async_id_t first_id, release_payload;
-  b_load_t  load_payload;
-  op_done_t result_payload;
-  logic [3:0][2:0] input_free, writes_done;
-  logic [2:0][3:0] older_writes_clear;
-  logic [2:0] snapshot_ready, quiescent;
   mma_live_t [2:0] live;
   mma_live_t live_unpacked[3];
   for (genvar i = 0; i < 3; i++) assign live_unpacked[i] = live[i];
-  logic [3:0] data_valid, data_ready;
-  b_data_t data_payload;
-  logic [3:0][71:0] sb_query;
-  logic [3:0][256:0] sb_view;
   logic
       mma_pin_req_valid,
       mma_pin_req_ready,
@@ -183,7 +142,9 @@ module blackwell_async_subsystem_top
 
   assign mma_cmd_ready = engine_ready && register_ready && !stopped;
   assign tc_commit_ready = tracker_commit_ready && !commit_blocked && !stopped;
-  blackwell_tc_mma_engine engine (
+  blackwell_tc_mma_engine #(
+    .SHARE_FP_DOT_ADDER_TREE(SHARE_FP_DOT_ADDER_TREE)
+  ) engine (
     .epoch_i(epoch),
     .halt_i(fault),
     .stop_i(stopped),
@@ -244,90 +205,6 @@ module blackwell_async_subsystem_top
     .fault_o(bridge_fault),
     .*
   );
-  for (genvar i = 0; i < 4; i++) begin : cores
-    blackwell_tc_mma_core #(
-      .CORE(i),
-      .SHARE_FP_DOT_ADDER_TREE(SHARE_FP_DOT_ADDER_TREE)
-    ) core (
-      .epoch_i(epoch),
-      .halt_i(fault),
-      .live_i(live),
-      .prepare_valid(prepare_valid[i]),
-      .prepare_ready(prepare_ready[i]),
-      .prepare_payload(prepare_payload[i]),
-      .b_select_valid(b_select_valid[i]),
-      .b_select_ready(b_select_ready[i]),
-      .b_select_payload(b_select_payload[i]),
-      .first_id_valid(first_valid),
-      .first_ready(first_ready[i]),
-      .input_free(input_free[i]),
-      .writes_done(writes_done[i]),
-      .local_done_valid(local_done_valid[i]),
-      .local_done_ready(local_done_ready[i]),
-      .local_done_payload(local_done_payload[i]),
-      .data_valid(data_valid[i]),
-      .data_ready(data_ready[i]),
-      .sb_query(sb_query[i]),
-      .sb_view(sb_view[i]),
-      .sm_rd_req_valid(tc_smem_req_valid[i]),
-      .sm_rd_req_ready(tc_smem_req_ready[i]),
-      .sm_rd_req_payload(tc_smem_req_payload[i]),
-      .sm_rd_rsp_valid(tc_smem_rsp_valid[i]),
-      .sm_rd_rsp_ready(tc_smem_rsp_ready[i]),
-      .sm_rd_rsp_payload(tc_smem_rsp_payload[i]),
-      .tm_rd_req_valid(tc_rd_req_valid[i]),
-      .tm_rd_req_ready(tc_rd_req_ready[i]),
-      .tm_rd_req_payload(tc_rd_req_payload[i]),
-      .tm_rd_rsp_valid(tc_rd_rsp_valid[i]),
-      .tm_rd_rsp_ready(tc_rd_rsp_ready[i]),
-      .tm_rd_rsp_payload(tc_rd_rsp_payload[i]),
-      .tm_wr_req_valid(tc_wr_req_valid[i]),
-      .tm_wr_req_ready(tc_wr_req_ready[i]),
-      .tm_wr_req_payload(tc_wr_req_payload[i]),
-      .tm_wr_ack_valid(tc_wr_ack_valid[i]),
-      .tm_wr_ack_ready(tc_wr_ack_ready[i]),
-      .tm_wr_ack_payload(tc_wr_ack_payload[i]),
-      .idle_o(),
-      .drained_o(core_drained[i]),
-      .fault_o(core_fault[i]),
-      .*
-    );
-  end
-  blackwell_tc_b_loader b_loader (
-    .epoch_i(epoch),
-    .halt_i(fault),
-    .live_i(live),
-    .sm_rd_req_valid(tc_smem_req_valid[4]),
-    .sm_rd_req_ready(tc_smem_req_ready[4]),
-    .sm_rd_req_payload(tc_smem_req_payload[4]),
-    .sm_rd_rsp_valid(tc_smem_rsp_valid[4]),
-    .sm_rd_rsp_ready(tc_smem_rsp_ready[4]),
-    .sm_rd_rsp_payload(tc_smem_rsp_payload[4]),
-    .drained_o(loader_drained),
-    .fault_o(loader_fault),
-    .*
-  );
-  blackwell_tc_scale_b_snapshot sb (
-    .epoch_i(epoch),
-    .halt_i(fault),
-    .live_i(live),
-    .rd_req_valid(tc_rd_req_valid[4]),
-    .rd_req_ready(tc_rd_req_ready[4]),
-    .rd_req_payload(tc_rd_req_payload[4]),
-    .rd_rsp_valid(tc_rd_rsp_valid[4]),
-    .rd_rsp_ready(tc_rd_rsp_ready[4]),
-    .rd_rsp_payload(tc_rd_rsp_payload[4]),
-    .query(sb_query),
-    .view(sb_view),
-    .ready(snapshot_ready),
-    .drained_o(snapshot_drained),
-    .fault_o(snapshot_fault),
-    .*
-  );
-  assign tc_wr_req_valid[4] = 0;
-  assign tc_wr_ack_ready[4] = '1;
-  for (genvar l = 0; l < 128; l++) assign tc_wr_req_payload[4][l] = '0;
-
   logic
       epoch_end_valid,
       epoch_end_ready,
@@ -413,11 +290,9 @@ module blackwell_async_subsystem_top
   async_id_t outstanding_id;
   logic [3:0] candidates;
   logic candidate_found;
-  wire child_fault = engine_fault || tracker_fault || bridge_fault || loader_fault ||
-      snapshot_fault || (|core_fault) || sm_fault || tm_fault;
-  wire all_drained = engine_drained && tracker_drained && bridge_drained && loader_drained &&
-      snapshot_drained && (&core_drained) && sm_drained && tm_drained && !order_outstanding &&
-      !order_locked && lsu_quiescent;
+  wire child_fault = engine_fault || tracker_fault || bridge_fault || sm_fault || tm_fault;
+  wire all_drained = engine_drained && tracker_drained && bridge_drained && sm_drained &&
+      tm_drained && !order_outstanding && !order_locked && lsu_quiescent;
   assign stopped = phase != RUN || fault;
   assign drained = all_drained;
   assign open_req_ready = phase == CLOSED && !fault && isolated && open_req_payload != epoch;
