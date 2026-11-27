@@ -25,7 +25,7 @@ TMA RD is a stallable address register. An address can be preselected. Enable th
 
 Sample write_enable at the write edge and immediately commit the selected bytes. The parent compares addresses for the actual macro access edge and resolves same-bank, same-word conflicts before asserting enables. Different words permit simultaneous 1R+1W.
 
-If the macro cannot hold Q, an adapter must supply an equivalent enable register of the same width. Count it as Q. If both copies are retained, count both. Data RAM and Q require no array-wide reset. Clearing the parent's valid bits makes undefined payload unobservable.
+If the macro cannot hold Q, an adapter must supply an equivalent enable register of the same width. The adapter register holds the sampled word until the parent accepts it. Data RAM and Q require no array-wide reset. Clearing the parent's valid bits makes undefined payload unobservable.
 
 ### Controller responsibilities
 

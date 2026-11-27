@@ -6,7 +6,7 @@ Track data commands by the general-purpose ticket already allocated by the unit.
 
 | Signal / channel | Direction | Type / width | Peer | Sampling condition |
 |---|---|---|---|---|
-| `begin` | Input | 5 bits | TMA unit | Initialize progress once on admission of the ticket. Another ticket may allocate or retire on that edge. |
+| `begin` | Input | 5 bits | TMA unit | Initialize the admitted ticket once when the unit arms its prepared context. Another ticket may allocate or retire on that edge. |
 | `owner_view[18]` | Input | [tma_owner_view_t](blackwell_tma_unit.md#owner-view) (189 bits per ticket) | TMA unit | Level. Read identity, direction, binding and logical byte count by ticket. |
 | `allocate` | Input | [tma_segment_t](blackwell_tma_request_generator.md#segment) (193 bits) | walker | On `allocate.fire`, allocate an ordinary segment. The final segment also closes this ticket. |
 | `generated` | Input | [tma_finish_t](#transfer-types) (5 bits) | walker | On `generated.fire`, close an empty enumeration without allocating a tag. |
@@ -41,7 +41,7 @@ flowchart LR
 
 - `key={tag:u6,phase:u1}`, with tag indexing this table. GMEM class0 carries the key. Descriptors use separate class1. [unit](blackwell_tma_unit.md#gmem-types) defines the bus encoding. For SMEM client8, `token={6'b0,tag6,group3,phase1}` is 16 bits. Full mem_tag also contains command ID and client. Group must match the physical port. The 4-bit data slot index stays inside the data path.
 - `tma_start_t={key7,segment193}` is 200 bits and `tma_xfer_event_t={key7,kind3,group3}` is 13 bits. Kinds 0…5 are GMEM_REQ, GMEM_RSP, SMEM_REQ, SMEM_RSP, LOCAL_ZERO, and NO_ACCESS. Lanes 0/1 carry GMEM requests/successful replies, 2+g / 10+g carry requests/successful replies for group g, and 18/19 carry local events. Non-SMEM events use group=0.
-- `tma_progress_t={ticket5,boundary2}` is 7 bits. Values 0/1/2 mean descriptor/source/full. Cache/setup reports descriptor progress. `tma_finish_t={ticket5}` contains only the 5-bit ticket number. On `generated` it identifies an empty enumeration. On `finish` it identifies a normally completed command.
+- `tma_progress_t={ticket5,boundary2}` is 7 bits. The tracker sends boundary 1 for source completion or 2 for full completion. The unit observes descriptor delivery on the cache result handshake before setup and enumeration. `tma_finish_t={ticket5}` contains only the 5-bit ticket number. On `generated` it identifies an empty enumeration. On `finish` it identifies a normally completed command.
 
 ### Allocation, acknowledgment, and retirement
 

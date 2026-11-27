@@ -67,7 +67,7 @@ For an object request accepted at g, the earliest SMEM request acceptance is g+1
 
 A write response reaches the object unit only after its masked SMEM write commits and the fabric returns the ACK.
 
-INVAL and flush wait for a successful write response here. smem_req fire alone is insufficient. Local updates of dirty object counts can proceed while backing is busy until eviction or explicit flush requires a save.
+The [object unit](blackwell_mbarrier_unit.md#miss-eviction-and-init) serializes service through the entire miss. While a dirty victim write awaits its ACK, the unit retains the victim and the original service request. A request for another resident object waits at service ingress. On `back_rsp.fire` for the write, the unit can reuse the victim for an INIT or proceed to target fill for an ordinary miss. INVAL and flush also wait for their masked writes to be acknowledged.
 
 ### Arbitration and stalls
 

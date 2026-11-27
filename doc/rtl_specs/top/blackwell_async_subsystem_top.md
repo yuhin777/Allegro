@@ -77,10 +77,10 @@ flowchart LR
 
 #### Clock and handshakes
 
-- One clock `clk`, sampled on the rising edge. `rst_n` is an active-low **synchronous** reset. Sequential module port tables may omit the common clock/reset. Combinational arithmetic modules have no clock. SRAM data and Q have no reset port.
+- One clock `clk`, sampled on the rising edge. `rst_n` is an active-low **synchronous** reset. Combinational arithmetic modules have no clock. SRAM data and Q have no reset port.
 - In tables, `x : T` denotes a logical channel expanded into `x_valid`, `x_ready`, and `x_payload : T`. The source drives valid/payload and the sink drives ready. Array entries handshake independently. Events without payload still have valid/ready.
 - `fire(t)=valid(t-) && ready(t-)`, where `t-` denotes the instant before edge t. New register values are visible after t and may be sampled downstream at t+1 at the earliest. Combinational functions contain no hidden registers.
-- The external GMEM interface provides a stallable response channel. With gmem_rsp_valid asserted and ready=0, hold ID, 1024-bit data, and status stable until fire. For a nonstallable L2, the adapter must obtain guaranteed storage for each complete reply before issuing its request and stop issuing when credits run out. Return credit when TMA accepts the response. Adapter credits and free tags jointly limit issue. Account for adapter storage separately. Stopping new requests must not block outstanding returns, SMEM writes, or their ACKs. [GMEM types and classes](../tma/blackwell_tma_unit.md#gmem-types)
+- The external GMEM interface provides a stallable response channel. With gmem_rsp_valid asserted and ready=0, hold ID, 1024-bit data, and status stable until fire. For a nonstallable L2, the adapter must obtain guaranteed storage for each complete reply before issuing its request and stop issuing when credits run out. Return credit when TMA accepts the response. Adapter credits and free tags jointly limit issue. These credits represent storage in the external adapter. Stopping new requests must not block outstanding returns, SMEM writes, or their ACKs. [GMEM types and classes](../tma/blackwell_tma_unit.md#gmem-types)
 - When `valid && !ready`, hold valid and the entire payload/tag. A sender must generate valid independently of ready. ready may depend on local capacity and downstream ready but must not create a cross-module combinational loop.
 - See [Elastic register](../base/blackwell_pipeline_reg.md) and [FIFO](../base/blackwell_fifo.md) for the state equations for a stalled stage and simultaneous dequeue/enqueue in a full FIFO respectively.
 - When channels require atomic acceptance, assert ready only when all resources can be reserved. Do not consume one side and lose identity while waiting for the other. For explicitly identified top-level atomic groups, valid may be qualified by the other endpoint's capacity-ready only if ready is independent of the group's valid and capacity is retained until joint fire. This exception applies only to those groups.
@@ -95,7 +95,7 @@ Normal shutdown `stop` closes new external commands. Internal replies, producer 
 
 Reset clears valid, credit state, live IDs, allocation, and cache valid bits. Payload RAM persists. External memory must cancel old transactions or guarantee no further responses before reset. The top permits a new epoch only after isolation acknowledgment. Normal epoch transition requires every engine drained, dirty barriers written back, and ordering complete. Never use epoch mismatch to silently discard valid in-flight work.
 
-At an authorized epoch change modules clear static cache/collector valid bits, allocation/permit, and local sequence numbers while preserving payload.
+At `epoch_end.fire` the TMEM manager clears the closing CTA's allocation and permit. Opening a new epoch restores the allocation permit. With the allocation free, the first ALLOC is eligible once instruction ingress enters RUN. The epoch change clears static cache and collector validity and restarts local sequence numbers. Payload RAM retains its contents. [TMEM manager](../tmem/blackwell_tmem_manager.md#alloc-admission)
 
 #### Legal execution and simulation assertions
 
@@ -107,11 +107,11 @@ Finite capacity and outstanding dependencies can delay a legal transfer. A tenso
 
 #### Configuration and resource accounting
 
-The physical configuration has four cores, TMEM of 128×128×128 bits, and SMEM of 32×1824×32 bits. Multiply per-instance capacity by instance count. Broadcast views do not add a second copy of storage.
+The four cores share 256 KiB of TMEM (128 banks × 128 words × 128 bits) and 228 KiB of SMEM (32 banks × 1,824 words × 32 bits). A broadcast view reads the owner's storage.
 
-Count data bytes, control bits such as valid/tag/credit, and macro read outputs separately. Capacity includes FIFOs, payload registers, pipeline registers, and adapter storage. Backpressure when a finite table fills. Never overwrite a live entry to improve throughput.
+Each live entry retains its payload, identity and outstanding obligations until its release edge. A full table stalls allocation unless its owner permits reuse of an entry retiring on the same edge.
 
-In port tables `T[N]` denotes N channels or a bus of T entries. Specify whether handshakes are independent. Compute `bits(T)` from the owning module's fields. Low-index elements occupy low bits, and ascending byte addresses map from low to high payload bits. Pack structures from high to low in field-table order unless the owner specifies explicit bit/byte encoding.
+Port arrays place low-index elements in low bits. Bytes at ascending addresses occupy successively higher payload bits. Packed fields run from high to low in the order defined by their owner unless the type has an explicit bit or byte encoding.
 
 <a id="identity"></a>
 
@@ -199,11 +199,11 @@ Ordering sources are the TMA unit (including proxy fence), barrier front end (in
 | Lifetime | Entry and exit conditions |
 |---|---|
 | CLOSED / OPEN_RESULT | Synchronous reset enters CLOSED and sets 16-bit `epoch` to 0. In CLOSED, all open operations including the first require `isolated && open.epoch != epoch`, so the first permitted value is 1…65535. Latch the new epoch on open handshake. Submodules initialize by their own rules upon observing the new epoch. Enter RUN after open_rsp consumption. The earliest first command acceptance is the next edge. |
-| RUN → DRAIN | Accept close once all external instruction valid signals are zero and no command is held. Block new instructions. Continue derived issue, reads/writes, RF, producers, done, and ordering for accepted work. |
+| RUN → DRAIN | Accept close once all external instruction valid signals are zero and no command is held. Block new instructions. Continue derived issue, including wait record allocation and initial QUERY for an accepted TRY, as well as reads/writes, RF, producers, done, and ordering. |
 | DRAIN → FLUSH | All accepted operations, tracker live entries, held returns, and external LSU work have finished. lsu_quiescent is asserted. |
 | FLUSH → ORDER | Write back dirty objects individually and receive their actual successful ACKs, then issue CTA_CLOSE once. |
 | ORDER → END | Receive the matching successful CTA_CLOSE ACK. |
-| END → CLOSED | Once free of pins and held responses the manager accepts epoch_end and clears allocation. After final close_rsp consumption retain the old epoch for comparison on the next open. |
+| END → CLOSED | Once free of pins and held responses, the manager accepts epoch_end and clears allocation and permit. The top holds close_rsp valid until its handshake, then enters CLOSED with the old epoch retained for comparison on the next open. |
 
 The top holds epoch/FSM, arbiter held/source, outstanding ordering and pin identities, R_RF_ISSUE, flush/close-order handshake state, and final response valid. Publish normal close result only after END.
 
@@ -222,7 +222,7 @@ Once a younger MMA’s own writes and unpin settle, it can notify the tracker an
 
 Let M0 and M1 be successive N128 FP16→FP32 same-address accumulations with all write lanes enabled. SMEM A and B are independent and each 4 KiB aligned, K-major, with no swizzle, LBO=128 B, and SBO=256 B. Complete command setup and pin in advance, select partitions in time, use same-address four-cell-aligned D, and assume no core backpressure or other client contention. Map each 128 B half-block's eight atoms to distinct groups across all 32 physical banks. Column block j has four eight-row groups. Each instruction issues Q=N/2 microtiles per core. All table entries are handshake edges. F=64i is instruction i's first N128 dot and S=F+4j. Negative edges of the first instruction come from warmup.
 
-| object specification | grant | Readiness and consumption |
+| Operand | Grant edges | Readiness and consumption |
 |---|---|---|
 | Two 128 B halves of B[j] | S−10, S−9 | Return at S−8 and S−7, distribute at S−6, and first op_load at S−1. Adjacent blocks alternate assembly slots. |
 | Two frames per core for C[j] | S−6, S−5 | Return at S−3 and S−2. Load the first microtile at S−1. The first grant can coincide with the last op_load of the block two positions earlier. |
@@ -230,11 +230,11 @@ Let M0 and M1 be successive N128 FP16→FP32 same-address accumulations with all
 
 With the previous first dot at 0, the next C0 gets grants at 58/59 and returns at 61/62 for first load at 63. C1 gets grants at 62/63 and returns at 65/66 for block 1's first load at 67.
 
-| Relative to the preceding first dot at edge 0 | Acceptance observation |
+| Relative to the preceding first dot at edge 0 | Observable event |
 |---|---|
 | 63 → 64 | Edge 63 issues M0's last dot and loads M1's first microtile. Edge 64 issues M1's first dot. |
 | 68 → 72 | M0's last result enters D at 68. The final two write frames are accepted at 69/70, the last frame writes at 71, and its final ACK retires at 72. |
-| 73 → 75 | With timely service M0's local_done can be accepted at 73. Return remaining resources and publish done at 74. The tracker can accept at 75. |
+| 73 → 75 | With timely service M0's local_done can be accepted at 73. The unpin handshake at 74 makes the record terminal. The tracker can accept its ID at 75. |
 
 For consecutive single-family instructions with all writes enabled, aligned accesses, and timely service, the tail formula is L=F+Q−1 and final ACK=L+Ldot+5, where Ldot is the corresponding [arithmetic family](../tensor_core/blackwell_tc_dot_array.md) pipeline stage count minus one. Use actual interface events for cold fill, WS hits, family changes, fully disabled writes, and contention. Load R_OP when all cores have first-group inputs and R_OP space before the edge. The earliest first dot is the next edge. Acceptance of the first cold source R_BREQ does not establish readiness of other inputs.
 

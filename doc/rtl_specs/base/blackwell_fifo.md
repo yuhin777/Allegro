@@ -18,4 +18,4 @@ State comprises DEPTH×WIDTH payload bits, two `max(1,ceil(log2 DEPTH))` pointer
 
 `pop_valid=count!=0` and `push_ready=count<DEPTH || pop_fire`. An empty FIFO has no push-to-pop bypass. When a full FIFO pops and pushes on one edge, deliver the old head before storing the new tail. `count_next=count+push_fire−pop_fire`. Reset clears pointers and count and leaves the payload untouched.
 
-An item enqueued at t can dequeue at t+1 at the earliest, even from an initially empty FIFO. Continuous handshakes give II=1. The head holds while pop stalls. Occupancy stays within 0…DEPTH and entries retire in insertion order. Charge each large-payload instance its actual DEPTH×WIDTH storage.
+An item enqueued at t can dequeue at t+1 at the earliest, even from an initially empty FIFO. Continuous handshakes give II=1. The head holds while pop stalls. Occupancy stays within 0…DEPTH and entries retire in insertion order.

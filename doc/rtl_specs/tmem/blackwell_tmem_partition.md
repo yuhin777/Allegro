@@ -30,11 +30,11 @@ flowchart LR
 
 ## Functionality
 
-Address mapping is `bank=lane`, `word=column//4`, and `cell=column%4`. See [TMEM layout](blackwell_tmem_fabric.md#tmem-layout) for details. This module owns physical SRAM and all return/write acceptance state. The fabric arbitrates and routes.
+The global lane selects partition `lane // 32` and local bank `lane % 32`. Within that bank, `word=column//4` and `cell=column%4`. See [TMEM layout](blackwell_tmem_fabric.md#tmem-layout) for details. This module owns physical SRAM and all return/write acceptance state. The fabric arbitrates and routes.
 
 Each atom channel has independent valid/ready. See [common interfaces](../top/blackwell_async_subsystem_top.md#common-protocol) and [memory transaction](../top/blackwell_async_subsystem_top.md#memory-routing) for definitions and byte order.
 
-lane must belong to this partition and match the port index. word ranges from 0…127. byte_mask bit b selects byte b of data. Return zero for unselected read bytes and preserve stored values for unselected write bytes.
+For local port p, the request carries global lane 32 × PARTITION_ID + p. word ranges from 0…127. byte_mask bit b selects byte b of data. Return zero for unselected read bytes and preserve stored values for unselected write bytes.
 
 ### Partition data and in-flight slots
 
@@ -45,10 +45,10 @@ lane must belong to this partition and match the port index. word ranges from 0�
 | R_RESP | 512 B | One primary return per bank. |
 | R_BACKUP | 512 B | One additional return per bank to absorb an irrevocable read. |
 | Read tag/credit | Three metadata entries per bank | Cover every granted but undelivered read without additional payload storage. |
-| R_W | 512 B | One write payload. Count the 32-bank mask, word, tag, and byte mask separately. |
+| R_W | 512 B | One write payload with a 32-bank valid mask and a word address, tag and byte mask for each selected bank. |
 | R_ACK | Two identity frames | Each holds a bank mask and per-bank tags without write data. |
 
-R_RESP+R_BACKUP total 1 KiB per partition. SRAM_Q is the third physical place to hold a return. If the macro cannot hold its output with read enable low, place an equivalent Q outside the macro and reclassify it in the physical resource table. Do not add another Q.
+R_RESP+R_BACKUP total 1 KiB per partition. SRAM_Q is the third physical place to hold a return. A macro whose output cannot hold with read enable low uses one external register for this Q position.
 
 ### Read credit, sampling, and delivery
 
