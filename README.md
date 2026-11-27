@@ -1,10 +1,26 @@
 # Allegro
 
-Allegro models a single-CTA asynchronous subsystem for SM100a. It includes the Tensor Core, TMEM, shared SMEM, TMA, and mbarrier. The surrounding system provides warp scheduling, RF, GMEM, and visibility services.
+Allegro implements a single-CTA SM100a asynchronous subsystem in SystemVerilog. Four Tensor Cores share tensor memory (TMEM), shared memory (SMEM), the Tensor Memory Accelerator (TMA), and memory barriers. The surrounding system supplies warp scheduling, register-file access, global memory, and visibility services.
 
-- See [Supported PTX](doc/proposals/supported_ptx.md) for instructions, operands, completion semantics, and the three target kernels.
-- The [Microarch Brief](doc/proposals/microarch_brief.md) describes the backend, the capacity and reuse rules of the [Tensor Core Buffer](doc/proposals/microarch_brief.md#tc-buffer), and scheduling for each asynchronous instruction class. [Four-core data path](doc/images/tensor_core_tmem/tensor_core_tmem_pipeline.svg)
-- The 35 [RTL module specifications](doc/rtl_specs/top/blackwell_async_subsystem_top.md#module-index) define interfaces, state, timing, and acceptance criteria. The top level defines cross-module [handshakes and reset](doc/rtl_specs/top/blackwell_async_subsystem_top.md#common-protocol), [identity](doc/rtl_specs/top/blackwell_async_subsystem_top.md#identity), and [ordering](doc/rtl_specs/top/blackwell_async_subsystem_top.md#ordering).
-- The [Cross-MMA pipeline design record](doc/proposals/mma_inter_instruction_pipeline.md) preserves the actual descriptors, instruction sequences, address formulas, and cycle-by-cycle derivations for both FA4 kernels.
+The subsystem accepts supported instructions through a ready/valid command interface. Its timing and completion guarantees assume legal operands, conforming handshakes, and successful external service responses. Simulation assertions check these assumptions.
 
-The implementation starts at the [RTL top level](rtl/top/blackwell_async_subsystem_top.sv). Acceptance covers the results and synchronization order of the three target kernels and the specified handshake edges under the stated service conditions. Total kernel cycles are recorded for observation.
+## Design and RTL
+
+| Start here | What it covers |
+| --- | --- |
+| [Supported PTX](doc/proposals/supported_ptx.md) | Instructions, operands, program-visible completion, and the three target kernels. |
+| [Microarchitecture](doc/proposals/microarch_brief.md) | Command scheduling, [Tensor Core Buffer capacity and reuse](doc/proposals/microarch_brief.md#tc-buffer), and the [four-core data path](doc/images/tensor_core_tmem/tensor_core_tmem_pipeline.svg). |
+| [Top-level specification](doc/rtl_specs/top/blackwell_async_subsystem_top.md) | Shared protocols, transaction identity, ordering, and the [index of module interfaces and timing](doc/rtl_specs/top/blackwell_async_subsystem_top.md#module-index). |
+| [Subsystem RTL](rtl/top/blackwell_async_subsystem_top.sv) | Top-level ports and module connections. The [RTL file list](rtl/files.f) gives the compilation order. |
+| [Cross-MMA pipeline](doc/proposals/mma_inter_instruction_pipeline.md) | Descriptors, address formulas, instruction order, and cycle-by-cycle scheduling for the two FA4 kernels. |
+
+## Verification
+
+Run from the repository root on the RTX 5080 verification host.
+
+```sh
+test/run.sh all        # Verilator lint, unit simulations, and workload replays
+test/synth/check.sh    # Full-subsystem elaboration and selected synthesis checks
+```
+
+For a shorter run, select `lint`, `unit`, or `workloads` in place of `all`. The [verification guide](test/README.md) maps each module to its tests and describes the workload checks for arithmetic results, memory visibility, and handshake timing.
